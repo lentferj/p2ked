@@ -1,0 +1,75 @@
+p2ked — Terminal browser for the E-MU Proteus 2000 family
+Copyright (C) 2026  p2ked contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+The full, verbatim text of the GNU General Public License version 2 is in
+the file COPYING alongside this one. This file records only the project's
+copyright notice and its third-party attributions.
+
+-------------------------------------------------------------------------------
+Third-party references and their licenses
+-------------------------------------------------------------------------------
+
+p2k/messages.py
+  The System Exclusive frame layout, the manufacturer and product IDs
+  (18H, 0FH), the editor designator byte, the command numbers, the 14-bit
+  LSB-first value encoding and the checksum rule are transcribed as data
+  from E-MU's own documentation:
+
+    "Proteus Family Sound Modules MIDI System Exclusive Specification",
+    version 2.2, E-MU Systems / Creative Technology Ltd.
+
+  Facts and interface data, transcribed for interoperability. The document
+  itself is not redistributed here.
+
+p2k/roms.py
+  The ROM names and their Bank Select MSB/LSB allocation are transcribed as
+  data from the Cakewalk instrument-definition files distributed for the
+  Proteus family (`p2000.ins`, `P2k_All.ins`, `E-mu.ins`), and cross-read
+  against the Proteus 2000 Operation Manual.
+
+p2k/bridge.py
+  The throttled-output queue, the merged-input facade, the rtmidi-backend
+  leak fix, the port-enumeration helpers, the read-modify-write config store
+  and the clean-exit signal handling are ported from the sibling rxved
+  project's xv/bridge.py, which ports them from s3ked, which ports them from
+  eosed, which ports them from k2kremote, which ports them from mpc2emu:
+
+    rxved      Copyright (C) 2026  rxved contributors        - GPL-2.0-or-later
+    s3ked      Copyright (C) 2026  s3ked contributors        - GPL-2.0-or-later
+    eosed      Copyright (C) 2026  eosed contributors        - GPL-2.0-or-later
+    k2kremote  Copyright (C) 2026  k2kremote contributors    - GPL-2.0-or-later
+    mpc2emu    Copyright (C) 2025-2026  mpc2emu contributors - GPL-2.0-or-later
+
+p2ked/app.py
+  The key-hint legend (KeyHints, wrap_blocks) is ported from rxved, which
+  ports it from s3ked, eosed and k2kremote. Same copyrights as above.
+
+tools/extract_catalog.py
+  Reads, but does not redistribute, the Cakewalk instrument-definition files
+  for the Proteus family. Its output is preset names, which are E-MU's; that
+  output is NOT part of this distribution and is excluded by .gitignore.
+  Each user generates it from their own copies of those files. See README.md.
+
+-------------------------------------------------------------------------------
+Not affiliated with E-MU or Creative
+-------------------------------------------------------------------------------
+
+E-MU, Proteus, Audity, Xtreme Lead, Mo'Phatt, Virtuoso, Planet Earth, Orbit,
+Vintage Keys, XL-7, MP-7, PX-7, PK-6, Halo and Proteus 2500 are trademarks
+of E-MU Systems / Creative Technology Ltd. This project is an independent
+work by its authors, is not endorsed by or affiliated with E-MU Systems or
+Creative Technology, and uses those names only to say what hardware it talks
+to.

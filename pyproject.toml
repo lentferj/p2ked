@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p2ked"
+version = "0.1.0"
+description = "Terminal browser for the E-MU Proteus 2000 family"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-2.0-or-later" }
+dependencies = ["textual>=0.40", "python-rtmidi>=1.5"]
+
+[project.scripts]
+p2ked = "p2ked.app:main"
+p2kcli = "p2ked.cli:main"
+
+[tool.setuptools]
+packages = ["p2k", "p2ked"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

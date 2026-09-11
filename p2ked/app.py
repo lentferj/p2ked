@@ -1,0 +1,555 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-FileCopyrightText: Copyright (C) 2026  p2ked contributors
+#
+# This file is part of p2ked.
+#
+# The key-hint legend is ported from the sibling rxved project, which ports
+# it from s3ked, eosed and k2kremote:
+#   Copyright (C) 2026  rxved / s3ked / eosed / k2kremote contributors
+#                                                    - GPL-2.0-or-later
+#
+# p2ked is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 2 of the License, or (at your option) any later
+# version.
+#
+# p2ked is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details.
+
+"""``p2ked`` -- a terminal browser for the Proteus 2000's presets.
+
+Two panes: banks on the left, that bank's presets on the right, with the
+three numbers that select one -- Program Change, Bank Select LSB, Bank
+Select MSB -- on every row, in that order, because that is the order a
+sequencer's MIDI track asks for them.
+
+Two rules, both about not lying to the user:
+
+**Moving the cursor never sends anything.** Selecting a preset changes what
+the instrument plays, audibly, and a browser that did that on arrow-key
+movement would be unusable next to a running sequencer. Selection is bound
+to Enter and nothing else, and a test enforces it.
+
+**Reading names is free and is not selection.** A Proteus names any preset
+on request without playing it, so `r` reads a whole bank silently. Its
+sibling rxved cannot do this and has to warn; p2ked has nothing to warn
+about, and must not imply otherwise.
+
+**Workers do MIDI; the main thread does everything else.** Every
+``@work(thread=True)`` method talks to the device and then hands off with
+``call_from_thread``. Nothing else belongs in one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import threading
+from typing import Dict, List, Optional
+
+from textual import work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import DataTable, Header, Input, Label, Static
+
+from p2k import catalog as cat
+from p2k import roms
+
+__all__ = ["P2kedApp", "main", "build_parser", "KEY_HINTS", "wrap_blocks"]
+
+_SEP = " · "
+
+KEY_HINTS = (
+    "↑↓ move", "tab pane", "⏎ select on the unit", "r read names",
+    "/ search", "c channel", "i device", "? help", "q quit",
+)
+
+
+def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
+    """Pack hints into lines no wider than ``width``.
+
+    Ported from rxved, which ports it from s3ked. Breaks happen only
+    *between* blocks, so a hint is never split mid-label; a block wider than
+    ``width`` takes its own line rather than being cut. The point is that
+    the legend wraps instead of truncating -- a footer that silently drops
+    its last few keys teaches the user those keys do not exist.
+    """
+    lines, current = [], ""
+    for block in blocks:
+        candidate = block if not current else current + sep + block
+        if width and len(candidate) > width and current:
+            lines.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
+class KeyHints(Static):
+    """The legend, wrapped to the window rather than truncated."""
+
+    DEFAULT_CSS = "KeyHints { height: auto; background: $panel; padding: 0 1; }"
+
+    def on_mount(self) -> None:
+        self._render_hints()
+
+    def on_resize(self) -> None:
+        self._render_hints()
+
+    def _render_hints(self) -> None:
+        # NOT named _render: Widget._render is Textual's own, and shadowing
+        # it makes every layout pass ask a None for its height. The failure
+        # is an AttributeError deep in the framework, nowhere near here.
+        self.update(wrap_blocks(KEY_HINTS, max(self.size.width - 2, 20)))
+
+
+class ReportScreen(ModalScreen[None]):
+    """A scrollable block of text: device details, help."""
+
+    DEFAULT_CSS = """
+    ReportScreen { align: center middle; }
+    ReportScreen > Vertical {
+        width: 84; height: 80%; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    ReportScreen .body { height: 1fr; overflow-y: auto; }
+    """
+
+    BINDINGS = [Binding("escape", "close", "Close"),
+                Binding("q", "close", "Close")]
+
+    def __init__(self, title: str, body: str) -> None:
+        super().__init__()
+        self._title = title
+        self._body = body
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(f"[b]{self._title}[/b]")
+            yield Static(self._body, classes="body")
+            yield Static("[dim]esc / q to close[/dim]")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class PromptScreen(ModalScreen[Optional[str]]):
+    """One line of text."""
+
+    DEFAULT_CSS = """
+    PromptScreen { align: center middle; }
+    PromptScreen > Vertical {
+        width: 70; height: auto; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, prompt: str, current: str = "") -> None:
+        super().__init__()
+        self._prompt = prompt
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(self._prompt)
+            yield Input(value=self._current, id="value")
+
+    def on_mount(self) -> None:
+        self.query_one("#value", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class P2kedApp(App):
+    """The browser."""
+
+    CSS = """
+    Screen { layers: base; }
+    #panes { height: 1fr; }
+    #bank-table { width: 34; border-right: solid $panel; }
+    #preset-table { width: 1fr; }
+    DataTable { height: 1fr; }
+    #detail { height: 3; padding: 0 1; border-top: solid $panel; }
+    #status { height: 1; background: $boost; color: $text; padding: 0 1; }
+    """
+
+    BINDINGS = [
+        # NOT a priority binding: a focused DataTable consumes Enter for its
+        # own row selection, and a priority Enter at App level fires over
+        # modal screens too. Enter arrives as RowSelected instead.
+        Binding("enter", "select_preset", "Select on the unit", show=False),
+        Binding("r", "read_names", "Read names"),
+        Binding("slash", "search", "Search"),
+        Binding("c", "pick_channel", "Channel"),
+        Binding("i", "device_info", "Device"),
+        Binding("question_mark", "help", "Help"),
+        Binding("tab", "switch_pane", "Switch pane"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, device, *, catalog=None, channel: int = 0) -> None:
+        super().__init__()
+        self.device = device
+        self.catalog = catalog if catalog is not None else cat.empty()
+        self.channel = channel
+        self._lock = threading.RLock()
+        self._bank_ids: List[str] = roms.bank_ids()
+        self._current_bank = self._bank_ids[0]
+        self._current: List[roms.Preset] = []
+        self._busy = False
+        self._filling = False
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Horizontal(id="panes"):
+            yield DataTable(id="bank-table", cursor_type="row")
+            yield DataTable(id="preset-table", cursor_type="row")
+        yield Static("", id="detail")
+        yield Static("", id="status")
+        yield KeyHints()
+
+    def on_mount(self) -> None:
+        self.title = "p2ked"
+        banks = self.query_one("#bank-table", DataTable)
+        for label, key in (("bank", "bank"), ("MSB", "msb"), ("LSB", "lsb"),
+                           ("n", "n")):
+            banks.add_column(label, key=key)
+        for bank_id in self._bank_ids:
+            entry = roms.bank(bank_id)
+            banks.add_row(entry.label, str(entry.msb), str(entry.lsb),
+                          str(entry.count), key=bank_id)
+
+        presets = self.query_one("#preset-table", DataTable)
+        for label, key in (("#", "pc"), ("name", "name"), ("PC", "pcn"),
+                           ("LSB", "lsb"), ("MSB", "msb"), ("ROM#", "rom")):
+            presets.add_column(label, key=key)
+        self._fill_presets(self._current_bank)
+        banks.focus()
+        self.notify_status(
+            f"{len(self.catalog)} names from the catalog"
+            if self.catalog else
+            "no name catalog -- numbers only. Build one with "
+            "tools/extract_catalog.py, or press r to read them off the unit."
+        )
+
+    # --- filling ------------------------------------------------------------
+
+    def _fill_presets(self, bank_id: str) -> None:
+        table = self.query_one("#preset-table", DataTable)
+        self._current_bank = bank_id
+        self._current = roms.presets(bank_id)
+        self._filling = True
+        try:
+            table.clear()
+            for entry in self._current:
+                name = self.catalog.display_name(bank_id, entry.program_change)
+                if self.catalog.differs(bank_id, entry.program_change):
+                    shown = f"[b]{name}[/b] [dim]*[/dim]"
+                elif self.catalog.is_live(bank_id, entry.program_change):
+                    shown = f"[b]{name}[/b]"
+                else:
+                    shown = name
+                table.add_row(
+                    f"{entry.program_change:03d}", shown,
+                    str(entry.program_change), str(entry.lsb), str(entry.msb),
+                    str(entry.number), key=entry.key,
+                )
+        finally:
+            self._filling = False
+        self._show_detail(0)
+
+    def _show_detail(self, row: int) -> None:
+        if not self._current or row >= len(self._current):
+            self.query_one("#detail", Static).update("")
+            return
+        entry = self._current[row]
+        name = self.catalog.display_name(entry.bank_id, entry.program_change)
+        self.query_one("#detail", Static).update(
+            f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}\n"
+            f"Program Change [b]{entry.program_change}[/b]   "
+            f"Bank Select LSB [b]{entry.lsb}[/b] (CC#32)   "
+            f"MSB [b]{entry.msb}[/b] (CC#0)   "
+            f"[dim]preset {entry.number} within {entry.rom.name}[/dim]"
+        )
+
+    def notify_status(self, message: str, *, refused: bool = False) -> None:
+        prefix = "[b]refused[/b] · " if refused else ""
+        self.query_one("#status", Static).update(prefix + message)
+
+    # --- navigation ---------------------------------------------------------
+
+    def on_data_table_row_highlighted(self, event) -> None:
+        if self._filling:
+            return
+        if event.data_table.id == "bank-table":
+            row = event.cursor_row
+            if 0 <= row < len(self._bank_ids):
+                self._fill_presets(self._bank_ids[row])
+        elif event.data_table.id == "preset-table":
+            self._show_detail(event.cursor_row)
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Enter on a preset row selects it. Enter arrives here, not as a
+        binding -- a focused DataTable consumes the key for itself."""
+        if event.data_table.id == "preset-table":
+            self.action_select_preset()
+
+    def action_switch_pane(self) -> None:
+        banks = self.query_one("#bank-table", DataTable)
+        presets = self.query_one("#preset-table", DataTable)
+        (presets if banks.has_focus else banks).focus()
+
+    # --- operations ---------------------------------------------------------
+
+    def _cursor_preset(self) -> Optional[roms.Preset]:
+        table = self.query_one("#preset-table", DataTable)
+        row = table.cursor_row
+        if 0 <= row < len(self._current):
+            return self._current[row]
+        return None
+
+    def action_select_preset(self) -> None:
+        entry = self._cursor_preset()
+        if entry is None:
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._select_worker(entry)
+
+    @work(thread=True)
+    def _select_worker(self, entry: roms.Preset) -> None:
+        """**MIDI only.**"""
+        try:
+            with self._lock:
+                self.device.select(entry, channel=self.channel)
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify_status, f"select: {exc}", refused=True)
+            return
+        self.call_from_thread(
+            self.notify_status,
+            f"selected {entry} on MIDI channel {self.channel + 1} "
+            f"(PC {entry.program_change}, LSB {entry.lsb}, MSB {entry.msb})")
+
+    def action_read_names(self) -> None:
+        """Read this bank's names off the unit. Makes no sound."""
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._read_worker(self._current_bank)
+
+    @work(thread=True)
+    def _read_worker(self, bank_id: str) -> None:
+        """**MIDI only** -- the catalog is updated on the main thread."""
+        self._busy = True
+        try:
+            def progress(done: int, total: int) -> None:
+                self.call_from_thread(
+                    self.notify_status,
+                    f"reading {bank_id}: {done}/{total} (silent)")
+
+            with self._lock:
+                names = self.device.read_bank_names(
+                    bank_id, on_progress=progress)
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify_status, f"read: {exc}", refused=True)
+            return
+        finally:
+            self._busy = False
+        self.call_from_thread(self._adopt_names, bank_id, names)
+
+    def _adopt_names(self, bank_id: str, names: Dict[int, str]) -> None:
+        for program_change, name in names.items():
+            self.catalog.set_live_name(bank_id, program_change, name)
+        differing = sum(1 for pc in names
+                        if self.catalog.differs(bank_id, pc))
+        if bank_id == self._current_bank:
+            self._fill_presets(bank_id)
+        self.notify_status(
+            f"read {len(names)} names from {bank_id}"
+            + (f"; {differing} differ from the catalog" if differing else ""))
+
+    def action_search(self) -> None:
+        def done(text) -> None:
+            if not text:
+                return
+            hits = self.catalog.search(text)
+            if not hits:
+                self.notify_status(f"nothing matching {text!r}")
+                return
+            lines = [f"{len(hits)} match(es) for {text!r}", ""]
+            for bank_id, program_change, name in hits[:400]:
+                try:
+                    entry = roms.preset(bank_id, program_change)
+                except LookupError:
+                    continue
+                lines.append(
+                    f"{bank_id:<12} {program_change:03d}  {name:<18} "
+                    f"PC {entry.program_change:>3}  LSB {entry.lsb:>2}  "
+                    f"MSB {entry.msb:>3}")
+            if len(hits) > 400:
+                lines.append(f"... and {len(hits) - 400} more")
+            self.push_screen(ReportScreen("Search", "\n".join(lines)))
+
+        self.push_screen(PromptScreen("Search preset names:"), done)
+
+    def action_pick_channel(self) -> None:
+        def done(text) -> None:
+            if not text:
+                return
+            try:
+                value = int(text)
+            except ValueError:
+                self.notify_status(f"{text!r} is not a number", refused=True)
+                return
+            if not 1 <= value <= 16:
+                self.notify_status("channel is 1-16", refused=True)
+                return
+            self.channel = value - 1
+            self.notify_status(f"sending on MIDI channel {value}")
+
+        self.push_screen(
+            PromptScreen("MIDI channel (1-16):", str(self.channel + 1)), done)
+
+    def action_device_info(self) -> None:
+        self._info_worker()
+
+    @work(thread=True)
+    def _info_worker(self) -> None:
+        """**MIDI only** -- the report is built on the main thread."""
+        try:
+            with self._lock:
+                fields = self.device.identify()
+                config = self.device.hardware_config()
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify_status, f"device: {exc}", refused=True)
+            return
+        self.call_from_thread(self._show_info, fields, config)
+
+    def _show_info(self, fields, config) -> None:
+        lines = [f"connection   {self.device.description}", ""]
+        if fields:
+            lines.append(f"manufacturer {fields['manufacturer']:#04x}"
+                         + ("  (E-MU)" if fields["is_emu"] else ""))
+            lines.append(f"family       {fields['family']}")
+            lines.append(f"device ID    {fields['device']}")
+        lines.append("")
+        lines.append(f"user presets {config.user_presets}")
+        lines.append(f"SIMMs fitted {len(config.simms)}")
+        for simm in config.simms:
+            guess = roms.rom_for_simm_id(simm.simm_id)
+            lines.append(
+                f"  id {simm.simm_id:<4} {simm.presets:>4} presets  "
+                + (f"probably {guess.name}" if guess else "not in the table"))
+        lines.append("")
+        lines.append("The ROM names above are GUESSES: p2ked assumes a SIMM")
+        lines.append("ID is that ROM's Bank Select MSB. No document says so")
+        lines.append("and no unit has confirmed it. See TODO.md.")
+        lines.append("")
+        lines.append(f"catalog      {len(self.catalog)} names"
+                     + (f" from {self.catalog.source}"
+                        if self.catalog.source else ""))
+        self.push_screen(ReportScreen("Device", "\n".join(lines)))
+
+    def action_help(self) -> None:
+        self.push_screen(ReportScreen("p2ked", _HELP))
+
+
+_HELP = """\
+Two panes. Left: every bank p2ked knows how to address. Right: that bank's
+presets, with the three numbers that select one.
+
+  PC    Program Change            -- 0-127 within the bank
+  LSB   Bank Select LSB, CC#32    -- which bank within the ROM
+  MSB   Bank Select MSB, CC#0     -- which ROM
+
+They are shown PC first because that is the order a sequencer asks for them.
+The unit receives them the other way round: both Bank Select bytes must
+arrive BEFORE the program change, or the program change lands in whatever
+bank was already selected.
+
+"ROM#" is the preset's number within its ROM, which is what the unit's own
+display shows and what System Exclusive asks for. PC is the wire byte within
+the bank. They are different numbers and p2ked never converts silently
+between them.
+
+  ⏎   select this preset ON THE UNIT -- it will sound
+  r   read this bank's names from the unit -- SILENT, nothing is selected
+  /   search names
+  c   set the MIDI channel selections are sent on
+  i   device identity and which ROMs are fitted
+
+Reading names makes no sound. A Proteus will name any preset in any fitted
+ROM without selecting it, so there is nothing to warn about and no prompt.
+
+Moving the cursor sends nothing at all.
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="p2ked", description="Browse an E-MU Proteus 2000's presets.")
+    parser.add_argument("--port")
+    parser.add_argument("--recv-port")
+    parser.add_argument("--demo", action="store_true",
+                        help="built-in demo device; opens no MIDI ports")
+    parser.add_argument("--device-id", type=int, default=None)
+    parser.add_argument("--channel", type=int, default=None)
+    parser.add_argument("--catalog", default=None)
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.channel is not None and not 1 <= args.channel <= 16:
+        sys.exit("error: --channel is 1-16")
+
+    if args.demo:
+        from p2ked.demo import DemoDevice
+
+        device = DemoDevice()
+    else:
+        from p2k import bridge as b
+        from p2k import messages as msg
+
+        b.install_clean_exit()
+        try:
+            if args.port:
+                device = b.ProteusBridge.open(
+                    args.port, recv_port=args.recv_port,
+                    device_id=(args.device_id if args.device_id is not None
+                               else msg.BROADCAST_DEVICE))
+            else:
+                device = b.ProteusBridge.autodetect(
+                    on_try=lambda n: print(f"  probing {n}...",
+                                           file=sys.stderr))
+        except Exception as exc:
+            sys.exit(f"error: {exc}")
+
+    catalog = cat.load(args.catalog)
+    app = P2kedApp(device, catalog=catalog,
+                   channel=(args.channel or 1) - 1)
+    try:
+        app.run()
+    finally:
+        device.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
