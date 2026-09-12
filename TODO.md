@@ -151,15 +151,27 @@ nothing equivalent.
   way presets are.
 
 The data is readable in one silent message -- Setup Dump Request `1Dh` --
-and the channel block has been located at payload offset 194 (32 channels x
-9 parameters x 2 bytes). What is not settled is the Enable/Bank Map field
-order; see §8. Do not label a field "enable" until that is resolved.
+the channel block is at payload offset 194 (32 channels x 9 parameters x 2
+bytes), and the field order is confirmed: preset, volume, pan, mix output,
+arp, channel enable, bank map, receive program change, preset ROM ID. See
+§8 for the evidence.
+
+The offset itself was found by structural search against one firmware, so
+it should be re-derived rather than hardcoded -- the dump's header declares
+the channel count and parameters per channel, and a future firmware may
+change what precedes them.
 
 ## 10. The Setup Dump layout needs decoding properly
 
 **Status:** open.
 
-Only the channel block is located, and only by structural search. The 194
-bytes before it (master general, MIDI and effects parameters, reserved) and
-the 200 after are undecoded. The specification's example is internally
-inconsistent and cannot be used to derive the layout.
+Only the channel block is located, and only by structural search against one
+firmware. The 194 bytes before it (master general, MIDI and effects
+parameters, reserved) and the 200 after are undecoded. Among them is the
+MIDI Mode -- Omni / Poly / Multi -- which is the first thing item 9's screen
+should show.
+
+The specification's example is internally inconsistent *and* this unit runs
+firmware newer than any documentation to hand, so the layout cannot be
+derived from the published example at all. It has to come from the dump's
+own self-describing header plus structural search.

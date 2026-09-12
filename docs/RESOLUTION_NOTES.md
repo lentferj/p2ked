@@ -303,10 +303,45 @@ exactly one: **194**, leaving 194 bytes before and 200 after.
 At that offset every value is plausible: presets 0-31 across the 32
 channels, volume 127, pan 64 (centre), receive-program-change 1, ROM ID 0.
 
-**One thing is still unresolved**: which of the two adjacent one-bit fields
-is Channel Enable and which is Bank Map. They read 0 for channels 1-16 and
-1 for 17-32, and the parameter-ID order says the first is Enable -- which
-would mean channels 1-16 are disabled, on a unit that works. Settling it
-means changing one parameter and seeing which byte moves, which is a write,
-and p2ked does not write. Until then the field is not to be shown as
-"enable".
+### The field order, and a lesson about sampling
+
+An earlier note here said the Enable/Bank Map order was unresolved, because
+the first field "reads 0 for channels 1-16 and 1 for 17-32", which would
+have meant the working channels were the disabled ones.
+
+**That was wrong, and wrong in an avoidable way**: it generalised from a
+printed sample of eight channels out of thirty-two. Printing all 32 shows
+the field is 1 for channels 9, 10 and 17-32, and 0 for the rest -- not a
+clean split at 16 at all. A pattern inferred from the rows that happened to
+be on screen is not a pattern.
+
+With the full table the order is confirmed, by evidence rather than by
+trusting the parameter-ID list:
+
+- Exactly three channels are not at factory defaults, and for exactly those
+  three the ninth field reads **14** -- the Bank Select MSB of a ROM this
+  unit actually has fitted. Every other channel reads 0. A misaligned field
+  would have no reason to land on a real ROM ID precisely where the real
+  customisation is.
+- Their preset numbers resolve, inside that ROM, to real presets with
+  sensible names.
+- All three are on channels 1-16, and the owner confirms using only a few
+  channels and only on the first of the unit's two MIDI interfaces.
+
+So the parameter-ID order holds: preset, volume, pan, mix output, arp,
+**channel enable**, bank map, receive program change, preset ROM ID. Enable
+is 1 on the channels in use.
+
+Two things remain merely plausible rather than shown: that channels 17-32
+reading enable=1 at factory defaults is simply the second interface's
+default state, and that the one configured-but-disabled channel was set up
+and then switched off.
+
+### The firmware outranks the specification here
+
+The owner confirms this unit runs the latest firmware, which is newer than
+any documentation to hand. That reframes every mismatch in this section:
+the specification's inconsistent counts are not evidence of a misreading,
+they are a stale document. **Where the unit and the specification disagree
+about this dump, the unit is right**, and p2ked should read the
+self-describing header rather than any published layout.
