@@ -78,9 +78,9 @@ VIEW_LABELS = {
 
 KEY_HINTS = (
     "↑↓ move", "tab pane", "⏎ select on the unit", "r read names",
-    "m channels", "/ search", "c channel", "f favourite",
-    "F favourites only", "C category", "a all ROMs", "i device", "? help",
-    "q quit",
+    "m channels", "/ search", "[ ] channel", "c set channel",
+    "f favourite", "F favourites view", "t tags", "n note", "C category",
+    "a all ROMs", "i device", "? help", "q quit",
 )
 
 
@@ -356,9 +356,13 @@ class P2kedApp(App):
         Binding("r", "read_names", "Read names"),
         Binding("m", "channels", "Channels"),
         Binding("slash", "search", "Search"),
+        Binding("left_square_bracket", "channel_down", "Channel -"),
+        Binding("right_square_bracket", "channel_up", "Channel +"),
         Binding("c", "pick_channel", "Channel"),
         Binding("f", "toggle_favorite", "Favourite"),
         Binding("F", "cycle_favorites", "Favourites view"),
+        Binding("t", "edit_tags", "Tags"),
+        Binding("n", "edit_note", "Note"),
         Binding("C", "pick_categories", "Categories"),
         Binding("a", "toggle_all_roms", "All ROMs"),
         Binding("i", "device_info", "Device"),
@@ -649,6 +653,58 @@ class P2kedApp(App):
             table.update_cell(bank_id, "fav", str(marked) if marked else "")
         except Exception:
             pass
+
+
+    def _favourite_under_cursor(self):
+        """The favourite row for the slot under the cursor, if there is one.
+
+        Tags and notes hang off a favourite, so there is nothing to attach
+        them to until `f` has been pressed. Saying so is better than
+        silently creating one: the user asked to annotate, not to favourite.
+        """
+        entry = self._cursor_entry()
+        if entry is None or self.favorites is None:
+            return None, None
+        bank_id = entry.bank_id
+        number = entry.program_change
+        return (bank_id, number), self.favorites.get(bank_id, number)
+
+    def action_edit_tags(self) -> None:
+        where, existing = self._favourite_under_cursor()
+        if where is None:
+            return
+        if existing is None:
+            self.notify_status("not a favourite yet -- press f first",
+                               refused=True)
+            return
+
+        def apply(value):
+            if value is None:
+                return
+            self.favorites.set_tags(where[0], where[1], value)
+            self._refill_keeping_place()
+            self.notify_status("tags set")
+
+        self.push_screen(PromptScreen("Tags (comma separated):",
+                                  existing.tags), apply)
+
+    def action_edit_note(self) -> None:
+        where, existing = self._favourite_under_cursor()
+        if where is None:
+            return
+        if existing is None:
+            self.notify_status("not a favourite yet -- press f first",
+                               refused=True)
+            return
+
+        def apply(value):
+            if value is None:
+                return
+            self.favorites.set_note(where[0], where[1], value)
+            self._refill_keeping_place()
+            self.notify_status("note set")
+
+        self.push_screen(PromptScreen("Note:", existing.note), apply)
 
     def action_cycle_favorites(self) -> None:
         """Step: all presets -> this bank's favourites -> every favourite.

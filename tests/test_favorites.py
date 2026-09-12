@@ -239,14 +239,30 @@ class TestBankListing:
         finally:
             store.close()
 
+    #: Textual's key names are not what a legend shows: the key it calls
+    #: left_square_bracket is printed as "[". Anything not here is expected
+    #: to appear in the legend under its own name.
+    SHOWN_AS = {
+        "left_square_bracket": "[",
+        "right_square_bracket": "]",
+        "slash": "/",
+        "question_mark": "?",
+    }
+    #: Keys the legend covers by description rather than by name.
+    IMPLIED = {"enter", "tab"}
+
     def test_the_keys_are_all_in_the_legend(self):
+        """A legend that omits a key teaches the user the key does not exist."""
         from p2ked.app import KEY_HINTS, P2kedApp
         legend = " ".join(KEY_HINTS)
+        missing = []
         for binding in P2kedApp.BINDINGS:
-            if binding.key in ("enter", "tab", "slash", "question_mark"):
+            if binding.key in self.IMPLIED:
                 continue
-            assert f"{binding.key} " in legend, \
-                f"{binding.key} is bound but missing from the legend"
+            shown = self.SHOWN_AS.get(binding.key, binding.key)
+            if f"{shown} " not in legend:
+                missing.append(binding.key)
+        assert not missing, f"bound but missing from the legend: {missing}"
 
 
 class TestTheThreeWayCycle:
