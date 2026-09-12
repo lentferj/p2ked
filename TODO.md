@@ -133,9 +133,21 @@ have been read. The parameter tree is the obvious next source if p2ked ever
 grows an editor, and prodatum is an independent reading of the same
 protocol — the best available cross-check short of hardware.
 
-## 9. No multi functionality yet
+## 9. Multi functionality — channel view DONE 2026-09-12
 
-**Status:** open. Researched 2026-09-12, not built. See RESOLUTION_NOTES §8.
+**Status:** the channel screen is built (`m`, and `p2kcli channels`), reads
+one Setup Dump, shows all 32 channels with what each plays and why it would
+be silent, and was verified against hardware. See RESOLUTION_NOTES §8.
+
+**Still open from this item:**
+
+- **The MIDI Mode is not shown**, because it is in the undecoded part of the
+  dump (item 10). Until it is, the screen says it does not know rather than
+  implying the unit is multitimbral.
+- **Multisetups are not browsable.** 128 stored snapshots, selectable with
+  MSB 80 / LSB 0 / PC. They would sit alongside presets in the browser.
+
+**Superseded plan:**
 
 rxved has a multi-mode screen: 16 parts, their channels, levels, receive
 switches and routing, plus a report on why a channel is silent. p2ked has

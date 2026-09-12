@@ -94,6 +94,13 @@ class DemoDevice:
         #: Every frame the fake was handed, for tests that care about the
         #: wire rather than the result.
         self.received: List[bytes] = []
+        #: Channels the fake says are enabled. None of them is channel 1: a
+        #: fake whose only live channel was the first would let an
+        #: off-by-one in the channel numbering pass unnoticed. Channel 6 is
+        #: enabled but at volume 0, so the second reason a channel can be
+        #: silent is exercised too -- masked behind a disabled channel it
+        #: would never be reached.
+        self._enabled = (5, 8, 9)
         self._closed = False
 
     # --- lifecycle ----------------------------------------------------------
@@ -134,6 +141,8 @@ class DemoDevice:
 
         if packet.command == m.Command.CONFIGURATION_REQUEST:
             return self._config_reply()
+        if packet.command == m.Command.SETUP_DUMP_REQUEST:
+            return self._setup_reply()
         if packet.command == m.Command.GENERIC_NAME_REQUEST:
             return self._name_reply(packet)
         return None
@@ -144,6 +153,41 @@ class DemoDevice:
             m.EMU_ID, 0x0F, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00,
             m.SYSEX_END,
         ])
+
+    def _setup_reply(self) -> bytes:
+        """A setup dump shaped like the real one.
+
+        Padded front and back so the channel block is NOT at offset 0 --
+        the parser finds it by structural search, and a fake that put it
+        first would let a parser that simply started at the beginning pass.
+        """
+        channels = 32
+        per = len(m.CHANNEL_PARAMETERS)
+        payload: List[int] = []
+        for count in (20, 22, 16, 21, 3, channels, per):
+            payload.extend(m.pack14(count))
+        payload.extend(m.encode_name("Demo Setup"))
+        # Filler standing in for the master parameters, deliberately not all
+        # in the channel parameters' ranges, so it cannot be mistaken for a
+        # channel block.
+        payload.extend([0x7F, 0x7F] * 40)
+        for channel in range(channels):
+            preset = channel
+            rom_id = 0
+            enable = 1 if channel in self._enabled else 0
+            volume = 0 if channel == 5 else 127
+            if channel in self._enabled and channel != 5:
+                rom_id = roms.rom(self.simms[0]).msb
+                preset = channel * 3
+            values = {
+                "preset": preset, "volume": volume, "pan": 64,
+                "mix_output": 1, "arp": 0, "enable": enable,
+                "bank_map": 0, "receive_program_change": 1, "rom_id": rom_id,
+            }
+            for name, _low, _high in m.CHANNEL_PARAMETERS:
+                payload.extend(m.pack14_signed(values[name]))
+        payload.extend([0x7F, 0x7F] * 40)
+        return m.frame(m.Command.SETUP_DUMP, payload, device=self.device_id)
 
     def _config_reply(self) -> bytes:
         payload: List[int] = []
@@ -200,6 +244,10 @@ class DemoDevice:
 
     def identify(self, *, timeout: Optional[float] = None):
         return m.identity_reply_fields(self._identity_reply())
+
+    def read_setup(self, *, timeout: Optional[float] = None) -> m.SetupDump:
+        reply = self.handle(m.setup_dump_request(device=self.device_id))
+        return m.parse_setup_dump(m.parse(reply))
 
     def hardware_config(self, *, timeout: Optional[float] = None
                         ) -> m.HardwareConfig:

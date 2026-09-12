@@ -7,10 +7,12 @@ SPDX-FileCopyrightText: Copyright (C) 2026  p2ked contributors
 
 A terminal browser for the **E-MU Proteus 2000** family's presets.
 
-> **Prototype. Never tested against hardware.** There is no Proteus on the
-> machine this was written on. Everything here is a careful reading of
-> E-MU's System Exclusive specification expressed as code that runs — not a
-> program known to work. **Read [DISCLAIMER.md](DISCLAIMER.md) first.**
+> **Prototype. Its read path works; most of it is still unverified.**
+> Identity, hardware configuration, preset names and the setup dump were
+> exercised against a real Proteus 2000 on 2026-09-12. Parameter edits,
+> preset dumps and the checksum rule were not, and 16 of its 20 ROM rows
+> have never been seen on hardware. **Read [DISCLAIMER.md](DISCLAIMER.md)
+> for which is which.**
 
 Two panes: every bank the unit can be sent to on the left, that bank's
 presets on the right, and on every row the three numbers that actually
@@ -30,8 +32,8 @@ order a sequencer's MIDI track asks for them.
 
 ## What it does
 
-- **Every ROM the family addresses** — the four user banks plus 18 ROM
-  SIMMs, 69 banks and 8832 addressable presets. MSB identifies the ROM, LSB
+- **Every ROM the family addresses** — the four user banks plus 19 ROM
+  SIMMs, 74 banks and 9472 addressable presets. MSB identifies the ROM, LSB
   the bank within it, Program Change the preset.
 - **Reads preset names off the unit, silently.** A Proteus answers a Generic
   Name Request for any preset in any fitted ROM *without selecting it*, so
@@ -48,19 +50,43 @@ order a sequencer's MIDI track asks for them.
   into, that mark is the most useful thing on the screen.
 - **A CLI** (`p2kcli`), most of which needs no unit at all.
 
-### The one thing p2ked guesses
+### Channels (`m`)
 
-Two different numbers identify a ROM, and p2ked keeps them apart:
+One Setup Dump request returns the whole multi configuration, so `m` shows
+all **32** channels — this family has two MIDI interfaces — with what each
+one plays, resolved to a ROM, a preset number and a name, plus why a channel
+would make no sound.
 
-- the **Bank Select MSB**, used to select a preset — well sourced;
+Two things it deliberately does not claim. It does not say the unit is in
+**Multi** mode: in Omni or Poly a Proteus is not multitimbral and none of
+these settings apply, and that byte is in the part of the dump p2ked cannot
+yet decode. And "channel 20 is enabled" says nothing about whether anything
+is plugged into the second interface.
+
+Note the word: **"multi" means two things on this machine.** Multi is one of
+three MIDI *modes* (Omni / Poly / Multi). A *Multisetup* is something else —
+a stored snapshot of all 32 channels, 128 of them, selected with MSB 80 /
+LSB 0 and a Program Change. This screen shows the live channel state, which
+is the first of those. Browsing Multisetups is not built yet.
+
+### The two numbers that identify a ROM
+
+- the **Bank Select MSB**, used to select a preset;
 - the **SIMM ID**, which the unit reports and which System Exclusive uses as
   the "ROM ID" when asking *about* a preset.
 
-**Nothing maps one to the other.** E-MU's specification never lists SIMM
-IDs. p2ked assumes they are the same number, which is the sensible design
-and is still an assumption — so every screen that names a ROM on that basis
-says "guess", and `p2kcli config` prints the caveat in full. The one ROM ID
-that *is* documented is `0`, meaning user memory.
+**No E-MU document to hand maps one to the other.** p2ked assumed they were
+the same number, and a unit confirmed it on 2026-09-12: three fitted ROMs
+each named the presets p2ked's catalog holds for the ROM at that MSB,
+character for character. Three of twenty, so `p2kcli config` still states
+what was checked. The one ROM ID that is also *documented* is `0`, meaning
+user memory.
+
+One ROM in the table got there the other way round. A unit reported SIMM ID
+14 with 640 presets and no file to hand covered MSB 14 at all; it was
+identified as **X-Lead v2** from E-MU's own patch list for that ROM, and
+`tools/extract_catalog.py` now reads those OpenDocument lists so its names
+are catalogued too.
 
 ## Install
 
@@ -91,6 +117,7 @@ over 127 IDs.
 | arrows, `tab` | move; `tab` switches pane |
 | `enter` | select this preset **on the unit** — it will sound |
 | `r` | read this bank's names from the unit — **silent** |
+| `m` | every MIDI channel: what it plays and why it might not — **silent** |
 | `/` | search names |
 | `c` | set the MIDI channel selections go out on |
 | `i` | device identity and which ROMs are fitted |
@@ -109,6 +136,7 @@ p2kcli find "bell"              # search names (no unit needed)
 p2kcli resolve 7 1 5            # what does this MSB/LSB/PC select?
 p2kcli ports                    # MIDI ports on this host
 p2kcli --demo config            # which ROMs are fitted
+p2kcli --demo channels          # every MIDI channel (silent)
 p2kcli --demo names XLEAD-1     # read a bank's names (silent)
 p2kcli select XLEAD-1 5         # select a preset ON THE UNIT
 ```
@@ -120,12 +148,13 @@ three numbers are its own; only the names are E-MU's, and those you generate
 locally:
 
 ```sh
-python3 tools/extract_catalog.py --ins ~/path/to/P2k_All.ins
+python3 tools/extract_catalog.py --ins ~/path/to/P2k_All.ins \
+    --odt "XLEAD2=~/path/to/X-Lead v2 patch list.odt"
 ```
 
 That reads your own copy of the Cakewalk instrument-definition files and
 writes `p2k/data/catalog.json`, which is gitignored. It currently produces
-**8832 names across 69 banks**. p2ked works without it, showing numbers
+**9472 names across 74 banks**. p2ked works without it, showing numbers
 only — and a connected unit can supply every name itself.
 
 The extractor checks its input rather than trusting it. The file shipped for

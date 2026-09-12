@@ -421,6 +421,21 @@ class ProteusBridge:
                 on_progress(index, len(entries))
         return out
 
+    def read_setup(self, *, timeout: Optional[float] = None) -> m.SetupDump:
+        """The whole multi/channel setup in one message. Silent.
+
+        One round trip for all 32 channels, where reading the same data as
+        individual parameters would need the stateful
+        ``MULTIMODE_CHANNEL_SELECT`` set first and then nine requests per
+        channel -- 288 exchanges, each depending on a selector set by an
+        earlier one.
+        """
+        self._drain()
+        self._send(m.setup_dump_request(device=self.device_id))
+        packet = self._await(
+            lambda p: p.command == m.Command.SETUP_DUMP, timeout=timeout)
+        return m.parse_setup_dump(packet)
+
     def installed_roms(self, *, timeout: Optional[float] = None
                        ) -> Dict[int, bool]:
         """Which ROM IDs this unit actually answers for. Silent.

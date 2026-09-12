@@ -20,12 +20,13 @@
 
 """The E-MU Proteus family System Exclusive wire format.
 
-**Nothing in this module has been tested against hardware.** There is no
-Proteus 2000 to test against; see DISCLAIMER.md. Every byte here is
-transcribed from the specification, and a specification read correctly still
-leaves the possibility of reading it wrongly -- the sibling rxved project
-shipped an ID conversion that was wrong for months because the failure mode
-was silence.
+**Partly verified against hardware.** The frame layout, the 14-bit LSB-first
+encoding, Identity, Hardware Configuration, Generic Name and the Setup Dump
+were all exercised against a real Proteus 2000 on 2026-09-12. Parameter
+edits, preset dumps and the checksum rule were not, and are still only as
+good as one reading of one document -- the sibling rxved project shipped an
+ID conversion that was wrong for months because the failure mode was
+silence. DISCLAIMER.md says which is which.
 
 Frame::
 
@@ -67,6 +68,11 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 __all__ = [
     "SYSEX_START",
+    "ChannelState",
+    "SetupDump",
+    "CHANNEL_PARAMETERS",
+    "setup_dump_request",
+    "parse_setup_dump",
     "SYSEX_END",
     "EMU_ID",
     "PROTEUS_ID",
@@ -139,6 +145,8 @@ class Command:
     GENERIC_NAME_REQUEST = 0x0C
     PRESET_DUMP = 0x10
     PRESET_DUMP_REQUEST = 0x11
+    SETUP_DUMP = 0x1C
+    SETUP_DUMP_REQUEST = 0x1D
 
 
 class ObjectType:
@@ -546,6 +554,186 @@ def parse_name(packet: Packet) -> NameReply:
         rom_id=unpack14(data[3], data[4]),
         name=decode_name(data[5:5 + NAME_LEN]),
     )
+
+
+# --- the setup dump ----------------------------------------------------------
+
+#: The nine per-channel parameters, in the order they appear in the dump,
+#: with the range each is documented to take (parameter IDs 130-138).
+#:
+#: The order is the parameter-ID order, and it is **confirmed against
+#: hardware**: on a unit where exactly three channels were not at factory
+#: defaults, the ninth field read the Bank Select MSB of a ROM that unit
+#: actually had fitted, for exactly those three channels and no others. A
+#: misaligned field has no reason to land on a real ROM ID precisely where
+#: the real customisation is. See docs/RESOLUTION_NOTES.md §8.
+CHANNEL_PARAMETERS: Tuple[Tuple[str, int, int], ...] = (
+    ("preset", 0, 895),
+    ("volume", 0, 127),
+    ("pan", 0, 127),
+    ("mix_output", -1, 2),
+    ("arp", -2, 1),
+    ("enable", 0, 1),
+    ("bank_map", 0, 6),
+    ("receive_program_change", 0, 1),
+    ("rom_id", 0, 127),
+)
+
+
+class ChannelState:
+    """One MIDI channel's slot in a setup."""
+
+    __slots__ = ("channel", "preset", "volume", "pan", "mix_output", "arp",
+                 "enable", "bank_map", "receive_program_change", "rom_id")
+
+    def __init__(self, channel: int, **fields) -> None:
+        self.channel = channel
+        for name, _low, _high in CHANNEL_PARAMETERS:
+            setattr(self, name, fields.get(name, 0))
+
+    @property
+    def channel_display(self) -> int:
+        return self.channel + 1
+
+    @property
+    def silent_because(self) -> Optional[str]:
+        """Why this channel makes no sound, if a readable reason says so.
+
+        Ordered nearest-cause-first, like the sibling rxved's equivalent.
+        Note what is *not* here: the MIDI Mode. In Omni or Poly the unit is
+        not multitimbral at all and none of these fields matter -- that is
+        the caller's to know and say, because it is a property of the unit
+        and not of the channel.
+        """
+        if not self.enable:
+            return "channel is disabled"
+        if self.volume == 0:
+            return "volume is 0"
+        return None
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (f"ChannelState(channel={self.channel}, preset={self.preset}, "
+                f"rom_id={self.rom_id}, enable={self.enable})")
+
+
+class SetupDump:
+    """A whole setup, as the unit reports it.
+
+    Only the per-channel block is decoded. The master parameters that
+    surround it -- including the MIDI Mode, which decides whether any of
+    this matters -- are not: the specification's published layout is
+    internally inconsistent *and* predates this firmware, so it cannot be
+    used to find them. See TODO.md item 10.
+    """
+
+    __slots__ = ("name", "channels", "channel_count", "parameters_per_channel",
+                 "offset", "payload_size")
+
+    def __init__(self, name: str, channels: Sequence["ChannelState"], *,
+                 channel_count: int, parameters_per_channel: int,
+                 offset: int, payload_size: int) -> None:
+        self.name = name
+        self.channels: Tuple[ChannelState, ...] = tuple(channels)
+        self.channel_count = channel_count
+        self.parameters_per_channel = parameters_per_channel
+        #: Where the channel block was found. Recorded because it was found
+        #: by search, not by specification -- see :func:`parse_setup_dump`.
+        self.offset = offset
+        self.payload_size = payload_size
+
+    def channel(self, channel: int) -> Optional["ChannelState"]:
+        for entry in self.channels:
+            if entry.channel == channel:
+                return entry
+        return None
+
+
+def setup_dump_request(device: int = BROADCAST_DEVICE) -> bytes:
+    """Ask for the whole setup in one message. Read-only, makes no sound."""
+    return frame(Command.SETUP_DUMP_REQUEST, device=device)
+
+
+def parse_setup_dump(packet: Packet) -> SetupDump:
+    """Decode a Setup Dump.
+
+    **The channel block is located by structural search, not by the
+    published layout**, and that is deliberate rather than lazy. E-MU's
+    specification gives an example layout whose own numbers contradict each
+    other -- it allots its "0 reserved parameters" forty data bytes -- and
+    the firmware this was written against is newer than any documentation to
+    hand, reporting different parameter counts again. Deriving byte offsets
+    from that example produces a decode that looks plausible and is wrong:
+    ROM IDs of 256, values drifting upward like array indices.
+
+    What *is* trustworthy is the dump's own header, which declares how many
+    channels there are and how many parameters each has, and the documented
+    range of each parameter. So the block is found by looking for the one
+    offset at which every channel's every value falls inside its range. On
+    the unit this was written against exactly one offset qualifies.
+
+    Raises :class:`ProtocolError` if no offset qualifies, or if more than
+    one does -- an ambiguous answer is not an answer, and guessing between
+    two candidates is how the wrong one gets shipped.
+    """
+    if packet.command != Command.SETUP_DUMP:
+        raise ProtocolError(
+            f"command {packet.command:#04x} is not a Setup Dump")
+    data = packet.payload
+    if len(data) < 30:
+        raise ProtocolError(
+            f"setup dump carries {len(data)} bytes, too few for its header")
+
+    channel_count = unpack14(data[10], data[11])
+    per_channel = unpack14(data[12], data[13])
+    name = decode_name(data[14:14 + NAME_LEN])
+
+    if not 0 < channel_count <= 64:
+        raise ProtocolError(
+            f"setup dump declares {channel_count} MIDI channels, which is "
+            f"not a number this family has")
+    if per_channel != len(CHANNEL_PARAMETERS):
+        raise ProtocolError(
+            f"setup dump declares {per_channel} parameters per channel; "
+            f"p2ked knows {len(CHANNEL_PARAMETERS)}. A firmware that added "
+            f"one would shift every field after it, so this is refused "
+            f"rather than decoded into plausible nonsense.")
+
+    span = channel_count * per_channel * 2
+
+    def fits(start: int) -> bool:
+        for index in range(channel_count * per_channel):
+            position = start + index * 2
+            value = unpack14_signed(data[position], data[position + 1])
+            _name, low, high = CHANNEL_PARAMETERS[index % per_channel]
+            if not low <= value <= high:
+                return False
+        return True
+
+    candidates = [start for start in range(0, len(data) - span + 1)
+                  if fits(start)]
+    if not candidates:
+        raise ProtocolError(
+            "no offset in this setup dump holds a channel block in which "
+            "every value is in range. Either the parameter order has "
+            "changed or this is not a dump p2ked understands.")
+    if len(candidates) > 1:
+        raise ProtocolError(
+            f"the channel block is ambiguous: offsets {candidates} all fit. "
+            f"Refusing to pick one.")
+
+    start = candidates[0]
+    channels = []
+    for index in range(channel_count):
+        fields = {}
+        for slot, (field, _low, _high) in enumerate(CHANNEL_PARAMETERS):
+            position = start + (index * per_channel + slot) * 2
+            fields[field] = unpack14_signed(data[position], data[position + 1])
+        channels.append(ChannelState(index, **fields))
+
+    return SetupDump(name=name, channels=channels,
+                     channel_count=channel_count,
+                     parameters_per_channel=per_channel,
+                     offset=start, payload_size=len(data))
 
 
 # --- parameters --------------------------------------------------------------

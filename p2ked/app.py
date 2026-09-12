@@ -65,7 +65,7 @@ _SEP = " · "
 
 KEY_HINTS = (
     "↑↓ move", "tab pane", "⏎ select on the unit", "r read names",
-    "/ search", "c channel", "i device", "? help", "q quit",
+    "m channels", "/ search", "c channel", "i device", "? help", "q quit",
 )
 
 
@@ -172,6 +172,125 @@ class PromptScreen(ModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
+class ChannelScreen(ModalScreen[None]):
+    """Every MIDI channel: what it plays, and why it might not.
+
+    The counterpart to the sibling rxved's multi-mode screen, and shaped by
+    two differences.
+
+    **Thirty-two channels, not sixteen.** A Proteus 2000 has two MIDI
+    interfaces. Both halves are shown, because a channel that answers on an
+    unwired interface is exactly the kind of thing somebody needs to see.
+
+    **Read-only, and silent.** One Setup Dump gets the lot; nothing is
+    selected and nothing sounds.
+
+    What this screen deliberately does NOT claim: whether the unit is in
+    Multi mode at all. In Omni or Poly it is not multitimbral and none of
+    these settings matter -- and the MIDI Mode byte sits in the part of the
+    dump p2ked cannot yet decode. Saying "channel 3 is disabled" to somebody
+    whose unit is in Omni would be true and useless, so the screen says it
+    does not know.
+    """
+
+    DEFAULT_CSS = """
+    ChannelScreen { align: center middle; }
+    ChannelScreen > Vertical {
+        width: 96; height: 90%; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    ChannelScreen DataTable { height: 1fr; }
+    ChannelScreen .note { height: auto; color: $text-muted; padding-top: 1; }
+    """
+
+    BINDINGS = [Binding("escape", "close", "Close"),
+                Binding("q", "close", "Close")]
+
+    def __init__(self, dump, catalog) -> None:
+        super().__init__()
+        self._dump = dump
+        self._catalog = catalog
+
+    def compose(self) -> ComposeResult:
+        yield_title = (f"[b]Channels — setup “{self._dump.name}”[/b]"
+                       if self._dump.name else "[b]Channels[/b]")
+        with Vertical():
+            yield Label(yield_title)
+            yield DataTable(id="channel-table", cursor_type="row",
+                            zebra_stripes=True)
+            yield Static(self._report(), classes="note")
+            yield Static("[dim]esc / q to close[/dim]")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#channel-table", DataTable)
+        for label, key in (("ch", "ch"), ("plays", "plays"), ("vol", "vol"),
+                           ("pan", "pan"), ("out", "out"), ("rxPC", "rxpc"),
+                           ("", "flag")):
+            table.add_column(label, key=key)
+        for entry in self._dump.channels:
+            table.add_row(*self._row(entry), key=str(entry.channel))
+
+    def _plays(self, entry) -> str:
+        """What this channel is set to, named if p2ked can name it."""
+        rom = (roms.USER if entry.rom_id == roms.USER_ROM_ID
+               else roms.rom_for_simm_id(entry.rom_id))
+        if rom is None:
+            return f"[dim]ROM {entry.rom_id}, preset {entry.preset}[/dim]"
+        index, program_change = divmod(entry.preset, roms.PRESETS_PER_BANK)
+        if index >= len(rom.lsbs):
+            return f"[dim]{rom.name}, preset {entry.preset} (out of range)[/dim]"
+        bank_id = f"{rom.id}-{rom.lsbs[index]}"
+        name = self._catalog.display_name(bank_id, program_change)
+        return f"{rom.name} {entry.preset:>3}  {name}".rstrip()
+
+    def _row(self, entry):
+        why = entry.silent_because
+        return (
+            str(entry.channel_display),
+            self._plays(entry),
+            str(entry.volume) if entry.volume else "[b]0[/b]",
+            str(entry.pan - 64),
+            str(entry.mix_output),
+            "on" if entry.receive_program_change else "[b]OFF[/b]",
+            f"[b]{why}[/b]" if why else "",
+        )
+
+    def _report(self) -> List[str]:
+        return "\n".join(f"· {line}" for line in self._lines())
+
+    def _lines(self) -> List[str]:
+        out: List[str] = []
+        audible = [c for c in self._dump.channels if c.silent_because is None]
+        if audible:
+            out.append(
+                "Channels that would sound: "
+                + ", ".join(str(c.channel_display) for c in audible))
+        else:
+            out.append("No channel on this unit would sound.")
+
+        deaf = [c for c in self._dump.channels
+                if not c.receive_program_change]
+        if deaf:
+            out.append(
+                "Ignores Program Change on channel "
+                + ", ".join(str(c.channel_display) for c in deaf)
+                + " — a select aimed there does nothing.")
+
+        out.append(
+            "This unit has two MIDI interfaces, so channels 17-32 are the "
+            "second one. They are real channels whether or not anything is "
+            "plugged into it.")
+        out.append(
+            "NOT shown, because p2ked cannot yet read it: the MIDI Mode. In "
+            "Omni or Poly the unit is not multitimbral and none of the above "
+            "applies. Only in Multi does a per-channel setting mean "
+            "anything.")
+        return out
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class P2kedApp(App):
     """The browser."""
 
@@ -191,6 +310,7 @@ class P2kedApp(App):
         # modal screens too. Enter arrives as RowSelected instead.
         Binding("enter", "select_preset", "Select on the unit", show=False),
         Binding("r", "read_names", "Read names"),
+        Binding("m", "channels", "Channels"),
         Binding("slash", "search", "Search"),
         Binding("c", "pick_channel", "Channel"),
         Binding("i", "device_info", "Device"),
@@ -386,6 +506,31 @@ class P2kedApp(App):
         self.notify_status(
             f"read {len(names)} names from {bank_id}"
             + (f"; {differing} differ from the catalog" if differing else ""))
+
+    def action_channels(self) -> None:
+        """Show every MIDI channel. Reads one message; makes no sound."""
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._channels_worker()
+
+    @work(thread=True)
+    def _channels_worker(self) -> None:
+        """**MIDI only** -- the screen is built on the main thread."""
+        self._busy = True
+        try:
+            with self._lock:
+                dump = self.device.read_setup()
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify_status, f"channels: {exc}", refused=True)
+            return
+        finally:
+            self._busy = False
+        self.call_from_thread(self._show_channels, dump)
+
+    def _show_channels(self, dump) -> None:
+        self.push_screen(ChannelScreen(dump, self.catalog))
 
     def action_search(self) -> None:
         def done(text) -> None:

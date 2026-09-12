@@ -22,7 +22,9 @@ import pytest
 
 from p2k import catalog as cat
 from p2k import roms
-from p2ked.app import P2kedApp
+from textual.widgets import DataTable
+
+from p2ked.app import ChannelScreen, P2kedApp
 from p2ked.demo import DemoDevice
 
 pytestmark = pytest.mark.asyncio
@@ -126,3 +128,70 @@ class TestChannel:
             for _ in range(6):
                 await pilot.pause()
             assert len(app.device.selected_log) == 1
+
+
+class TestChannelScreen:
+    """The channel view, and what it refuses to claim.
+
+    Its job is to say which channels would sound. Its other job, equally
+    load-bearing, is to say that it does not know the MIDI Mode -- in Omni
+    or Poly none of these settings apply, and a screen that quietly implied
+    otherwise would send somebody hunting a channel setting when the mode is
+    the problem. That is the mistake the sibling rxved made on a real synth.
+    """
+
+    async def _open(self, app, pilot):
+        await pilot.pause()
+        await pilot.press("m")
+        for _ in range(8):
+            await pilot.pause()
+        return app.screen
+
+    async def test_m_opens_it_with_every_channel(self, app):
+        async with app.run_test() as pilot:
+            screen = await self._open(app, pilot)
+            assert isinstance(screen, ChannelScreen)
+            table = screen.query_one("#channel-table", DataTable)
+            assert table.row_count == 32
+
+    async def test_opening_it_selects_nothing(self, app):
+        async with app.run_test() as pilot:
+            await self._open(app, pilot)
+            assert app.device.selected_log == []
+
+    async def test_it_names_what_a_channel_plays(self, app):
+        async with app.run_test() as pilot:
+            screen = await self._open(app, pilot)
+            table = screen.query_one("#channel-table", DataTable)
+            keys = [c.key.value for c in table.columns.values()]
+            # Demo channel 9 is enabled and points at a real ROM.
+            plays = str(table.get_row("8")[keys.index("plays")])
+            assert "Composer" in plays
+
+    async def test_both_reasons_for_silence_are_distinguished(self, app):
+        async with app.run_test() as pilot:
+            screen = await self._open(app, pilot)
+            reasons = {c.channel_display: c.silent_because
+                       for c in screen._dump.channels}
+            assert reasons[1] == "channel is disabled"
+            assert reasons[6] == "volume is 0"      # enabled, but silent
+            assert reasons[9] is None
+
+    async def test_it_says_which_channels_would_sound(self, app):
+        async with app.run_test() as pilot:
+            screen = await self._open(app, pilot)
+            report = " ".join(screen._lines())
+            assert "Channels that would sound: 9, 10" in report
+
+    async def test_it_refuses_to_claim_the_midi_mode(self, app):
+        """The caveat is the point; a test so it cannot be tidied away."""
+        async with app.run_test() as pilot:
+            screen = await self._open(app, pilot)
+            report = " ".join(screen._lines())
+            assert "MIDI Mode" in report
+            assert "Omni" in report and "Multi" in report
+
+    async def test_it_explains_the_second_interface(self, app):
+        async with app.run_test() as pilot:
+            screen = await self._open(app, pilot)
+            assert "two MIDI interfaces" in " ".join(screen._lines())

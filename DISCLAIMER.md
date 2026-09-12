@@ -23,6 +23,10 @@ over a DIN cable behind a U6MIDI Pro interface):
   counts.
 - **Generic Name (`0Ch`/`0Bh`).** Preset names came back for the user banks
   and every fitted ROM, and matched the catalog character for character.
+- **Setup Dump (`1Dh`/`1Ch`).** All 32 channels decoded, and the result
+  matches the owner's sequencer template — which was written from neither.
+  The channel block is found by structural search, because the published
+  layout is both self-contradictory and older than this unit's firmware.
 - **That a SIMM ID is the ROM's Bank Select MSB** -- p2ked's one guess, now
   confirmed for three ROMs. See below.
 

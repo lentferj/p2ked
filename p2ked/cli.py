@@ -155,6 +155,41 @@ def _cmd_config(device, _args) -> None:
     print("are still readable, only the ROM's name is unknown.")
 
 
+def _cmd_channels(device, args) -> None:
+    """Every MIDI channel. Read-only, makes no sound."""
+    dump = device.read_setup()
+    catalog = _catalog(args)
+    print(f"setup {dump.name!r}   {dump.channel_count} channels")
+    print()
+    rows = []
+    for entry in dump.channels:
+        rom = (roms.USER if entry.rom_id == roms.USER_ROM_ID
+               else roms.rom_for_simm_id(entry.rom_id))
+        plays = f"ROM {entry.rom_id} preset {entry.preset}"
+        if rom is not None:
+            index, pc = divmod(entry.preset, roms.PRESETS_PER_BANK)
+            if index < len(rom.lsbs):
+                bank_id = f"{rom.id}-{rom.lsbs[index]}"
+                plays = (f"{rom.name} {entry.preset} "
+                         f"{catalog.display_name(bank_id, pc)}").rstrip()
+        rows.append([
+            str(entry.channel_display), plays, str(entry.volume),
+            str(entry.pan - 64), str(entry.mix_output),
+            "on" if entry.receive_program_change else "OFF",
+            entry.silent_because or "",
+        ])
+    print(_table(rows, ["ch", "plays", "vol", "pan", "out", "rxPC", ""]))
+    audible = [c.channel_display for c in dump.channels
+               if c.silent_because is None]
+    print()
+    print("Channels that would sound: "
+          + (", ".join(map(str, audible)) if audible else "none"))
+    print("Channels 17-32 are this family's second MIDI interface.")
+    print("NOT shown: the MIDI Mode. In Omni or Poly the unit is not")
+    print("multitimbral and none of the above applies -- p2ked cannot yet")
+    print("read that byte. See TODO.md item 10.")
+
+
 def _cmd_names(device, args) -> None:
     """Read a bank's names off the unit. Read-only, **makes no sound**."""
     def progress(done: int, total: int) -> None:
@@ -188,6 +223,7 @@ _COMMANDS: Dict[str, Callable] = {
     "ports": None,          # filled in below; needs the MIDI import
     "status": _cmd_status,
     "config": _cmd_config,
+    "channels": _cmd_channels,
     "names": _cmd_names,
     "select": _cmd_select,
 }
@@ -248,6 +284,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("ports", help="MIDI ports on this host")
     sub.add_parser("status", help="ask the unit who it is")
     sub.add_parser("config", help="which ROMs are fitted")
+    sub.add_parser("channels",
+                   help="every MIDI channel: what it plays, and why it "
+                        "might not (makes no sound)")
     sp = sub.add_parser("names", help="read a bank's names (makes no sound)")
     sp.add_argument("bank")
     sp = sub.add_parser("select", help="select a preset ON THE UNIT")
