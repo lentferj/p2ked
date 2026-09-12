@@ -57,6 +57,15 @@ p2ked/app.py
   The key-hint legend (KeyHints, wrap_blocks) is ported from rxved, which
   ports it from s3ked, eosed and k2kremote. Same copyrights as above.
 
+p2k/favorites.py
+  The favourites store -- the SQLite schema, the cross-thread connection
+  wrapper, the per-platform data directory and the Favorites API -- is
+  adapted from rxved's rxved/favorites.py, with the slot identity changed
+  from Roland's bank-and-number to this instrument's catalog bank key and
+  program change. Same copyright as above:
+
+    rxved      Copyright (C) 2026  rxved contributors        - GPL-2.0-or-later
+
 tools/extract_catalog.py
   Reads, but does not redistribute, the Cakewalk instrument-definition files
   for the Proteus family. Its output is preset names, which are E-MU's; that
