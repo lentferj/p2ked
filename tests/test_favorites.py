@@ -156,7 +156,8 @@ class TestBrowserWiring:
                                                 (bank, every[5].program_change)])
         try:
             assert len(app._visible(bank)) == len(every)
-            app._favorites_only = True
+            from p2ked.app import VIEW_BANK_FAVOURITES
+            app.view_mode = VIEW_BANK_FAVOURITES
             shown = app._visible(bank)
             assert [e.program_change for e in shown] == \
                 [every[2].program_change, every[5].program_change]
@@ -246,3 +247,66 @@ class TestBankListing:
                 continue
             assert f"{binding.key} " in legend, \
                 f"{binding.key} is bound but missing from the legend"
+
+
+class TestTheThreeWayCycle:
+    """`F` steps all -> this bank's favourites -> every favourite.
+
+    Always three steps, even when a view is empty: skipping an empty one to
+    be helpful makes a keypress land somewhere different depending on what
+    happens to be favourited.
+    """
+
+    def _app(self, tmp_path, marks=()):
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        store = Favorites(str(tmp_path / "f.db"))
+        for bank, pc in marks:
+            store.add(bank, pc, name=f"invented {pc}")
+        return P2kedApp(DemoDevice(), favorites=store), store
+
+    def test_the_cycle_has_exactly_three_steps(self):
+        from p2ked.app import VIEW_CYCLE, VIEW_ALL
+        assert len(VIEW_CYCLE) == 3 and VIEW_CYCLE[0] == VIEW_ALL
+
+    def test_all_favourites_spans_banks(self, tmp_path):
+        from p2k import roms
+        from p2ked.app import VIEW_ALL_FAVOURITES, VIEW_BANK_FAVOURITES
+        a, b = roms.bank_ids()[0], roms.bank_ids()[1]
+        app, store = self._app(tmp_path, marks=[(a, 3), (b, 9)])
+        try:
+            app.view_mode = VIEW_BANK_FAVOURITES
+            assert [e.program_change for e in app._visible(a)] == [3]
+            app.view_mode = VIEW_ALL_FAVOURITES
+            spanning = app._visible(a)
+            assert {e.bank_id for e in spanning} == {a, b}
+            assert len(spanning) == 2
+        finally:
+            store.close()
+
+    def test_an_unknown_bank_in_the_store_is_skipped(self, tmp_path):
+        from p2ked.app import VIEW_ALL_FAVOURITES
+        from p2k import roms
+        app, store = self._app(tmp_path,
+                               marks=[(roms.bank_ids()[0], 1),
+                                      ("NOSUCH-9", 4)])
+        try:
+            app.view_mode = VIEW_ALL_FAVOURITES
+            shown = app._visible(roms.bank_ids()[0])
+            assert [e.program_change for e in shown] == [1]
+        finally:
+            store.close()
+
+    def test_every_view_is_reachable_and_returns_to_the_start(self, tmp_path):
+        from p2ked.app import VIEW_CYCLE
+        app, store = self._app(tmp_path)
+        try:
+            seen = []
+            for _ in range(len(VIEW_CYCLE) + 1):
+                seen.append(app.view_mode)
+                index = VIEW_CYCLE.index(app.view_mode)
+                app.view_mode = VIEW_CYCLE[(index + 1) % len(VIEW_CYCLE)]
+            assert seen[:-1] == list(VIEW_CYCLE)
+            assert seen[-1] == VIEW_CYCLE[0], "it must wrap"
+        finally:
+            store.close()

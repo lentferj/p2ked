@@ -64,6 +64,18 @@ __all__ = ["P2kedApp", "main", "build_parser", "KEY_HINTS", "wrap_blocks"]
 
 _SEP = " · "
 
+#: What `F` steps through, in order. Named after rxved's, deliberately:
+#: the same key should mean the same three things across these projects.
+VIEW_ALL = "all"
+VIEW_BANK_FAVOURITES = "bank-favourites"
+VIEW_ALL_FAVOURITES = "all-favourites"
+VIEW_CYCLE = (VIEW_ALL, VIEW_BANK_FAVOURITES, VIEW_ALL_FAVOURITES)
+VIEW_LABELS = {
+    VIEW_ALL: "all presets",
+    VIEW_BANK_FAVOURITES: "favourites in this bank",
+    VIEW_ALL_FAVOURITES: "every favourite, all banks",
+}
+
 KEY_HINTS = (
     "↑↓ move", "tab pane", "⏎ select on the unit", "r read names",
     "m channels", "/ search", "c channel", "f favourite",
@@ -368,8 +380,8 @@ class P2kedApp(App):
         self._current: List[roms.Preset] = []
         self._busy = False
         self._filling = False
-        #: None = show everything, True = only favourites.
-        self._favorites_only = False
+        #: Which of the three views `F` is on.
+        self.view_mode = VIEW_ALL
         #: Empty = every category. Categories are the "bas:" style prefix
         #: E-MU puts on a preset name.
         self._categories: set = set()
@@ -481,15 +493,40 @@ class P2kedApp(App):
             return set()
         return self.favorites.keys_for_bank(bank_id)
 
+    def _all_favourites(self) -> List[roms.Preset]:
+        """Every favourite in every bank, in bank order then number.
+
+        Built from the presets themselves rather than from the favourites
+        rows, so a row naming a bank this build does not know is skipped
+        instead of crashing the list.
+        """
+        if self.favorites is None:
+            return []
+        out = []
+        wanted = {}
+        for favourite in self.favorites.all(order="bank"):
+            wanted.setdefault(favourite.bank_id, set()).add(favourite.number)
+        for bank_id in roms.bank_ids():
+            numbers = wanted.get(bank_id)
+            if not numbers:
+                continue
+            out.extend(e for e in roms.presets(bank_id)
+                       if e.program_change in numbers)
+        return out
+
     def _visible(self, bank_id: str) -> List[roms.Preset]:
-        """The presets a filter leaves showing, in bank order."""
-        entries = roms.presets(bank_id)
-        if self._favorites_only:
-            marked = self._favorite_keys(bank_id)
-            entries = [e for e in entries if e.program_change in marked]
+        """The presets the current view and filters leave showing."""
+        if self.view_mode == VIEW_ALL_FAVOURITES:
+            entries = self._all_favourites()
+        else:
+            entries = roms.presets(bank_id)
+            if self.view_mode == VIEW_BANK_FAVOURITES:
+                marked = self._favorite_keys(bank_id)
+                entries = [e for e in entries
+                           if e.program_change in marked]
         if self._categories:
             entries = [e for e in entries
-                       if self.category_of(bank_id, e.program_change)
+                       if self.category_of(e.bank_id, e.program_change)
                        in self._categories]
         return entries
 
@@ -498,20 +535,33 @@ class P2kedApp(App):
         self._current_bank = bank_id
         self._current = self._visible(bank_id)
         marked = self._favorite_keys(bank_id)
+        column = table.columns.get("pc")
+        if column is not None:
+            from rich.text import Text
+            column.label = Text(
+                "bank / #" if self.view_mode == VIEW_ALL_FAVOURITES else "#")
         self._filling = True
         try:
             table.clear()
             for entry in self._current:
-                name = self.catalog.display_name(bank_id, entry.program_change)
-                if self.catalog.differs(bank_id, entry.program_change):
+                name = self.catalog.display_name(entry.bank_id,
+                                                 entry.program_change)
+                if self.catalog.differs(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b] [dim]*[/dim]"
-                elif self.catalog.is_live(bank_id, entry.program_change):
+                elif self.catalog.is_live(entry.bank_id,
+                                          entry.program_change):
                     shown = f"[b]{name}[/b]"
                 else:
                     shown = name
-                star = "[b]♥[/b]" if entry.program_change in marked else ""
+                across = self.view_mode == VIEW_ALL_FAVOURITES
+                fav_here = (self._favorite_keys(entry.bank_id) if across
+                            else marked)
+                star = ("[b]♥[/b]" if entry.program_change in fav_here else "")
+                number = (f"{roms.bank(entry.bank_id).label} "
+                          f"{entry.program_change:03d}" if across
+                          else f"{entry.program_change:03d}")
                 table.add_row(
-                    star, f"{entry.program_change:03d}", shown,
+                    star, number, shown,
                     str(entry.program_change), str(entry.lsb), str(entry.msb),
                     str(entry.number), key=entry.key,
                 )
@@ -541,15 +591,32 @@ class P2kedApp(App):
         self._refill_keeping_place()
 
     def action_cycle_favorites(self) -> None:
-        """All presets, or only the favourited ones."""
+        """Step: all presets -> this bank's favourites -> every favourite.
+
+        **Always exactly three steps**, even when a view comes up empty.
+        Skipping an empty view to be helpful would make one keypress land
+        somewhere different depending on what happens to be favourited, and
+        a key whose behaviour you cannot predict is worse than an empty list
+        that explains itself.
+        """
         if self.favorites is None:
             self.notify_status("no favourites database")
             return
-        self._favorites_only = not self._favorites_only
+        index = VIEW_CYCLE.index(self.view_mode)
+        self.view_mode = VIEW_CYCLE[(index + 1) % len(VIEW_CYCLE)]
         self._refill_keeping_place()
-        self.notify_status(
-            "showing favourites only" if self._favorites_only
-            else "showing every preset")
+        shown = len(self._current)
+        if self.view_mode == VIEW_ALL:
+            self.notify_status(VIEW_LABELS[self.view_mode])
+        elif not shown:
+            where = ("this bank" if self.view_mode == VIEW_BANK_FAVOURITES
+                     else "any bank")
+            self.notify_status(
+                f"{VIEW_LABELS[self.view_mode]} - nothing favourited in "
+                f"{where} yet")
+        else:
+            self.notify_status(
+                f"{VIEW_LABELS[self.view_mode]} - {shown}")
 
     def action_pick_categories(self) -> None:
         """Filter by the ``bas:`` style prefix."""
