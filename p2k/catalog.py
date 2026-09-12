@@ -101,12 +101,38 @@ class Catalog:
         return f"{bank_id}:{program_change:03d}" in self._live
 
     def differs(self, bank_id: str, program_change: int) -> bool:
-        """Whether the unit and the printed list disagree about this slot."""
+        """Whether the unit and the printed list disagree about this slot.
+
+        **What a disagreement means depends on the bank.** In a user bank it
+        means somebody has saved their own work over the factory preset,
+        which is the most useful thing this program can point out. In a ROM
+        bank it cannot mean that -- ROM does not change -- so it means the
+        printed list is wrong, and the unit is right.
+
+        That is not hypothetical. Reading all 640 presets of one ROM off a
+        unit on 2026-09-12 and comparing them with E-MU's own patch list for
+        that ROM left 11 names differing, every one by internal whitespace
+        alone -- the instrument holds two spaces where the document prints
+        one. Callers should say which kind of disagreement they are
+        showing; see :meth:`disagreement` and p2ked/app.py.
+        """
         live = self.live_name(bank_id, program_change)
         if live is None:
             return False
         printed = self.name(bank_id, program_change)
         return printed is not None and printed != live
+
+    def disagreement(self, bank_id: str, program_change: int,
+                     writable: bool) -> Optional[str]:
+        """Why the unit and the catalog differ here, in words.
+
+        ``None`` when they agree or the slot has not been read.
+        """
+        if not self.differs(bank_id, program_change):
+            return None
+        if writable:
+            return "saved over the factory preset"
+        return "the printed list is wrong; the unit is right"
 
     def display_name(self, bank_id: str, program_change: int) -> str:
         """What to show: the unit's name if known, else the printed one."""

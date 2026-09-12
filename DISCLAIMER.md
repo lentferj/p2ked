@@ -5,25 +5,49 @@ SPDX-FileCopyrightText: Copyright (C) 2026  p2ked contributors
 
 # Disclaimer
 
-## Nothing here has been tested against hardware
+## Some of this is verified against hardware. Most of it is not.
 
-**Read this before trusting a single byte.**
+**Read which is which before trusting a byte.**
 
-There is no Proteus 2000 attached to the machine p2ked was written on. Every
-message it builds, every offset, every assumption about how the instrument
-answers, comes from reading E-MU's *Proteus Family MIDI System Exclusive
-Specification* v2.2 and the Proteus 2000 Operation Manual. Not one of them
-has been sent to a unit.
+Verified on **2026-09-12** against a real Proteus 2000 (device ID 0, reached
+over a DIN cable behind a U6MIDI Pro interface):
 
-That makes this a **prototype**, and the word is meant literally: it is a
-careful reading of a document, expressed as code that runs. It is not a
-program known to work.
+- **Port discovery and the Universal Identity Request.** The unit answered a
+  broadcast request with manufacturer `18h`, and the reply carried the
+  device ID it is set to.
+- **The System Exclusive frame layout** -- `F0 18 0F <dev> 55 …` -- and the
+  14-bit LSB-first encoding, confirmed together by every exchange below
+  working at all.
+- **Hardware Configuration (`0Ah`/`09h`).** Parsed as written: 512 user
+  presets and four SIMMs with their IDs, preset counts and instrument
+  counts.
+- **Generic Name (`0Ch`/`0Bh`).** Preset names came back for the user banks
+  and every fitted ROM, and matched the catalog character for character.
+- **That a SIMM ID is the ROM's Bank Select MSB** -- p2ked's one guess, now
+  confirmed for three ROMs. See below.
 
-### Why the test suite is not evidence
+**Not verified.** Everything else, including:
+
+- **Parameter edit and request**, and the whole preset-dump family. The
+  encoders exist and are tested against the demo device; nothing has been
+  sent to a unit.
+- **The checksum rule.** Still ambiguous, still worked around by sending
+  `7Fh`. No checksummed message has been captured from a unit.
+- **`SEND_GAP`.** Still a guess. It has not failed at 10 ms across a few
+  thousand name requests, which is evidence it is not too *short* and none
+  at all that it is near right.
+- **Every ROM but the four fitted here.** The table's other fifteen rows are
+  transcribed, not confirmed.
+
+That still makes this a **prototype**. What changed on 2026-09-12 is that
+the read path is now known to work against one unit, not merely to be
+self-consistent.
+
+### Why the test suite is still not evidence
 
 p2ked has a test suite that passes, and `p2ked/demo.py` — a stand-in device
-that answers its messages. **Neither is evidence that the protocol is
-right.** The demo device was written from the same document, by the same
+that answers its messages. **For anything in the unverified list above,
+neither is evidence that the protocol is right.** The demo device was written from the same document, by the same
 reader, at the same time as the code it answers. Two things that share a
 misreading agree with each other perfectly.
 
@@ -41,12 +65,11 @@ are a different claim from "this works".
 
 ### The specific things most likely to be wrong
 
-- **The SIMM ID to ROM mapping.** p2ked assumes a SIMM ID reported in the
-  Configuration response is that ROM's Bank Select MSB. Nothing in E-MU's
-  specification says so; no document here lists SIMM IDs at all. Every
-  screen that shows a ROM name derived this way labels it a guess, and
-  `p2k.roms.rom_for_simm_id` says so in its docstring, with a test that the
-  wording stays. **If one thing here is wrong, it is probably this.**
+- **The SIMM ID to ROM mapping — RESOLVED 2026-09-12.** p2ked assumed a
+  reported SIMM ID is that ROM's Bank Select MSB. A unit reporting IDs 4, 65
+  and 67 returned, for each, the preset names this project's catalog holds
+  for the ROM at that MSB. Three of nineteen ROMs, so a mismatch elsewhere
+  is still possible — but it is no longer a guess.
 - **The checksum rule.** The specification says "1 Byte XOR(1's complement)
   of the sum of the DATA bytes", which describes two different operations.
   p2ked implements the plain XOR reading and sends `7Fh` — "ignore
@@ -56,8 +79,11 @@ are a different claim from "this works".
   timing at all. A name sweep of a 1024-preset ROM spends a thousand of
   these.
 - **Preset counts per ROM.** Taken from the instrument-definition files,
-  which describe *banks*, not populated presets. A ROM whose last bank is
-  partly empty will show rows that name nothing.
+  which describe *banks*, not populated presets. For the four ROMs fitted
+  here the unit's own counts agree; for the rest they are unconfirmed. A
+  unit answers a request past the end of a ROM with the name
+  `(not installed)` rather than ignoring it, so p2ked can now tell an
+  absent preset from a dead cable — see `p2k.roms.is_absent`.
 - **Everything else.** The list above is what is known to be uncertain, not
   the extent of the uncertainty.
 

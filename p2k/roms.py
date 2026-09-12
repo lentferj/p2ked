@@ -40,14 +40,15 @@ numbers identify a ROM and this module keeps them apart:
 * the **SIMM ID**, which the unit reports in its Configuration response and
   which System Exclusive uses as the "ROM ID" when *asking about* a preset.
 
-Nothing in E-MU's System Exclusive specification maps SIMM IDs to ROM names,
-and there is no hardware here to ask. It is entirely plausible that the SIMM
-ID simply *is* the Bank Select MSB -- that would be the sensible design --
-but plausible is not known, and a wrong ROM ID in a name request is answered
-with silence, which looks like every other failure. See
-:func:`rom_for_simm_id` and TODO.md.
+Nothing in E-MU's System Exclusive specification maps SIMM IDs to ROM names.
+p2ked assumed they were the same number, and **that assumption was confirmed
+against hardware on 2026-09-12**: a Proteus 2000 reporting SIMM IDs 4, 65
+and 67 returned, for each, preset names matching this table's ROM at that
+Bank Select MSB, exactly. See :func:`rom_for_simm_id` and
+docs/RESOLUTION_NOTES.md §7.
 
-The one ROM ID that **is** documented is ``0``, which means the user banks.
+The one ROM ID that is also *documented* is ``0``, which means the user
+banks.
 """
 
 from __future__ import annotations
@@ -57,6 +58,10 @@ from typing import Dict, List, Optional, Tuple
 
 __all__ = [
     "PRESETS_PER_BANK",
+    "NOT_INSTALLED",
+    "EMPTY_SLOT",
+    "is_absent",
+    "is_empty",
     "USER_MSB",
     "USER_ROM_ID",
     "Rom",
@@ -79,6 +84,35 @@ __all__ = [
 #: can address. A ROM's last bank may be partly empty; the count in
 #: :class:`Rom` says how many presets it really has.
 PRESETS_PER_BANK = 128
+
+#: What a unit answers when asked to name a preset that does not exist --
+#: past the end of a ROM, or in a ROM that is not fitted.
+#:
+#: **Observed, not documented.** The specification says a request that
+#: cannot be served is ignored; in fact this one is answered, with this
+#: string. That is better than silence, and worth relying on: it
+#: distinguishes "no such preset" from "the cable is unplugged", which a
+#: timeout cannot.
+NOT_INSTALLED = "(not installed)"
+
+#: What a unit answers for a real but unprogrammed slot. Observed on an
+#: empty user preset and at the end of a ROM.
+EMPTY_SLOT = "default"
+
+
+def is_absent(name: Optional[str]) -> bool:
+    """Whether a name means "there is no such preset"."""
+    return name is not None and name.strip() == NOT_INSTALLED
+
+
+def is_empty(name: Optional[str]) -> bool:
+    """Whether a name means "this slot exists and holds nothing".
+
+    Matched on the trailing word because the unit returns it with the same
+    three-character category prefix every name carries, blank in this case.
+    """
+    return name is not None and name.strip().rstrip(":").endswith(EMPTY_SLOT)
+
 
 #: Bank Select MSB of the user banks.
 USER_MSB = 0
@@ -202,6 +236,12 @@ ROMS: Tuple[Rom, ...] = (
     _rom("ORCH1", "Orchestral Sessions Vol. 1", 10, (0, 1, 2), 384),
     _rom("ORCH2", "Orchestral Sessions Vol. 2", 11, (0,), 128),
     _rom("PHATT", "Pure Phatt", 13, (0, 1, 2, 3), 512),
+    # Not in the instrument-definition files at all. Found on 2026-09-12
+    # because a unit reported SIMM ID 14 with 640 presets, then identified
+    # from E-MU's own X-Lead v2 patch list: 640 presets in five banks, and
+    # every preset sampled off the unit -- 0, 5, 100, 200, 400, 638, 639 --
+    # matches that list character for character.
+    _rom("XLEAD2", "X-Lead v2", 14, (0, 1, 2, 3, 4), 640),
     _rom("ENSONIQ", "Ensoniq Project", 16, (0, 1, 2, 3), 512),
     _rom("P2500", "Proteus 2500", 17, (0, 1, 2, 3), 512),
     _rom("VINTAGE", "Vintage Collection", 18, (0, 1, 2, 3), 512),
@@ -235,16 +275,21 @@ def rom_for_msb(msb: int) -> Optional[Rom]:
 
 
 def rom_for_simm_id(simm_id: int) -> Optional[Rom]:
-    """The ROM a *reported SIMM ID* names -- **a guess, and labelled one.**
+    """The ROM a reported SIMM ID names.
 
-    Returns the ROM whose Bank Select MSB equals ``simm_id``, on the
-    hypothesis that E-MU used one number for both. That hypothesis is
-    untested: no document here states the SIMM IDs, and there is no hardware
-    to ask.
+    Returns the ROM whose Bank Select MSB equals ``simm_id``. E-MU uses one
+    number for both, which no document to hand states and which was
+    **confirmed against hardware on 2026-09-12**: a unit reporting SIMM IDs
+    4, 65 and 67 named, for each, the presets this table holds for the ROM
+    at that MSB -- matching the catalog character for character.
 
-    Callers must present the result as a guess. A browser that quietly
-    labels a SIMM "Composer" on this basis, and is wrong, has invented a
-    fact the user cannot check and will not think to doubt.
+    Three ROMs is not all nineteen, so a mismatch on some other board is
+    still possible; it is no longer a guess, which is what it was.
+
+    ``None`` means no ROM in this table has that MSB. That is not an error:
+    the instrument-definition files p2ked's table comes from do not cover
+    every ROM E-MU shipped. MSB 14 reached this table only because a unit
+    reported it.
     """
     return _BY_MSB.get(simm_id)
 

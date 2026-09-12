@@ -25,12 +25,13 @@
 
 """MIDI transport and device operations for the Proteus family.
 
-**None of this has been run against hardware.** There is no Proteus here.
-Everything below is written from E-MU's specification and exercised only
-against :class:`p2ked.demo.DemoDevice`, which was written from the same
-specification -- so the two agreeing proves that the code matches one
-reading of one document, and nothing more. See DISCLAIMER.md before
-trusting a byte.
+**Partly verified against hardware on 2026-09-12.** Identity, Hardware
+Configuration and Generic Name were exercised against a real Proteus 2000
+and all three worked as written. Everything else here -- parameter edits,
+preset dumps, the checksum rule, ``SEND_GAP`` -- has still only ever been
+run against :class:`p2ked.demo.DemoDevice`, which was written from the same
+reading of the same document, so its agreement proves nothing about them.
+DISCLAIMER.md sets out which is which.
 
 Two things shape this module, and both are *advantages* over the Roland
 machine the sibling rxved talks to.
@@ -339,6 +340,11 @@ class ProteusBridge:
                     timeout: Optional[float] = None) -> str:
         """One preset's name. Read-only, and **makes no sound**.
 
+        A unit answers for a preset that does not exist rather than
+        ignoring the request: the name comes back as
+        :data:`p2k.roms.NOT_INSTALLED`. Callers that care should use
+        :func:`p2k.roms.is_absent` rather than expecting a timeout.
+
         The reply is matched on the object type, number *and* ROM ID it
         describes, not merely on being a name message. There is no address
         in this protocol to match against, so without that check a late
@@ -402,13 +408,41 @@ class ProteusBridge:
         out: Dict[int, str] = {}
         for index, entry in enumerate(entries, start=1):
             try:
-                out[entry.program_change] = self.preset_name(
-                    entry.number, rom_id, timeout=timeout)
+                name = self.preset_name(entry.number, rom_id, timeout=timeout)
             except TimeoutError:
                 # One missing name is not a reason to lose the other 127.
-                pass
+                name = None
+            if name is not None and not roms.is_absent(name):
+                # Empty slots are kept: "default" is what the unit says, and
+                # a blank row would leave the user wondering whether the
+                # read failed or the slot is genuinely empty.
+                out[entry.program_change] = name
             if on_progress is not None:
                 on_progress(index, len(entries))
+        return out
+
+    def installed_roms(self, *, timeout: Optional[float] = None
+                       ) -> Dict[int, bool]:
+        """Which ROM IDs this unit actually answers for. Silent.
+
+        One name request per ROM in the table, reading the reply rather than
+        waiting for a timeout: a unit answers a request for an absent ROM
+        with the name ``(not installed)``. That makes presence a fast,
+        positive test instead of a slow, ambiguous one -- a timeout would
+        equally mean the cable is out.
+
+        Independent of :meth:`hardware_config`, and worth having as well as
+        it: the configuration response lists SIMMs, this asks the question
+        the name reader will actually ask.
+        """
+        out: Dict[int, bool] = {}
+        for entry in roms.ROMS:
+            rom_id = (roms.USER_ROM_ID if entry is roms.USER else entry.msb)
+            try:
+                name = self.preset_name(0, rom_id, timeout=timeout)
+            except TimeoutError:
+                continue          # unknown, not absent -- say nothing
+            out[rom_id] = not roms.is_absent(name)
         return out
 
     def select(self, entry: roms.Preset, *, channel: int = 0) -> None:

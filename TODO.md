@@ -16,9 +16,16 @@ exhaustive — see DISCLAIMER.md.
 
 ---
 
-## 1. Everything is unverified
+## 1. The read path — DONE 2026-09-12
 
-**Status:** open, and blocked on a Proteus 2000.
+**Status:** done. First hardware session; see RESOLUTION_NOTES §7.
+
+Identity, Hardware Configuration and Generic Name all worked as written
+against a real Proteus 2000. Nothing was selected and nothing made a sound.
+What remains unverified is listed in DISCLAIMER.md: parameter edits, preset
+dumps, the checksum rule and `SEND_GAP`.
+
+**Superseded plan, kept because the order was right:**
 
 The first session with a unit should, in this order:
 
@@ -33,19 +40,18 @@ The first session with a unit should, in this order:
 Until step 1 succeeds nothing else is worth attempting: silence is this
 protocol's answer to every kind of mistake.
 
-## 2. SIMM ID versus Bank Select MSB
+## 2. SIMM ID versus Bank Select MSB — RESOLVED 2026-09-12
 
-**Status:** open. **The likeliest thing to be wrong.**
+**Status:** confirmed. A SIMM ID **is** the ROM's Bank Select MSB.
 
-p2ked assumes a SIMM ID reported in the Configuration response is that
-ROM's Bank Select MSB. Nothing in E-MU's specification says so, and no
-document to hand lists SIMM IDs at all.
+A unit reporting SIMM IDs 4, 65 and 67 returned, for each, preset names
+matching p2ked's catalog for the ROM at that MSB — character for character.
+Three of nineteen ROMs, so a mismatch on some other board remains possible,
+but this is no longer a guess and the interface no longer calls it one.
 
-Resolved by one `p2kcli config` against a unit with a known ROM fitted: if
-the reported ID is the ROM's documented MSB, the assumption holds.
-
-If it does not, `roms.rom_for_simm_id` becomes a transcribed table and
-`bridge.rom_id_for` needs the real mapping. Everything else survives.
+A second, independent check agrees: `ProteusBridge.installed_roms()` asks
+each ROM ID for preset 0 and reads the reply, and its answer matches the
+Configuration response exactly.
 
 ## 3. The checksum rule is ambiguous
 
@@ -71,7 +77,11 @@ of them, so this is worth measuring early.
 
 ## 5. Preset counts are bank counts
 
-**Status:** open, cosmetic.
+**Status:** open, and now fixable. A unit answers past the end of a ROM with
+the name `(not installed)` rather than going silent, so the real extent of
+every fitted ROM can be found by asking — silently, and without a timeout.
+`roms.is_absent` recognises it and `read_bank_names` drops those rows; using
+it to *correct* the table at runtime is the remaining work.
 
 The instrument-definition files describe *banks*, not populated presets, so
 `roms.ROMS` gives every ROM `banks * 128`. A ROM whose last bank is partly
@@ -81,6 +91,17 @@ discoverable by the person looking for it.
 
 A unit's Configuration response reports the real per-SIMM preset count and
 could correct this at runtime.
+
+## 5b. ROM 14 has no name
+
+**Status:** open, needs the front panel.
+
+A unit reported SIMM ID 14 with 640 presets, and it answers name requests
+for all 640. No instrument-definition file to hand covers MSB 14, so p2ked
+has the numbers but not the ROM's own name, and System Exclusive has no
+object type to ask for one. It is in the table as "ROM 14 (unidentified)".
+
+The unit's own display knows. Whoever has the unit can say.
 
 ## 6. Only presets are browsable
 

@@ -276,8 +276,12 @@ class P2kedApp(App):
             return
         entry = self._current[row]
         name = self.catalog.display_name(entry.bank_id, entry.program_change)
+        why = self.catalog.disagreement(
+            entry.bank_id, entry.program_change, entry.rom.writable)
+        note = f"  [dim]* {why}[/dim]" if why else ""
         self.query_one("#detail", Static).update(
-            f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}\n"
+            f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}"
+            f"{note}\n"
             f"Program Change [b]{entry.program_change}[/b]   "
             f"Bank Select LSB [b]{entry.lsb}[/b] (CC#32)   "
             f"MSB [b]{entry.msb}[/b] (CC#0)   "

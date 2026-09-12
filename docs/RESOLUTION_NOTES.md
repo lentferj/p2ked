@@ -149,3 +149,96 @@ match against, only an object type, number and ROM ID. So every request
 drains the input first and checks that the reply describes the object asked
 about — without that, a late reply to an abandoned request shifts every name
 in a bank by one preset.
+
+---
+
+## §7 — The first hardware session
+
+**2026-09-12.** A Proteus 2000 was powered up and scanned. Nothing was
+selected and nothing made a sound: every exchange below is a read.
+
+The unit is **not** on a port that names it — it reaches the host over a DIN
+cable behind a U6MIDI Pro interface, exactly the case `likely_proteus_ports`
+warns about. It was found by broadcasting a Universal Identity Request on
+every bidirectional port and reading the replies; it answered with
+manufacturer `18h` and device ID `0`.
+
+### What worked as written
+
+- The frame layout, `F0 18 0F <dev> 55 …`, and the 14-bit LSB-first
+  encoding. Confirmed by everything below working at all.
+- **Hardware Configuration.** Parsed first time: 512 user presets, four
+  SIMMs, each with an ID, a preset count and an instrument count. The
+  declared-length reading paid for itself — the general block really is two
+  bytes and the per-SIMM block really is six, but the parser did not have to
+  assume it.
+- **Generic Name.** Names came back for the user banks and every fitted ROM.
+
+### The guess, resolved
+
+p2ked assumed a reported **SIMM ID is the ROM's Bank Select MSB**. The unit
+reported IDs 4, 65 and 67; asking each for its first three presets returned
+names matching this project's catalog for the ROMs at MSB 4, 65 and 67 —
+character for character. Three of twenty ROMs, so the docstring still
+records the limit, but the assumption is no longer a guess.
+
+A second, independent check agrees. `ProteusBridge.installed_roms()` asks
+every ROM ID for preset 0 and reads the reply; its answer matches the
+Configuration response exactly. The owner confirms the unit has four slots,
+all filled, including the factory Composer ROM.
+
+### Two sentinels, neither documented
+
+The specification says a request the unit cannot serve is ignored. It is
+not:
+
+- **`(not installed)`** is returned for a preset that does not exist —
+  past the end of a ROM, or in a ROM that is not fitted. This is *better*
+  than silence and worth relying on: it turns "is this ROM present?" from a
+  timeout into an answer, and a timeout would equally mean the cable is out.
+- **`default`**, with the usual blank category prefix, is returned for a
+  real but unprogrammed slot.
+
+`roms.is_absent` and `roms.is_empty` recognise them, and `read_bank_names`
+drops the absent ones rather than inventing 128 presets called
+"(not installed)".
+
+### A ROM no document covered
+
+The unit reported SIMM ID **14** with 640 presets, and p2ked's table had no
+row for it: the Cakewalk instrument-definition files simply do not cover
+MSB 14. It answered names for 0–639 and `(not installed)` at 640.
+
+It was identified from E-MU's own patch list for **X-Lead v2** — 640
+presets in five banks, and every preset sampled off the unit (0, 5, 100,
+200, 400, 638, 639) matching that list exactly. `tools/extract_catalog.py`
+now reads OpenDocument patch lists as well, so those 640 names are in the
+catalog; they were unobtainable from any other file to hand.
+
+Not useful, and worth recording so nobody tries it twice: the SIMM "code
+numbers" published on enthusiast sites are a **third** numbering, unrelated
+to either the Bank Select MSB or the reported SIMM ID. Techno Synth is code
+`04` and answers on MSB 65.
+
+### What comparing 640 names against the document found
+
+Reading all five X-Lead v2 banks off the unit and diffing them against the
+patch list left **629 of 640** matching. The eleven that did not came in
+three kinds, and only the last is a real difference:
+
+1. **Typographic apostrophes.** The document uses `’`; a preset name is 16
+   bytes of ASCII and cannot contain one.
+2. **XML entities and space runs.** An `.odt` stores `&` as `&amp;` and a
+   run of spaces as `<text:s text:c="2"/>`. Stripping tags naively loses
+   both — and the second is invisible, turning two spaces into one.
+3. **Genuinely different names.** Eleven presets carry two spaces on the
+   instrument where the document prints one. The document is wrong.
+
+The first two were p2ked's bugs, found only because a real unit disagreed
+with it. **A parser checked against nothing but its own output is a parser
+checked against nothing.**
+
+The third changes what the `*` flag means. In a *user* bank a difference
+means somebody saved over the factory preset, which is worth pointing out.
+In a *ROM* bank it cannot mean that — so it means the printed list is wrong
+and the unit is right. `Catalog.disagreement` says which.

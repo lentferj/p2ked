@@ -94,25 +94,35 @@ class TestLookup:
         assert roms.lookup(7, 0, 200) is None
 
 
-class TestSimmIdIsAGuess:
-    """rom_for_simm_id is a hypothesis, and the code must keep saying so."""
+class TestSimmIdIsTheBankSelectMsb:
+    """Confirmed against hardware on 2026-09-12.
+
+    A unit reporting SIMM IDs 4, 65 and 67 named, for each, the presets
+    p2ked's catalog holds for the ROM at that Bank Select MSB. Three of
+    twenty ROMs, so the docstring still records the limit rather than
+    claiming the whole table is proven.
+    """
 
     def test_it_maps_by_bank_select_msb(self):
         assert roms.rom_for_simm_id(7) is roms.rom("XLEAD")
 
+    def test_the_confirmed_three_resolve(self):
+        for simm_id, rom_id in ((4, "COMPOSER"), (65, "TECHNO"),
+                                (67, "BEATGARDEN")):
+            assert roms.rom_for_simm_id(simm_id) is roms.rom(rom_id)
+
     def test_an_unknown_id_is_none(self):
         assert roms.rom_for_simm_id(99) is None
 
-    def test_the_docstring_still_calls_it_a_guess(self):
-        """Guard against the caveat being tidied away later.
+    def test_the_docstring_records_what_was_and_was_not_confirmed(self):
+        """The caveat is narrower than it was, and must not vanish.
 
-        The mapping is unverified, and every screen that shows it says so
-        on the strength of this docstring. If the wording goes, the warning
-        goes with it.
+        Three ROMs is not twenty. If this wording is ever tidied into "the
+        SIMM ID is the MSB", the limit goes with it.
         """
         text = roms.rom_for_simm_id.__doc__.lower()
-        assert "guess" in text
-        assert "untested" in text or "not" in text
+        assert "confirmed against hardware" in text
+        assert "not all" in text or "still possible" in text
 
 
 class TestErrors:
@@ -123,3 +133,107 @@ class TestErrors:
     def test_an_out_of_range_preset_says_the_range(self):
         with pytest.raises(LookupError, match="0-127"):
             roms.preset("XLEAD-0", 128)
+
+
+class TestSentinelNames:
+    """What a unit says instead of a name.
+
+    Both observed against hardware on 2026-09-12, neither documented. They
+    matter because a browser that shows them as names invents 128 presets
+    called "(not installed)", and because `(not installed)` turns "is this
+    ROM fitted?" from a timeout into an answer.
+    """
+
+    def test_absent_is_recognised(self):
+        assert roms.is_absent("(not installed)")
+        assert roms.is_absent("   (not installed)   ")
+
+    def test_a_real_name_is_not_absent(self):
+        assert not roms.is_absent("abc:Woven Bell")
+        assert not roms.is_absent(None)
+
+    def test_empty_slots_are_recognised(self):
+        """The unit returns it with the usual blank category prefix."""
+        assert roms.is_empty("   :default")
+        assert roms.is_empty("default")
+
+    def test_a_real_name_is_not_empty(self):
+        assert not roms.is_empty("abc:Rusted Pad")
+        assert not roms.is_empty(None)
+
+    def test_the_two_are_different_things(self):
+        """An empty slot exists; an absent one does not."""
+        assert not roms.is_absent("   :default")
+        assert not roms.is_empty("(not installed)")
+
+
+class TestXLeadTwo:
+    """A ROM no instrument-definition file covers.
+
+    Found because a unit reported SIMM ID 14, then identified from E-MU's
+    own X-Lead v2 patch list -- 640 presets in five banks, every sampled
+    preset matching character for character.
+    """
+
+    def test_it_is_in_the_table(self):
+        assert roms.rom_for_simm_id(14) is roms.rom("XLEAD2")
+
+    def test_it_has_the_extent_the_unit_reported(self):
+        entry = roms.rom("XLEAD2")
+        assert entry.count == 640
+        assert entry.lsbs == (0, 1, 2, 3, 4)
+
+    def test_its_last_preset_is_the_one_the_unit_answers_for(self):
+        """The unit named 639 and said "(not installed)" at 640."""
+        assert roms.presets("XLEAD2-4")[-1].number == 639
+
+    def test_it_is_not_confused_with_x_lead_one(self):
+        """Different ROMs, different MSBs, different sizes."""
+        assert roms.rom("XLEAD").msb == 7
+        assert roms.rom("XLEAD2").msb == 14
+        assert roms.rom("XLEAD").count != roms.rom("XLEAD2").count
+
+
+class TestWhatADisagreementMeans:
+    """A name differing from the catalog means different things by bank.
+
+    In a user bank: somebody saved over the factory preset. In a ROM bank
+    that is impossible, so it means the printed list is wrong -- which is
+    the case for 11 of one ROM's 640 names, every one a whitespace
+    difference E-MU's own document normalised away.
+
+    Names here are invented, per CLAUDE.md; the shape of the difference is
+    the real one.
+    """
+
+    def _catalog(self):
+        from p2k import catalog as cat
+
+        c = cat.Catalog([cat.Entry("USER-0", 0, "Book Name"),
+                         cat.Entry("XLEAD2-0", 90, "abc:Woven 1")])
+        c.set_live_name("USER-0", 0, "My Own Sound")
+        c.set_live_name("XLEAD2-0", 90, "abc:Woven  1")   # two spaces
+        return c
+
+    def test_a_user_bank_difference_means_it_was_saved_over(self):
+        c = self._catalog()
+        assert c.disagreement("USER-0", 0, roms.USER.writable) == (
+            "saved over the factory preset")
+
+    def test_a_rom_difference_means_the_book_is_wrong(self):
+        c = self._catalog()
+        assert "printed list is wrong" in c.disagreement(
+            "XLEAD2-0", 90, roms.rom("XLEAD2").writable)
+
+    def test_agreement_is_not_a_disagreement(self):
+        from p2k import catalog as cat
+
+        c = cat.Catalog([cat.Entry("USER-0", 1, "Same")])
+        c.set_live_name("USER-0", 1, "Same")
+        assert c.disagreement("USER-0", 1, True) is None
+
+    def test_an_unread_slot_says_nothing(self):
+        from p2k import catalog as cat
+
+        c = cat.Catalog([cat.Entry("USER-0", 2, "Book")])
+        assert c.disagreement("USER-0", 2, True) is None

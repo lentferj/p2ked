@@ -150,6 +150,97 @@ def read_bank_refs(path: str) -> Dict[int, str]:
     return refs
 
 
+#: Typographic characters a word processor substitutes, mapped back to the
+#: ASCII the instrument actually holds. A preset name on this machine is 16
+#: bytes of ASCII 32-126; a curly apostrophe cannot be in one. Left alone,
+#: two names per ROM read as differing from the unit forever -- p2ked would
+#: mark them with its "the unit disagrees with the book" flag, which is
+#: reserved for somebody having saved over a preset.
+_TYPOGRAPHIC = {
+    "\u2018": "'", "\u2019": "'",          # single quotes
+    "\u201c": '"', "\u201d": '"',          # double quotes
+    "\u2013": "-", "\u2014": "-",          # en and em dashes
+    "\u2026": "...",                       # ellipsis
+    "\u00a0": " ",                         # non-breaking space
+}
+
+
+def to_ascii(text: str) -> str:
+    """Undo a word processor's substitutions, then drop anything left.
+
+    Dropping rather than transliterating: a character the instrument cannot
+    store is not a character the name has, and guessing at it would invent
+    a difference between the catalog and the unit.
+    """
+    for fancy, plain in _TYPOGRAPHIC.items():
+        text = text.replace(fancy, plain)
+    return "".join(char for char in text if 32 <= ord(char) <= 126)
+
+
+_ODT_BANK = re.compile(r"^Presets\s*-\s*Bank\s*(?P<bank>\d+)\s*$")
+#: The name is taken verbatim after one separating space. Not ``\s*``:
+#: some names carry two spaces on the instrument, and a greedy separator
+#: eats the one that belongs to the name.
+_ODT_PRESET = re.compile(r"^(?P<pc>\d{1,3})\.\s(?P<name>.+)$")
+
+
+def read_odt(path: str) -> Dict[int, Dict[int, str]]:
+    """``{bank: {program change: name}}`` from an OpenDocument patch list.
+
+    E-MU published patch lists as documents as well as instrument
+    definitions, and for at least one ROM -- X-Lead v2, Bank Select MSB 14
+    -- the document is the *only* source to hand. The instrument-definition
+    files do not cover it at all.
+
+    An ``.odt`` is a zip holding ``content.xml``, and the text is recovered
+    by stripping tags rather than by parsing the document model. Two things
+    that costs, both found by comparing the result against a real unit and
+    both silent until then:
+
+    * **Runs of spaces are elements**, ``<text:s text:c="2"/>``, not
+      characters. Stripped as tags, "K-1  HPF" becomes "K-1 HPF" -- a name
+      that differs from the instrument's by one space, which is enough for
+      p2ked to flag the preset as edited forever.
+    * **Text is XML-escaped**, so a name containing ``&`` arrives as
+      ``&amp;``.
+
+    Both are handled below. If a future list nests its numbers in tables,
+    this will need the real parser.
+    """
+    import html
+    import zipfile
+
+    with zipfile.ZipFile(path) as archive:
+        xml = archive.read("content.xml").decode("utf-8", "replace")
+
+    # Spaces first, while the elements still exist.
+    xml = re.sub(r'<text:s\s+text:c="(\d+)"\s*/>',
+                 lambda m: " " * int(m.group(1)), xml)
+    xml = re.sub(r"<text:s\s*/>", " ", xml)
+    xml = re.sub(r"<text:tab\s*/>", " ", xml)
+
+    lines = [html.unescape(line).strip()
+             for line in re.sub(r"<[^>]+>", "\n", xml).split("\n")
+             if line.strip()]
+
+    out: Dict[int, Dict[int, str]] = {}
+    bank: Optional[int] = None
+    for line in lines:
+        heading = _ODT_BANK.match(line)
+        if heading:
+            bank = int(heading.group("bank"))
+            out.setdefault(bank, {})
+            continue
+        if bank is None:
+            continue
+        entry = _ODT_PRESET.match(line)
+        if entry:
+            program_change = int(entry.group("pc"))
+            if 0 <= program_change < roms.PRESETS_PER_BANK:
+                out[bank][program_change] = to_ascii(entry.group("name"))
+    return {bank: rows for bank, rows in out.items() if rows}
+
+
 def build(paths: List[str]) -> Tuple[Dict[str, List[dict]], List[str]]:
     """Names keyed by p2ked's own bank ids, plus notes about what was left out."""
     out: Dict[str, List[dict]] = {}
@@ -192,6 +283,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ins", action="append", default=None,
                         help="a Cakewalk .ins file (repeatable)")
+    parser.add_argument("--odt", action="append", default=None,
+                        metavar="ROM=FILE",
+                        help="an OpenDocument patch list for one ROM, as "
+                             "ROMID=FILE (repeatable). The only source for "
+                             "ROMs the .ins files do not cover.")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT)
     args = parser.parse_args(argv)
 
@@ -207,6 +303,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     banks_out, notes = build(paths)
     for note in notes:
         print(f"note: {note}", file=sys.stderr)
+
+    for item in args.odt or []:
+        rom_id, _, path = item.partition("=")
+        if not path:
+            raise SystemExit(f"error: --odt wants ROM=FILE, got {item!r}")
+        entry = roms.rom(rom_id)        # fail now on an unknown ROM
+        if not os.path.exists(path):
+            raise SystemExit(f"error: no such file: {path}")
+        found = read_odt(path)
+        for bank, rows in sorted(found.items()):
+            if bank >= len(entry.lsbs):
+                print(f"note: {os.path.basename(path)} has a bank {bank} "
+                      f"that {rom_id} does not answer on; skipped",
+                      file=sys.stderr)
+                continue
+            bank_id = f"{rom_id}-{entry.lsbs[bank]}"
+            have = {row["pc"] for row in banks_out.get(bank_id, [])}
+            banks_out.setdefault(bank_id, []).extend(
+                {"pc": pc, "name": name}
+                for pc, name in sorted(rows.items()) if pc not in have)
+            banks_out[bank_id].sort(key=lambda row: row["pc"])
 
     payload = {
         "source": "; ".join(os.path.basename(path) for path in paths),
