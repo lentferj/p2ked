@@ -376,3 +376,45 @@ class TestTheBankPaneFits:
                 assert row[labels.index("♥")] == "2"
         finally:
             store.close()
+
+
+class TestTheChannelIsRemembered:
+    """The channel set last time should be the default next time.
+
+    rxved had the save function from its first commit and never called it,
+    so it loaded a channel from a file nothing ever wrote. The round trip is
+    what makes that impossible to repeat quietly.
+    """
+
+    def test_saving_then_loading_round_trips(self, tmp_path):
+        from p2k import config
+        path = str(tmp_path / "config.toml")
+        config.save_channel(9, path)
+        assert config.load_channel(path) == 9
+
+    def test_another_setting_does_not_drop_it(self, tmp_path):
+        from p2k import config
+        path = str(tmp_path / "config.toml")
+        config.save_channel(5, path)
+        config.save_last_port("some port")
+        config.save_last_port("some port", path)
+        assert config.load_channel(path) == 5
+        assert config.load_last_port(path) == "some port"
+
+    def test_a_missing_file_is_not_an_error(self, tmp_path):
+        from p2k import config
+        assert config.load_channel(str(tmp_path / "nope.toml")) is None
+
+    def test_an_out_of_range_channel_is_ignored(self, tmp_path):
+        """A hand-edited file must not put the app on channel 99."""
+        from p2k import config
+        path = str(tmp_path / "config.toml")
+        path_obj = tmp_path / "config.toml"
+        path_obj.write_text("channel = 99\n", encoding="utf-8")
+        assert config.load_channel(path) is None
+
+    def test_an_unparsable_file_is_not_fatal(self, tmp_path):
+        from p2k import config
+        path_obj = tmp_path / "config.toml"
+        path_obj.write_text("this is not toml = = =\n", encoding="utf-8")
+        assert config.load_channel(str(path_obj)) is None

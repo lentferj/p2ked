@@ -368,7 +368,8 @@ class P2kedApp(App):
     ]
 
     def __init__(self, device, *, catalog=None, channel: int = 0,
-                 favorites=None, installed=None) -> None:
+                 favorites=None, installed=None,
+                 config_path: Optional[str] = None) -> None:
         super().__init__()
         self.device = device
         self.catalog = catalog if catalog is not None else cat.empty()
@@ -863,6 +864,23 @@ class P2kedApp(App):
 
         self.push_screen(PromptScreen("Search preset names:"), done)
 
+    def _remember_channel(self, channel: int) -> None:
+        """Save the send channel for next time.
+
+        Only OSError is swallowed -- a read-only directory or a full disk,
+        where forgetting beats refusing to run. A broader except would hide
+        a bug: rxved's first version of this caught everything and so never
+        noticed it was failing on every call.
+        """
+        if self._config_path is None:
+            return
+        from p2k import config
+
+        try:
+            config.save_channel(channel, self._config_path)
+        except OSError:
+            pass
+
     def action_pick_channel(self) -> None:
         def done(text) -> None:
             if not text:
@@ -876,6 +894,7 @@ class P2kedApp(App):
                 self.notify_status("channel is 1-16", refused=True)
                 return
             self.channel = value - 1
+            self._remember_channel(self.channel)
             self.notify_status(f"sending on MIDI channel {value}")
 
         self.push_screen(
@@ -967,6 +986,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-id", type=int, default=None)
     parser.add_argument("--channel", type=int, default=None)
     parser.add_argument("--catalog", default=None)
+    parser.add_argument("--config", default=None,
+                        help="settings cache (default: ./config.toml)")
     parser.add_argument("--all-roms", action="store_true",
                         help="list every ROM in the table, not just the "
                              "ones this unit has")
@@ -1013,6 +1034,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
+    from p2k import config as cfg
+
+    config_path = getattr(args, "config", None) or cfg.DEFAULT_PATH
+    # The channel given on the command line wins; otherwise the one used
+    # last time, so `c` does not have to be pressed again every run.
+    channel = ((args.channel - 1) if args.channel is not None
+               else (cfg.load_channel(config_path) or 0))
+
     catalog = cat.load(args.catalog)
     from p2k.favorites import Favorites
 
@@ -1035,7 +1064,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                   file=sys.stderr)
 
     app = P2kedApp(device, catalog=catalog, favorites=store,
-                   installed=installed, channel=(args.channel or 1) - 1)
+                   installed=installed, config_path=config_path,
+                   channel=channel)
     try:
         app.run()
     finally:
