@@ -345,3 +345,23 @@ the specification's inconsistent counts are not evidence of a misreading,
 they are a stale document. **Where the unit and the specification disagree
 about this dump, the unit is right**, and p2ked should read the
 self-describing header rather than any published layout.
+
+### Confirmed a third time, from outside both projects
+
+The owner's sequencer template — written years before any of this and
+derived from neither the unit nor p2ked — drives this Proteus on **channels
+9 and 10**, both addressed at **MSB 14 / LSB 2**.
+
+That is an independent confirmation of two separate readings: the Channel
+Enable field (1 on exactly those two channels) and the SIMM-ID-is-the-MSB
+mapping (ROM 14, the board the unit reports on exactly those channels). The
+one configured-but-disabled channel targets the same bank, which the owner
+confirms is a leftover from an older setup.
+
+The same template drives the XV-2020 at MSB 87 — the patch bank in the
+sibling rxved's table — which confirms that table from outside rxved too.
+
+Worth the note because it is the only confirmation here that could not have
+inherited a mistake: the unit, the documents and p2ked could in principle
+all be read wrong in the same way; a sequencer that has been playing these
+machines correctly for years could not.
