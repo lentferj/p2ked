@@ -183,13 +183,38 @@ class TestChannelScreen:
             report = " ".join(screen._lines())
             assert "Channels that would sound: 9, 10" in report
 
-    async def test_it_refuses_to_claim_the_midi_mode(self, app):
-        """The caveat is the point; a test so it cannot be tidied away."""
+    async def test_the_midi_mode_is_read_and_shown(self, app):
         async with app.run_test() as pilot:
             screen = await self._open(app, pilot)
-            report = " ".join(screen._lines())
-            assert "MIDI Mode" in report
-            assert "Omni" in report and "Multi" in report
+            from p2k.messages import MidiMode
+
+            assert screen._mode == MidiMode.MULTI
+
+    async def test_a_non_multitimbral_mode_suppresses_the_rest(self):
+        """In Omni the channel settings are stored but not in effect.
+
+        Listing per-channel faults there would send somebody to fix a
+        channel when the mode is the answer -- the exact wrong turn the
+        sibling rxved nearly took on an XV-2020.
+        """
+        from p2k.messages import MidiMode
+        from p2ked.app import ChannelScreen
+
+        dump = DemoDevice().read_setup()
+        screen = ChannelScreen(dump, cat.empty(), MidiMode.OMNI)
+        lines = screen._lines()
+        assert len(lines) == 1
+        assert "NOT multitimbral" in lines[0]
+        assert "not in effect" in lines[0]
+
+    async def test_an_unreadable_mode_is_said_not_assumed(self):
+        from p2ked.app import ChannelScreen
+
+        dump = DemoDevice().read_setup()
+        screen = ChannelScreen(dump, cat.empty(), None)
+        report = " ".join(screen._lines())
+        assert "could not be read" in report
+        assert "rather than assuming" in report
 
     async def test_it_explains_the_second_interface(self, app):
         async with app.run_test() as pilot:

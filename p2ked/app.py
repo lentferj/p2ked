@@ -57,6 +57,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Header, Input, Label, Static
 
 from p2k import catalog as cat
+from p2k import messages as params
 from p2k import roms
 
 __all__ = ["P2kedApp", "main", "build_parser", "KEY_HINTS", "wrap_blocks"]
@@ -185,12 +186,12 @@ class ChannelScreen(ModalScreen[None]):
     **Read-only, and silent.** One Setup Dump gets the lot; nothing is
     selected and nothing sounds.
 
-    What this screen deliberately does NOT claim: whether the unit is in
-    Multi mode at all. In Omni or Poly it is not multitimbral and none of
-    these settings matter -- and the MIDI Mode byte sits in the part of the
-    dump p2ked cannot yet decode. Saying "channel 3 is disabled" to somebody
-    whose unit is in Omni would be true and useless, so the screen says it
-    does not know.
+    **The MIDI Mode comes first, above the table**, because it decides
+    whether anything below it applies: in Omni or Poly the unit is not
+    multitimbral and the per-channel settings are not in effect. Saying
+    "channel 3 is disabled" to somebody whose unit is in Omni would be true
+    and useless. It is read as a parameter (id 385) rather than out of the
+    dump, which needs no knowledge of the dump's master-block layout at all.
     """
 
     DEFAULT_CSS = """
@@ -206,16 +207,25 @@ class ChannelScreen(ModalScreen[None]):
     BINDINGS = [Binding("escape", "close", "Close"),
                 Binding("q", "close", "Close")]
 
-    def __init__(self, dump, catalog) -> None:
+    def __init__(self, dump, catalog, mode=None) -> None:
         super().__init__()
         self._dump = dump
         self._catalog = catalog
+        #: ``None`` when it could not be read -- which is said, not hidden.
+        self._mode = mode
 
     def compose(self) -> ComposeResult:
-        yield_title = (f"[b]Channels — setup “{self._dump.name}”[/b]"
-                       if self._dump.name else "[b]Channels[/b]")
+        title = (f"[b]Channels — setup “{self._dump.name}”[/b]"
+                 if self._dump.name else "[b]Channels[/b]")
+        if self._mode is None:
+            title += "  [dim](MIDI mode could not be read)[/dim]"
+        elif params.MidiMode.is_multitimbral(self._mode):
+            title += f"  MIDI mode [b]{params.MidiMode.name(self._mode)}[/b]"
+        else:
+            title += (f"  [b]MIDI mode {params.MidiMode.name(self._mode)} — "
+                      f"NOT multitimbral[/b]")
         with Vertical():
-            yield Label(yield_title)
+            yield Label(title)
             yield DataTable(id="channel-table", cursor_type="row",
                             zebra_stripes=True)
             yield Static(self._report(), classes="note")
@@ -260,6 +270,17 @@ class ChannelScreen(ModalScreen[None]):
 
     def _lines(self) -> List[str]:
         out: List[str] = []
+        if self._mode is not None and not params.MidiMode.is_multitimbral(
+                self._mode):
+            # First, and alone: in this mode nothing below is in effect, and
+            # listing per-channel faults would send somebody to fix a
+            # channel when the mode is the answer.
+            out.append(
+                f"This unit is in {params.MidiMode.name(self._mode).upper()} "
+                f"mode, which is NOT multitimbral. The channel settings "
+                f"below are stored but not in effect. Only in MULTI does a "
+                f"per-channel setting mean anything.")
+            return out
         audible = [c for c in self._dump.channels if c.silent_because is None]
         if audible:
             out.append(
@@ -280,11 +301,11 @@ class ChannelScreen(ModalScreen[None]):
             "This unit has two MIDI interfaces, so channels 17-32 are the "
             "second one. They are real channels whether or not anything is "
             "plugged into it.")
-        out.append(
-            "NOT shown, because p2ked cannot yet read it: the MIDI Mode. In "
-            "Omni or Poly the unit is not multitimbral and none of the above "
-            "applies. Only in Multi does a per-channel setting mean "
-            "anything.")
+        if self._mode is None:
+            out.append(
+                "The MIDI Mode could not be read. In Omni or Poly none of "
+                "the above is in effect, so treat it as unknown rather than "
+                "assuming this unit is multitimbral.")
         return out
 
     def action_close(self) -> None:
@@ -521,16 +542,22 @@ class P2kedApp(App):
         try:
             with self._lock:
                 dump = self.device.read_setup()
+                try:
+                    mode = self.device.midi_mode()
+                except Exception:
+                    # A dump without a mode is still worth showing; the
+                    # screen says the mode is unknown rather than assuming.
+                    mode = None
         except Exception as exc:
             self.call_from_thread(
                 self.notify_status, f"channels: {exc}", refused=True)
             return
         finally:
             self._busy = False
-        self.call_from_thread(self._show_channels, dump)
+        self.call_from_thread(self._show_channels, dump, mode)
 
-    def _show_channels(self, dump) -> None:
-        self.push_screen(ChannelScreen(dump, self.catalog))
+    def _show_channels(self, dump, mode) -> None:
+        self.push_screen(ChannelScreen(dump, self.catalog, mode))
 
     def action_search(self) -> None:
         def done(text) -> None:

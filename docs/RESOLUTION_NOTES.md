@@ -365,3 +365,53 @@ Worth the note because it is the only confirmation here that could not have
 inherited a mistake: the unit, the documents and p2ked could in principle
 all be read wrong in the same way; a sequencer that has been playing these
 machines correctly for years could not.
+
+
+---
+
+## §9 — The MIDI Mode, and why the Multisetups are not browsable
+
+**2026-09-12.** Both were the remaining halves of the channel screen, and
+they turned out very differently. Neither needed anybody at the unit.
+
+### MIDI Mode: readable, and not from the dump
+
+`MIDI_MODE` is **parameter id 385**, documented, `0 = omni, 1 = poly,
+2 = multi`. A Parameter Value Request returns it directly.
+
+That is worth noting because the obvious plan was to decode it out of the
+setup dump's master block -- work that is still undone (TODO 10) and was
+never necessary. A flat parameter ID needs no layout at all. The lesson is
+the cheap one: before reverse-engineering a structure, check whether the
+thing wanted has its own name in the protocol.
+
+The unit read `2`, multi, which is consistent with it being played
+multitimbrally on two channels. `MIDI_ID` read `0`, matching the device ID
+discovery found, and `MULTIMODE_BASIC_CHANNEL` read `8` -- channel 9, one
+of the two in use.
+
+The channel screen now shows the mode above the table, and in omni or poly
+it shows *only* the mode and a sentence saying the settings below are stored
+but not in effect. Listing per-channel faults in a mode where they do not
+apply would send somebody to fix a channel when the mode is the answer --
+which is precisely the wrong turn the sibling rxved nearly took on an
+XV-2020 before the sound mode was checked.
+
+### Multisetup names: not readable, and the evidence is clean
+
+`Generic Name Request` takes an object type, and type 4 is Setup. Asking for
+setups 0, 1, 2, 3 and 127 returns the same name every time.
+
+That on its own would be ambiguous -- 128 setups all named alike is
+plausible on a machine nobody has renamed. What settles it is asking for
+setup **128**, which does not exist: it returns that same name too, where an
+out-of-range *preset* returns `(not installed)`. The unit is ignoring the
+number and answering with the current setup's name.
+
+So Multisetups cannot be browsed by name on this firmware. They could be
+listed by number, and selected with MSB 80 / LSB 0 / PC -- but selecting one
+*loads* it, replacing the live channel configuration, which is a destructive
+act against somebody's working setup and not something p2ked should do to
+find out what a setup is called.
+
+Recorded rather than retried.

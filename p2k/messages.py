@@ -80,6 +80,8 @@ __all__ = [
     "BROADCAST_DEVICE",
     "Command",
     "ObjectType",
+    "Parameter",
+    "MidiMode",
     "NAME_LEN",
     "device_byte",
     "pack14",
@@ -147,6 +149,43 @@ class Command:
     PRESET_DUMP_REQUEST = 0x11
     SETUP_DUMP = 0x1C
     SETUP_DUMP_REQUEST = 0x1D
+
+
+class Parameter:
+    """Parameter IDs p2ked reads. Flat 14-bit numbers, not addresses."""
+
+    #: Omni / Poly / Multi. The one that decides whether any per-channel
+    #: setting means anything at all.
+    MIDI_MODE = 385
+    MIDI_MODE_CHANGE = 386
+    MIDI_ID = 388
+    #: Which channel the front panel calls "basic".
+    MULTIMODE_BASIC_CHANNEL = 139
+
+
+class MidiMode:
+    """``0 = omni, 1 = poly, 2 = multi``, documented and confirmed.
+
+    Only in **multi** is the unit multitimbral. In omni it plays the
+    currently displayed preset on every channel; in poly it responds on one
+    channel only. Either way the per-channel settings are not in effect, and
+    a screen showing them without saying so is inviting somebody to debug a
+    channel when the mode is the answer.
+    """
+
+    OMNI = 0
+    POLY = 1
+    MULTI = 2
+
+    NAMES = {OMNI: "omni", POLY: "poly", MULTI: "multi"}
+
+    @classmethod
+    def name(cls, value: int) -> str:
+        return cls.NAMES.get(value, f"unknown ({value})")
+
+    @classmethod
+    def is_multitimbral(cls, value: int) -> bool:
+        return value == cls.MULTI
 
 
 class ObjectType:

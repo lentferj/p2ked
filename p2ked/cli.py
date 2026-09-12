@@ -157,9 +157,22 @@ def _cmd_config(device, _args) -> None:
 
 def _cmd_channels(device, args) -> None:
     """Every MIDI channel. Read-only, makes no sound."""
+    from p2k import messages as msg
+
     dump = device.read_setup()
+    try:
+        mode = device.midi_mode()
+    except Exception:
+        mode = None
     catalog = _catalog(args)
     print(f"setup {dump.name!r}   {dump.channel_count} channels")
+    if mode is None:
+        print("MIDI mode      could not be read")
+    else:
+        print(f"MIDI mode      {msg.MidiMode.name(mode)}"
+              + ("" if msg.MidiMode.is_multitimbral(mode)
+                 else "   -- NOT multitimbral; the settings below are "
+                      "stored but not in effect"))
     print()
     rows = []
     for entry in dump.channels:
@@ -185,9 +198,6 @@ def _cmd_channels(device, args) -> None:
     print("Channels that would sound: "
           + (", ".join(map(str, audible)) if audible else "none"))
     print("Channels 17-32 are this family's second MIDI interface.")
-    print("NOT shown: the MIDI Mode. In Omni or Poly the unit is not")
-    print("multitimbral and none of the above applies -- p2ked cannot yet")
-    print("read that byte. See TODO.md item 10.")
 
 
 def _cmd_names(device, args) -> None:

@@ -245,6 +245,14 @@ class DemoDevice:
     def identify(self, *, timeout: Optional[float] = None):
         return m.identity_reply_fields(self._identity_reply())
 
+    def read_parameter(self, parameter_id: int, *, timeout=None) -> int:
+        self._tick()
+        return {m.Parameter.MIDI_MODE: m.MidiMode.MULTI,
+                m.Parameter.MIDI_ID: self.device_id}.get(parameter_id, 0)
+
+    def midi_mode(self, *, timeout=None) -> int:
+        return self.read_parameter(m.Parameter.MIDI_MODE)
+
     def read_setup(self, *, timeout: Optional[float] = None) -> m.SetupDump:
         reply = self.handle(m.setup_dump_request(device=self.device_id))
         return m.parse_setup_dump(m.parse(reply))

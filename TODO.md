@@ -141,11 +141,16 @@ be silent, and was verified against hardware. See RESOLUTION_NOTES §8.
 
 **Still open from this item:**
 
-- **The MIDI Mode is not shown**, because it is in the undecoded part of the
-  dump (item 10). Until it is, the screen says it does not know rather than
-  implying the unit is multitimbral.
-- **Multisetups are not browsable.** 128 stored snapshots, selectable with
-  MSB 80 / LSB 0 / PC. They would sit alongside presets in the browser.
+- ~~The MIDI Mode is not shown~~ **DONE.** It is parameter id 385, read
+  directly -- no dump layout needed. Shown above the table, and in omni or
+  poly the screen shows only the mode and says the settings below are not in
+  effect. See §9.
+- **Multisetups are not browsable, and cannot be by name.** The Generic Name
+  request ignores the object number for setups and returns the current
+  setup's name -- proved by asking for setup 128, which does not exist and
+  answers anyway. They could be listed by number; selecting one to learn its
+  name would *load* it over the user's live configuration, which p2ked will
+  not do. See §9.
 
 **Superseded plan:**
 
@@ -179,9 +184,9 @@ change what precedes them.
 
 Only the channel block is located, and only by structural search against one
 firmware. The 194 bytes before it (master general, MIDI and effects
-parameters, reserved) and the 200 after are undecoded. Among them is the
-MIDI Mode -- Omni / Poly / Multi -- which is the first thing item 9's screen
-should show.
+parameters, reserved) and the 200 after are undecoded. The MIDI Mode is in there somewhere too, but it no longer matters: it has
+its own parameter ID and is read directly (§9). Before decoding a structure,
+check whether the thing wanted has its own name in the protocol.
 
 The specification's example is internally inconsistent *and* this unit runs
 firmware newer than any documentation to hand, so the layout cannot be

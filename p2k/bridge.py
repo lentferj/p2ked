@@ -421,6 +421,37 @@ class ProteusBridge:
                 on_progress(index, len(entries))
         return out
 
+    def read_parameter(self, parameter_id: int, *,
+                       timeout: Optional[float] = None) -> int:
+        """One parameter's value. Read-only, makes no sound.
+
+        The reply is matched on the parameter ID it reports, not merely on
+        being a parameter message -- there is no address in this protocol to
+        match against, and a late reply to an abandoned request would
+        otherwise be taken as the answer to this one.
+        """
+        self._drain()
+        self._send(m.parameter_request(parameter_id, device=self.device_id))
+
+        def matches(packet: m.Packet) -> bool:
+            if packet.command != m.Command.PARAMETER_EDIT:
+                return False
+            try:
+                return m.parse_parameter(packet)[0] == parameter_id
+            except m.ProtocolError:
+                return False
+
+        return m.parse_parameter(self._await(matches, timeout=timeout))[1]
+
+    def midi_mode(self, *, timeout: Optional[float] = None) -> int:
+        """Omni, Poly or Multi. See :class:`p2k.messages.MidiMode`.
+
+        Read as a parameter rather than out of the setup dump: the dump
+        carries it somewhere in the master block p2ked cannot yet locate,
+        and this is one documented request that needs no layout at all.
+        """
+        return self.read_parameter(m.Parameter.MIDI_MODE, timeout=timeout)
+
     def read_setup(self, *, timeout: Optional[float] = None) -> m.SetupDump:
         """The whole multi/channel setup in one message. Silent.
 
