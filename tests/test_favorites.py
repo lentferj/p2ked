@@ -458,3 +458,63 @@ class TestEveryConstructorArgumentIsStored:
             assert config.load_channel(path) == 8
         finally:
             store.close()
+
+
+class TestUserBanksReadThemselves:
+    """A catalog name for a user preset is a placeholder and always wrong.
+
+    ROM names are fixed, so the catalog knows them. A user bank holds
+    whatever somebody saved there, and only the instrument knows -- it gives
+    up a whole bank in about two and a half seconds, silently.
+    """
+
+    def _app(self, tmp_path):
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        store = Favorites(str(tmp_path / "f.db"))
+        return P2kedApp(DemoDevice(), favorites=store), store
+
+    def test_user_banks_are_recognised(self, tmp_path):
+        from p2k import roms
+        app, store = self._app(tmp_path)
+        try:
+            assert app._is_user_bank("USER-0")
+            assert app._is_user_bank("USER-3")
+            for bank_id in roms.bank_ids():
+                if bank_id.startswith("COMPOSER") or bank_id.startswith("XLEAD"):
+                    assert not app._is_user_bank(bank_id)
+        finally:
+            store.close()
+
+    def test_a_rom_bank_is_never_auto_read(self, tmp_path):
+        app, store = self._app(tmp_path)
+        try:
+            app._auto_read_user_names("COMPOSER-4")
+            assert "COMPOSER-4" not in app._auto_read
+        finally:
+            store.close()
+
+    def test_a_user_bank_is_read_once_only(self, tmp_path):
+        app, store = self._app(tmp_path)
+        calls = []
+        app._read_worker = lambda bank_id: calls.append(bank_id)
+        try:
+            app._auto_read_user_names("USER-1")
+            app._auto_read_user_names("USER-1")
+            app._auto_read_user_names("USER-1")
+            assert calls == ["USER-1"], "re-reading on every cursor move"
+        finally:
+            store.close()
+
+    def test_nothing_is_read_while_the_wire_is_busy(self, tmp_path):
+        app, store = self._app(tmp_path)
+        calls = []
+        app._read_worker = lambda bank_id: calls.append(bank_id)
+        app._busy = True
+        try:
+            app._auto_read_user_names("USER-2")
+            assert calls == []
+            assert "USER-2" not in app._auto_read, \
+                "a skipped read must not count as done"
+        finally:
+            store.close()

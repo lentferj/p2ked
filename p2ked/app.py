@@ -395,6 +395,8 @@ class P2kedApp(App):
         self._filling = False
         #: Which of the three views `F` is on.
         self.view_mode = VIEW_ALL
+        #: User banks whose names have already been fetched this session.
+        self._auto_read: set = set()
         #: Empty = every category. Categories are the "bas:" style prefix
         #: E-MU puts on a preset name.
         self._categories: set = set()
@@ -548,6 +550,30 @@ class P2kedApp(App):
                        in self._categories]
         return entries
 
+    def _is_user_bank(self, bank_id: str) -> bool:
+        entry = roms.bank(bank_id)
+        return getattr(entry, "rom", None) is roms.USER
+
+    def _auto_read_user_names(self, bank_id: str) -> None:
+        """Fetch a user bank's names the first time it is looked at.
+
+        A ROM bank's names are fixed, so the catalog knows them and there is
+        nothing to ask the instrument. A **user** bank's are whatever
+        somebody saved there, so a catalog entry for one is a placeholder
+        and always wrong -- `usr:A0` is not a name, it is an admission. The
+        instrument has the real ones and gives up a whole bank in about two
+        and a half seconds, silently.
+
+        Once per bank per session, and never while something else is on the
+        wire. Pressing `r` still works and re-reads.
+        """
+        if self.device is None or self._busy:
+            return
+        if bank_id in self._auto_read or not self._is_user_bank(bank_id):
+            return
+        self._auto_read.add(bank_id)
+        self._read_worker(bank_id)
+
     def _fill_presets(self, bank_id: str) -> None:
         table = self.query_one("#preset-table", DataTable)
         self._current_bank = bank_id
@@ -586,6 +612,7 @@ class P2kedApp(App):
         finally:
             self._filling = False
         self._show_detail(0)
+        self._auto_read_user_names(bank_id)
 
     # --- favourites ---------------------------------------------------------
 
