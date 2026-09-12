@@ -418,3 +418,43 @@ class TestTheChannelIsRemembered:
         path_obj = tmp_path / "config.toml"
         path_obj.write_text("this is not toml = = =\n", encoding="utf-8")
         assert config.load_channel(str(path_obj)) is None
+
+
+class TestEveryConstructorArgumentIsStored:
+    """A keyword accepted and then dropped crashes only when used.
+
+    config_path was added to the signature and its assignment did not land.
+    Nothing failed until the channel was actually changed on a running
+    program, because no test reached that line -- so the check here is
+    structural rather than behavioural.
+    """
+
+    def test_the_accepted_keywords_become_attributes(self, tmp_path):
+        import inspect
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        store = Favorites(str(tmp_path / "f.db"))
+        try:
+            app = P2kedApp(DemoDevice(), favorites=store,
+                           config_path=str(tmp_path / "config.toml"),
+                           channel=3, installed={4: True})
+            for name in inspect.signature(P2kedApp.__init__).parameters:
+                if name in ("self", "device", "catalog"):
+                    continue
+                assert (hasattr(app, name) or hasattr(app, f"_{name}")), \
+                    f"{name} is accepted but never stored"
+        finally:
+            store.close()
+
+    def test_changing_the_channel_writes_it(self, tmp_path):
+        from p2k import config
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        path = str(tmp_path / "config.toml")
+        store = Favorites(str(tmp_path / "f.db"))
+        try:
+            app = P2kedApp(DemoDevice(), favorites=store, config_path=path)
+            app._remember_channel(8)
+            assert config.load_channel(path) == 8
+        finally:
+            store.close()

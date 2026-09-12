@@ -378,6 +378,9 @@ class P2kedApp(App):
         #: user's real database. rxved learned that one the hard way, by
         #: leaving two files in it.
         self.favorites = favorites
+        #: Where the send channel is remembered. Injected and None in tests,
+        #: so a test cannot drop a config into the working directory.
+        self._config_path = config_path
         self._lock = threading.RLock()
         #: ``{rom id: present}`` as the unit answered, or None if it was
         #: never asked. None means show everything: a bank list silently
