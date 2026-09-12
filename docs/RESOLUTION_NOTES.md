@@ -242,3 +242,71 @@ The third changes what the `*` flag means. In a *user* bank a difference
 means somebody saved over the factory preset, which is worth pointing out.
 In a *ROM* bank it cannot mean that — so it means the printed list is wrong
 and the unit is right. `Catalog.disagreement` says which.
+
+---
+
+## §8 — "Multi" means two different things on this machine
+
+**Read 2026-09-12**, prompted by the owner warning that the word is
+overloaded. It is, and confusing the two would build the wrong screen.
+
+**1. Multi is a MIDI *mode*.** The Master menu's MIDI Mode parameter selects
+Omni, Poly or **Multi** (OM p. 2715 region). Only in Multi does the unit
+respond multitimbrally, one preset per channel. This is the direct analogue
+of the XV-2020's PATCH-versus-PERFORM sound mode, and of the same
+diagnostic importance: in Omni or Poly, "only one channel sounds" is not a
+fault and nothing about the channels is wrong.
+
+**2. A Multisetup is a stored *snapshot*.** 128 user locations, reached by
+the front panel's Multi button. The manual is explicit about what one
+holds: preset, volume and pan for each of the **32 MIDI channels**, the
+setup's name, and all Master menu parameters except the program-change map
+and the user tuning tables. Selectable over MIDI with **MSB 80, LSB 0** and
+a Program Change. That is closer to an XV-2020 *performance* than to its
+multi-mode screen.
+
+So rxved's multi-mode screen splits into two features here, and they are not
+the same feature.
+
+### What the wire offers
+
+Per channel, as individual parameters (ids 130-138): preset, volume, pan,
+mix output, arp, channel enable, bank map, receive program change, and
+preset ROM ID. Reading one requires first setting `MULTIMODE_CHANNEL_SELECT`
+(id 129) -- **stateful**, unlike the XV-2020's per-part addressed blocks,
+and a trap: a value read without setting the channel belongs to whichever
+channel was selected last.
+
+Better, and what p2ked should use: **Setup Dump Request** (`1Dh`) returns
+the whole thing in one message (`1Ch`), with no channel selector and no
+state.
+
+### The dump's documented layout does not match the firmware
+
+Read from a unit, the dump is 970 payload bytes and its self-describing
+header says: 20 master general parameters, 22 master MIDI, 16 master
+effects, 21 reserved, 3 non-channel, **32 MIDI channels, 9 parameters per
+channel**, then a 16-character setup name.
+
+The specification's example says 11 master general and 0 reserved -- and
+then, in the same example, allots the 0 reserved parameters 40 data bytes.
+Its own numbers are inconsistent, so the byte layout cannot be derived from
+them.
+
+Nor is the channel block simply the last 576 bytes: decoding it that way
+produces ROM IDs of 256 and values that drift upward like indices. It was
+located **structurally** instead, the same way the sibling rxved finds
+tables in Roland's editor binary -- by searching for the one offset at which
+all 32 channels' 9 values fall inside their documented ranges. There is
+exactly one: **194**, leaving 194 bytes before and 200 after.
+
+At that offset every value is plausible: presets 0-31 across the 32
+channels, volume 127, pan 64 (centre), receive-program-change 1, ROM ID 0.
+
+**One thing is still unresolved**: which of the two adjacent one-bit fields
+is Channel Enable and which is Bank Map. They read 0 for channels 1-16 and
+1 for 17-32, and the parameter-ID order says the first is Enable -- which
+would mean channels 1-16 are disabled, on a unit that works. Settling it
+means changing one parameter and seeing which byte moves, which is a write,
+and p2ked does not write. Until then the field is not to be shown as
+"enable".

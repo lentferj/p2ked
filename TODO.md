@@ -132,3 +132,34 @@ Only the System Exclusive specification and the instrument-definition files
 have been read. The parameter tree is the obvious next source if p2ked ever
 grows an editor, and prodatum is an independent reading of the same
 protocol — the best available cross-check short of hardware.
+
+## 9. No multi functionality yet
+
+**Status:** open. Researched 2026-09-12, not built. See RESOLUTION_NOTES §8.
+
+rxved has a multi-mode screen: 16 parts, their channels, levels, receive
+switches and routing, plus a report on why a channel is silent. p2ked has
+nothing equivalent.
+
+"Multi" is two things on this machine and they need two features:
+
+- **MIDI Mode** (Omni / Poly / Multi), the analogue of the XV-2020's
+  PATCH/PERFORM. Worth surfacing first: in Omni or Poly, "only one channel
+  sounds" is the mode, not a fault.
+- **Multisetups**: 128 stored snapshots of all 32 channels, selectable with
+  MSB 80 / LSB 0 / PC. Closer to an XV-2020 performance. Browsable the same
+  way presets are.
+
+The data is readable in one silent message -- Setup Dump Request `1Dh` --
+and the channel block has been located at payload offset 194 (32 channels x
+9 parameters x 2 bytes). What is not settled is the Enable/Bank Map field
+order; see §8. Do not label a field "enable" until that is resolved.
+
+## 10. The Setup Dump layout needs decoding properly
+
+**Status:** open.
+
+Only the channel block is located, and only by structural search. The 194
+bytes before it (master general, MIDI and effects parameters, reserved) and
+the 200 after are undecoded. The specification's example is internally
+inconsistent and cannot be used to derive the layout.
