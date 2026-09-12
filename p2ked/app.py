@@ -334,23 +334,36 @@ class P2kedApp(App):
         Binding("m", "channels", "Channels"),
         Binding("slash", "search", "Search"),
         Binding("c", "pick_channel", "Channel"),
+        Binding("f", "toggle_favorite", "Favourite"),
+        Binding("F", "cycle_favorites", "Favourites view"),
+        Binding("C", "pick_categories", "Categories"),
         Binding("i", "device_info", "Device"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, device, *, catalog=None, channel: int = 0) -> None:
+    def __init__(self, device, *, catalog=None, channel: int = 0,
+                 favorites=None) -> None:
         super().__init__()
         self.device = device
         self.catalog = catalog if catalog is not None else cat.empty()
         self.channel = channel
+        #: Injected rather than opened here, so a test never writes into the
+        #: user's real database. rxved learned that one the hard way, by
+        #: leaving two files in it.
+        self.favorites = favorites
         self._lock = threading.RLock()
         self._bank_ids: List[str] = roms.bank_ids()
         self._current_bank = self._bank_ids[0]
         self._current: List[roms.Preset] = []
         self._busy = False
         self._filling = False
+        #: None = show everything, True = only favourites.
+        self._favorites_only = False
+        #: Empty = every category. Categories are the "bas:" style prefix
+        #: E-MU puts on a preset name.
+        self._categories: set = set()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -387,10 +400,44 @@ class P2kedApp(App):
 
     # --- filling ------------------------------------------------------------
 
+    def category_of(self, bank_id: str, program_change: int) -> str:
+        """The ``bas:`` style prefix E-MU puts on a preset name.
+
+        Returns an empty string for the handful that carry none, which are
+        then grouped under "(none)" rather than silently vanishing from a
+        category filter.
+        """
+        name = self.catalog.display_name(bank_id, program_change) or ""
+        head, sep, _rest = name.partition(":")
+        return head.strip() if sep and len(head) <= 4 else ""
+
+    def categories(self, bank_id: str) -> List[str]:
+        seen = {self.category_of(bank_id, e.program_change)
+                for e in roms.presets(bank_id)}
+        return sorted(c for c in seen if c)
+
+    def _favorite_keys(self, bank_id: str) -> set:
+        if self.favorites is None:
+            return set()
+        return self.favorites.keys_for_bank(bank_id)
+
+    def _visible(self, bank_id: str) -> List[roms.Preset]:
+        """The presets a filter leaves showing, in bank order."""
+        entries = roms.presets(bank_id)
+        if self._favorites_only:
+            marked = self._favorite_keys(bank_id)
+            entries = [e for e in entries if e.program_change in marked]
+        if self._categories:
+            entries = [e for e in entries
+                       if self.category_of(bank_id, e.program_change)
+                       in self._categories]
+        return entries
+
     def _fill_presets(self, bank_id: str) -> None:
         table = self.query_one("#preset-table", DataTable)
         self._current_bank = bank_id
-        self._current = roms.presets(bank_id)
+        self._current = self._visible(bank_id)
+        marked = self._favorite_keys(bank_id)
         self._filling = True
         try:
             table.clear()
@@ -402,14 +449,91 @@ class P2kedApp(App):
                     shown = f"[b]{name}[/b]"
                 else:
                     shown = name
+                star = "*" if entry.program_change in marked else " "
                 table.add_row(
-                    f"{entry.program_change:03d}", shown,
+                    f"{entry.program_change:03d}", f"{star}{shown}",
                     str(entry.program_change), str(entry.lsb), str(entry.msb),
                     str(entry.number), key=entry.key,
                 )
         finally:
             self._filling = False
         self._show_detail(0)
+
+    # --- favourites ---------------------------------------------------------
+
+    def action_toggle_favorite(self) -> None:
+        """Mark or unmark the preset under the cursor. Sends no MIDI."""
+        if self.favorites is None:
+            self.notify_status(
+                "no favourites database: pass --favorites, or let it use the "
+                "default path")
+            return
+        entry = self._cursor_entry()
+        if entry is None:
+            return
+        name = self.catalog.display_name(entry.bank_id, entry.program_change)
+        if self.favorites.get(entry.bank_id, entry.program_change) is not None:
+            self.favorites.remove(entry.bank_id, entry.program_change)
+            self.notify_status(f"unfavourited {name}")
+        else:
+            self.favorites.add(entry.bank_id, entry.program_change, name=name)
+            self.notify_status(f"favourited {name}")
+        self._refill_keeping_place()
+
+    def action_cycle_favorites(self) -> None:
+        """All presets, or only the favourited ones."""
+        if self.favorites is None:
+            self.notify_status("no favourites database")
+            return
+        self._favorites_only = not self._favorites_only
+        self._refill_keeping_place()
+        self.notify_status(
+            "showing favourites only" if self._favorites_only
+            else "showing every preset")
+
+    def action_pick_categories(self) -> None:
+        """Filter by the ``bas:`` style prefix."""
+        available = self.categories(self._current_bank)
+        if not available:
+            self.notify_status(
+                "no categories here: the catalog has no names for this bank")
+            return
+        current = ", ".join(sorted(self._categories))
+
+        def chosen(text):
+            if text is None:
+                return
+            wanted = {t.strip() for t in text.split(",") if t.strip()}
+            unknown = wanted - set(available)
+            if unknown:
+                self.notify_status(
+                    f"not in this bank: {', '.join(sorted(unknown))}")
+                return
+            self._categories = wanted
+            self._refill_keeping_place()
+            self.notify_status(
+                f"categories: {', '.join(sorted(wanted))}" if wanted
+                else "every category")
+
+        self.push_screen(
+            PromptScreen(
+                f"categories, comma separated (blank for all). "
+                f"This bank has: {', '.join(available)}", current),
+            chosen)
+
+    def _cursor_entry(self):
+        table = self.query_one("#preset-table", DataTable)
+        row = table.cursor_row
+        if not self._current or row is None or row >= len(self._current):
+            return None
+        return self._current[row]
+
+    def _refill_keeping_place(self) -> None:
+        table = self.query_one("#preset-table", DataTable)
+        row = table.cursor_row or 0
+        self._fill_presets(self._current_bank)
+        if self._current:
+            table.move_cursor(row=min(row, len(self._current) - 1))
 
     def _show_detail(self, row: int) -> None:
         if not self._current or row >= len(self._current):
@@ -687,6 +811,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-id", type=int, default=None)
     parser.add_argument("--channel", type=int, default=None)
     parser.add_argument("--catalog", default=None)
+    parser.add_argument("--favorites", default=None,
+                        help="favourites database "
+                             "(default: the per-platform data directory)")
     return parser
 
 
@@ -718,11 +845,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.exit(f"error: {exc}")
 
     catalog = cat.load(args.catalog)
-    app = P2kedApp(device, catalog=catalog,
+    from p2k.favorites import Favorites
+
+    store = Favorites(args.favorites)
+    app = P2kedApp(device, catalog=catalog, favorites=store,
                    channel=(args.channel or 1) - 1)
     try:
         app.run()
     finally:
+        store.close()
         device.close()
     return 0
 

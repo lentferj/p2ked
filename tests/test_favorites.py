@@ -122,3 +122,67 @@ class TestImport:
         path.write_text("  PC   5   syn:Orphan\n", encoding="utf-8")
         with pytest.raises(SystemExit):
             _tool().parse(str(path))
+
+
+class TestBrowserWiring:
+    """`f`, `F` and `C` in the browser. Names here are invented."""
+
+    def _app(self, tmp_path, marks=()):
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        store = Favorites(str(tmp_path / "f.db"))
+        for bank, pc in marks:
+            store.add(bank, pc, name=f"invented {pc}")
+        return P2kedApp(DemoDevice(), favorites=store), store
+
+    def test_the_keys_exist(self, tmp_path):
+        from p2ked.app import P2kedApp
+        keys = {b.action: b.key for b in P2kedApp.BINDINGS}
+        assert keys["toggle_favorite"] == "f"
+        assert keys["cycle_favorites"] == "F"
+        assert keys["pick_categories"] == "C"
+
+    def test_the_store_is_injected_not_opened(self, tmp_path):
+        """A test must never write into the user's real database."""
+        app, store = self._app(tmp_path)
+        assert app.favorites is store
+        store.close()
+
+    def test_favourites_only_hides_the_rest(self, tmp_path):
+        from p2k import roms
+        bank = roms.bank_ids()[0]
+        every = roms.presets(bank)
+        app, store = self._app(tmp_path, marks=[(bank, every[2].program_change),
+                                                (bank, every[5].program_change)])
+        try:
+            assert len(app._visible(bank)) == len(every)
+            app._favorites_only = True
+            shown = app._visible(bank)
+            assert [e.program_change for e in shown] == \
+                [every[2].program_change, every[5].program_change]
+        finally:
+            store.close()
+
+    def test_a_category_filter_keeps_bank_order(self, tmp_path):
+        from p2k import roms
+        bank = roms.bank_ids()[0]
+        app, store = self._app(tmp_path)
+        try:
+            cats = app.categories(bank)
+            if not cats:
+                pytest.skip("no catalog installed, so no categories")
+            app._categories = {cats[0]}
+            shown = app._visible(bank)
+            assert shown, "a category that exists must match something"
+            numbers = [e.program_change for e in shown]
+            assert numbers == sorted(numbers), "order must stay bank order"
+            assert all(app.category_of(bank, n) == cats[0] for n in numbers)
+        finally:
+            store.close()
+
+    def test_an_unprefixed_name_has_no_category(self, tmp_path):
+        app, store = self._app(tmp_path)
+        try:
+            assert app.category_of("nosuchbank", 0) == ""
+        finally:
+            store.close()
