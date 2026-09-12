@@ -143,13 +143,16 @@ def _cmd_config(device, _args) -> None:
         guess = roms.rom_for_simm_id(simm.simm_id)
         rows.append([
             str(simm.simm_id), str(simm.presets), str(simm.instruments),
-            f"{guess.name} (guess)" if guess else "not in p2ked's table",
+            guess.name if guess else "not in p2ked's table",
         ])
     print()
-    print(_table(rows, ["SIMM id", "presets", "instruments", "probably"]))
-    print("\nThe right-hand column is a GUESS: it assumes a SIMM ID is the")
-    print("ROM's Bank Select MSB. Nothing in E-MU's specification says so,")
-    print("and no unit has confirmed it. See TODO.md.")
+    print(_table(rows, ["SIMM id", "presets", "instruments", "ROM"]))
+    print("\nThe ROM column reads the SIMM ID as that ROM's Bank Select MSB.")
+    print("No E-MU document to hand says they are the same number; it was")
+    print("confirmed against hardware for three ROMs on 2026-09-12, which is")
+    print("not all twenty. A row saying \"not in p2ked's table\" means the")
+    print("instrument-definition files do not cover that MSB -- the presets")
+    print("are still readable, only the ROM's name is unknown.")
 
 
 def _cmd_names(device, args) -> None:

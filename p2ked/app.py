@@ -459,11 +459,11 @@ class P2kedApp(App):
             guess = roms.rom_for_simm_id(simm.simm_id)
             lines.append(
                 f"  id {simm.simm_id:<4} {simm.presets:>4} presets  "
-                + (f"probably {guess.name}" if guess else "not in the table"))
+                + (guess.name if guess else "not in p2ked's table"))
         lines.append("")
-        lines.append("The ROM names above are GUESSES: p2ked assumes a SIMM")
-        lines.append("ID is that ROM's Bank Select MSB. No document says so")
-        lines.append("and no unit has confirmed it. See TODO.md.")
+        lines.append("ROM names read the SIMM ID as that ROM's Bank Select")
+        lines.append("MSB. Confirmed against hardware for three ROMs on")
+        lines.append("2026-09-12, which is not all twenty.")
         lines.append("")
         lines.append(f"catalog      {len(self.catalog)} names"
                      + (f" from {self.catalog.source}"
