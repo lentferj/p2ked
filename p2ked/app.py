@@ -332,7 +332,16 @@ class P2kedApp(App):
     CSS = """
     Screen { layers: base; }
     #panes { height: 1fr; }
-    #bank-table { width: 34; border-right: solid $panel; }
+    /* Sized to its content, not to a number. rxved can use a fixed 34
+       because its bank labels are five characters; these run to
+       "Orchestral Sessions Vol. 1 bank 0", and a fixed width does not clip
+       the end of a label -- the table scrolls sideways and clips the
+       *start*, so the pane reads "chno Synth bank 0" and looks corrupt.
+       Capped so a narrow terminal still leaves room for the presets. */
+    #bank-table {
+        width: auto; min-width: 24; max-width: 56;
+        border-right: solid $panel;
+    }
     #preset-table { width: 1fr; }
     DataTable { height: 1fr; }
     #detail { height: 3; padding: 0 1; border-top: solid $panel; }
@@ -430,8 +439,13 @@ class P2kedApp(App):
             table.clear()
             for bank_id in self._bank_ids:
                 entry = roms.bank(bank_id)
+                marked = len(self._favorite_keys(bank_id))
                 table.add_row(entry.label, str(entry.msb), str(entry.lsb),
-                              str(entry.count), key=bank_id)
+                              str(entry.count),
+                              # blank rather than "0": a column of zeroes is
+                              # noise, and the eye wants the few that differ
+                              str(marked) if marked else "",
+                              key=bank_id)
         finally:
             self._filling = False
 
@@ -448,7 +462,7 @@ class P2kedApp(App):
         self.title = "p2ked"
         banks = self.query_one("#bank-table", DataTable)
         for label, key in (("bank", "bank"), ("MSB", "msb"), ("LSB", "lsb"),
-                           ("n", "n")):
+                           ("n", "n"), ("♥", "fav")):
             banks.add_column(label, key=key)
         self._fill_banks()
 
@@ -588,7 +602,22 @@ class P2kedApp(App):
         else:
             self.favorites.add(entry.bank_id, entry.program_change, name=name)
             self.notify_status(f"favourited {name}")
+        self._refill_bank_count(entry.bank_id)
         self._refill_keeping_place()
+
+    def _refill_bank_count(self, bank_id: str) -> None:
+        """Update one bank's favourite count in place.
+
+        In place rather than by rebuilding the table: rebuilding moves the
+        cursor, and rxved's comment on the same table records that as a real
+        annoyance found the same way.
+        """
+        table = self.query_one("#bank-table", DataTable)
+        try:
+            marked = len(self._favorite_keys(bank_id))
+            table.update_cell(bank_id, "fav", str(marked) if marked else "")
+        except Exception:
+            pass
 
     def action_cycle_favorites(self) -> None:
         """Step: all presets -> this bank's favourites -> every favourite.

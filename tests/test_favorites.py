@@ -310,3 +310,69 @@ class TestTheThreeWayCycle:
             assert seen[-1] == VIEW_CYCLE[0], "it must wrap"
         finally:
             store.close()
+
+
+@pytest.mark.asyncio
+class TestTheBankPaneFits:
+    """The bank pane must not clip its own labels.
+
+    A fixed width does not truncate the end of a label; the table scrolls
+    sideways and clips the *start*, so "Techno Synth bank 0" reads as
+    "chno Synth bank 0" and the pane looks corrupt rather than narrow.
+    """
+
+    def _app(self, tmp_path):
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        from p2k import catalog as cat
+        store = Favorites(str(tmp_path / "f.db"))
+        return P2kedApp(DemoDevice(), catalog=cat.load(None),
+                        favorites=store), store
+
+    @pytest.mark.parametrize("size", [(200, 50), (160, 40), (120, 40)])
+    async def test_nothing_is_clipped_at_usable_widths(self, tmp_path, size):
+        from textual.widgets import DataTable
+        app, store = self._app(tmp_path)
+        try:
+            async with app.run_test(size=size) as pilot:
+                await pilot.pause()
+                table = app.query_one("#bank-table", DataTable)
+                assert table.virtual_size.width <= table.size.width, (
+                    f"the bank pane is {table.size.width} wide but needs "
+                    f"{table.virtual_size.width}")
+        finally:
+            store.close()
+
+    async def test_the_presets_still_get_the_rest(self, tmp_path):
+        from textual.widgets import DataTable
+        app, store = self._app(tmp_path)
+        try:
+            async with app.run_test(size=(200, 50)) as pilot:
+                await pilot.pause()
+                banks = app.query_one("#bank-table", DataTable)
+                presets = app.query_one("#preset-table", DataTable)
+                assert presets.size.width > banks.size.width, \
+                    "the bank pane must not eat the window"
+        finally:
+            store.close()
+
+    async def test_the_bank_pane_has_a_favourite_count(self, tmp_path):
+        from textual.widgets import DataTable
+        from p2k import roms
+        bank = roms.bank_ids()[0]
+        store = Favorites(str(tmp_path / "f.db"))
+        store.add(bank, 3)
+        store.add(bank, 9)
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        app = P2kedApp(DemoDevice(), favorites=store)
+        try:
+            async with app.run_test(size=(200, 50)) as pilot:
+                await pilot.pause()
+                table = app.query_one("#bank-table", DataTable)
+                labels = [str(c.label) for c in table.columns.values()]
+                assert "♥" in labels
+                row = table.get_row(bank)
+                assert row[labels.index("♥")] == "2"
+        finally:
+            store.close()
