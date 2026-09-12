@@ -298,7 +298,9 @@ produces ROM IDs of 256 and values that drift upward like indices. It was
 located **structurally** instead, the same way the sibling rxved finds
 tables in Roland's editor binary -- by searching for the one offset at which
 all 32 channels' 9 values fall inside their documented ranges. There is
-exactly one: **194**, leaving 194 bytes before and 200 after.
+exactly one: **194**, leaving 194 bytes before and 200 after. (Both of those
+are decoded now, by a different method entirely -- see §10, which also
+confirms this offset from the header's own arithmetic.)
 
 At that offset every value is plausible: presets 0-31 across the 32
 channels, volume 127, pan 64 (centre), receive-program-change 1, ROM ID 0.
@@ -380,8 +382,8 @@ they turned out very differently. Neither needed anybody at the unit.
 2 = multi`. A Parameter Value Request returns it directly.
 
 That is worth noting because the obvious plan was to decode it out of the
-setup dump's master block -- work that is still undone (TODO 10) and was
-never necessary. A flat parameter ID needs no layout at all. The lesson is
+setup dump's master block -- work that was still undone at the time (TODO
+10, done since, §10) and was never necessary. A flat parameter ID needs no layout at all. The lesson is
 the cheap one: before reverse-engineering a structure, check whether the
 thing wanted has its own name in the protocol.
 
@@ -415,3 +417,135 @@ act against somebody's working setup and not something p2ked should do to
 find out what a setup is called.
 
 Recorded rather than retried.
+
+---
+
+## §10 — The Setup Dump's master blocks, decoded by asking the unit
+
+**2026-09-12, second hardware session.** TODO 10 wanted the 194 bytes before
+the channel block and the 200 after. Both are now mapped. The method matters
+more than the table, because it generalises: **do not decode a structure
+when you can ask the device what each value is.**
+
+### The method
+
+Every parameter on this machine has a flat 14-bit ID, and every one can be
+read on its own with a Parameter Value Request — silently, with nothing
+selected and nothing sounding. So the dump was not decoded from a layout at
+all. Each documented master parameter was **read individually**, and the
+dump was searched for where that value sat.
+
+Eighty-two values in the master region; eighty-two individual reads; every
+one agreed. Nothing here rests on a byte offset somebody inferred, and
+anybody with a unit can re-derive the whole table without trusting this
+note. `p2k/messages.MASTER_BLOCKS` is the result.
+
+### The layout, on this unit and this firmware
+
+| offset | bytes | contents |
+|-------:|------:|----------|
+| 0 | 14 | seven 14-bit counts: 20, 22, 16, 21, 3, 32, 9 |
+| 14 | 16 | setup name, 16 ASCII characters |
+| 30 | 40 | **master general** — parameter IDs 257-260, 264-279 |
+| 70 | 44 | **master MIDI** — IDs 385, 386, 388, 391-409 |
+| 114 | 32 | **master effects** — IDs 513-528 |
+| 146 | 42 | **master arpeggiator** — IDs 641-661 (the header calls this "reserved") |
+| 188 | 6 | **non-channel** — IDs 139, 140, 141 |
+| 194 | 576 | 32 channels x 9 parameters, IDs 130-138 (§8) |
+| 770 | 100 | sub-block: 24 BEATS triggers x 2 values, IDs 160, 161 |
+| 870 | 100 | sub-block: 16 BEATS parts x 3 values, IDs 164, 165, 166 |
+
+Total 970 payload bytes, exactly what the unit sends.
+
+### Two things no document says
+
+**1. IDs the specification marks "(reserved)" are omitted from the dump.**
+That is the whole reason the general block holds twenty values across an ID
+span of twenty-three: 261, 262 and 263 are simply not sent. Likewise the
+MIDI block's twenty-two values span 385-409, with the reserved 387, 389 and
+390 missing. Every block's leading `(RESERVED)` ID — 256, 384, 512, 640 — is
+absent too.
+
+This is the kind of detail that cannot be guessed and is fatal to guess
+wrong: put one reserved slot back and every value after it lands on its
+neighbour's ID, all of them in range, none of them right.
+
+**2. The block the header calls "reserved" is the Master Arpeggiator.**
+Twenty-one values, parameter IDs 641-661 in order, matching twenty-one
+individually-read arpeggiator parameters. The specification's *prose* list
+of the dump's contents does say "Arpeggiator" at exactly that position — it
+is only the example layout that calls those bytes reserved. The prose was
+right and the example was wrong, which is the same verdict §8 reached from
+the other direction.
+
+### The header's own arithmetic agrees with §8's structural search
+
+    30 + 2 x (20 + 22 + 16 + 21 + 3) = 194
+
+which is precisely the offset §8 found by searching for the one window where
+all 288 channel values fall in range. Two independent methods, one answer.
+
+That agreement is not decoration, it is the licence to read the master
+blocks positionally at all, so `parse_setup_dump` now checks it: if the
+counts do not land on the offset the search found, `SetupDump.master` stays
+**empty** and the disagreement is reported. A master value read at the wrong
+offset is a plausible number that nothing downstream could reject.
+
+### The 200 bytes after the channel block
+
+The seven-value header does not mention them. They are two further
+**self-describing** sub-blocks, each a row count and a row width followed by
+that many rows:
+
+- at 770: `24, 2` then 24 rows — trigger keys 36 to 59 ascending, latch 0;
+- at 870: `16, 3` then 16 rows — `-1, 0, g` with `g` running 1,1,1,1,
+  2,2,2,2, 3,3,3,3, 4,4,4,4.
+
+Identified from the specification's prose rather than its tables: the BEATS
+trigger parameters are documented as "per **24 triggers**" and there are
+**two** of them (`BEATS_TRIGGER_KEY` 160, `BEATS_TRIGGER_LATCH` 161); the
+BEATS part parameters are "per **16 parts**" and there are **three**
+(`BEATS_VELOCITY` 164, `BEATS_XPOSE` 165, `BEATS_GROUP` 166). Those are
+exactly the two shapes the unit sends, and the values fit: velocity -1 is
+documented as "use trigger velocity", and group has range 0-4.
+
+Cross-checked directly: reading IDs 160 and 161 returned `36, 0` and reading
+164, 165, 166 returned `-1, 0, 1` — one row of each block, in that field
+order. Which trigger and part those belong to is not known, because
+selecting one needs a parameter *edit* (`LAYER_SELECT`, id 898) and nothing
+was written to this unit. So the field order is confirmed for one row of
+each block, not for all forty.
+
+### Small confirmations worth keeping
+
+- `MASTER_RIFF_ROM_ID` (277) reads **4** in both the dump and the individual
+  read — a ROM this unit actually has fitted. The general block landing a
+  real ROM ID on the parameter named for one is the same kind of evidence
+  §8 used for the channel block's ninth field.
+- `MIDI_MODE` (385) reads 2 in the dump, matching what §9 read directly.
+  The dump now carries it, and the bridge should still ask for it by ID:
+  one request, no layout, no way to be wrong.
+- IDs 261 and 410 answer a request (with -1 and 127) but appear **nowhere**
+  in the dump. Readable and un-dumped are different things; do not go
+  hunting for them.
+
+### What is established, and what is not
+
+**Established**, against one unit on 2026-09-12: the table above, value for
+value, by two independent readings of every master parameter.
+
+**Not established**:
+
+- **Three IDs in the dump have no published name**: 270 and 279 in the
+  general block, 660 in the arpeggiator block. They are decoded — a value at
+  a known ID is a fact — and deliberately left unnamed. The specification's
+  prose lists a "Master Demo Mode Enable" that appears in no ID table, so
+  270 or 279 *could* be it; that is a hypothesis, not a reading, and p2ked
+  does not print it.
+- **Other firmware.** This is one unit's answer. The parser therefore obeys
+  the declared counts rather than these byte offsets, skips any single block
+  whose count it does not recognise, and keeps the structural search as the
+  authority for where the channels are.
+- **Writing.** Nothing was written. Whether the unit accepts a Setup Dump
+  back, and what it does with the two undocumented trailing blocks, is
+  untested and out of scope: p2ked reads.

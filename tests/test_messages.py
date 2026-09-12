@@ -244,3 +244,184 @@ class TestChecksum:
 
     def test_it_stays_inside_seven_bits(self):
         assert 0 <= m.checksum(range(0, 128)) <= 0x7F
+
+
+class TestSetupDumpLayout:
+    """The Setup Dump's master blocks.
+
+    Unlike everything above, the *table* these exercise was not read out of
+    a document -- there is no document that gets it right. It was derived on
+    2026-09-12 by reading each of the 82 master values back from a Proteus
+    2000 as an individual parameter and matching it against the dump; all 82
+    agreed. See docs/RESOLUTION_NOTES.md §10.
+
+    That does not make these tests evidence of correctness either. They are
+    built from the same table as the parser, and prove what the tests above
+    prove: that the pieces agree with each other, that the declared counts
+    are obeyed rather than assumed, and that a dump which does not add up is
+    refused rather than decoded into plausible nonsense.
+    """
+
+    #: Invented, and deliberately not all zero: a flat payload makes the
+    #: channel block's structural search ambiguous.
+    FILLER = {257: 120, 264: 2, 385: 2, 513: 1, 520: 1, 139: 8, 140: 8}
+
+    def _payload(self, *, counts=None, master=None, trailing=True,
+                 channels=32):
+        counts = counts or tuple(len(ids) for _l, ids in m.MASTER_BLOCKS)
+        values = dict(self.FILLER)
+        values.update(master or {})
+        per = len(m.CHANNEL_PARAMETERS)
+        data = []
+        for count in tuple(counts) + (channels, per):
+            data.extend(m.pack14(count))
+        data.extend(m.encode_name("Invented Setup"))
+        for (_label, ids), count in zip(m.MASTER_BLOCKS, counts):
+            for index in range(count):
+                key = ids[index] if index < len(ids) else None
+                data.extend(m.pack14_signed(values.get(key, 0)))
+        for channel in range(channels):
+            # Varied on purpose. A block where every channel is identical
+            # makes a shifted window fit just as well, and the parser
+            # rightly refuses an ambiguous dump; a real one is not that
+            # flat either.
+            fields = {"preset": channel * 7, "volume": 127, "pan": 64,
+                      "mix_output": 1, "arp": 0, "enable": 1,
+                      "bank_map": 0, "receive_program_change": 1,
+                      "rom_id": 0}
+            for field, _low, _high in m.CHANNEL_PARAMETERS:
+                data.extend(m.pack14_signed(fields[field]))
+        if trailing:
+            data.extend(m.pack14(24))
+            data.extend(m.pack14(2))
+            for trigger in range(24):
+                data.extend(m.pack14_signed(36 + trigger))
+                data.extend(m.pack14_signed(0))
+            data.extend(m.pack14(16))
+            data.extend(m.pack14(3))
+            for part in range(16):
+                data.extend(m.pack14_signed(-1))
+                data.extend(m.pack14_signed(0))
+                data.extend(m.pack14_signed(part // 4 + 1))
+        return data
+
+    def _parse(self, **kwargs):
+        frame = m.frame(m.Command.SETUP_DUMP, self._payload(**kwargs))
+        return m.parse_setup_dump(m.parse(frame))
+
+    def test_the_header_arithmetic_lands_on_the_channel_block(self):
+        """The two independent answers must be the same one.
+
+        The channel block is found by structural search; the header's five
+        block counts predict where it starts. That they agree is what makes
+        reading the master blocks positionally legitimate at all.
+        """
+        dump = self._parse()
+        declared = sum(len(ids) for _label, ids in m.MASTER_BLOCKS)
+        assert dump.offset == 30 + 2 * declared
+        assert dump.undecoded == ()
+
+    def test_every_master_parameter_is_decoded(self):
+        dump = self._parse()
+        expected = {pid for _label, ids in m.MASTER_BLOCKS for pid in ids}
+        assert set(dump.master) == expected
+        assert dump.clock_tempo == 120
+        assert dump.bend_range == 2
+        assert dump.midi_mode == m.MidiMode.MULTI
+        assert dump.basic_channel == 8
+
+    def test_reserved_ids_are_absent_from_the_blocks(self):
+        """The dump omits the IDs the specification marks reserved.
+
+        This is the whole reason the general block is 20 entries and not
+        the 23 its ID span covers. Putting one back shifts every value
+        after it onto the wrong parameter, which no range check would
+        catch, so the omission is asserted rather than left to a comment.
+        """
+        present = {pid for _label, ids in m.MASTER_BLOCKS for pid in ids}
+        for reserved in (256, 261, 262, 263, 384, 387, 389, 390, 512, 640):
+            assert reserved not in present
+
+    def test_unnamed_ids_are_decoded_but_not_named(self):
+        """270, 279 and 660 are in the dump and in no published list.
+
+        They are decoded -- a value at a known ID is a fact -- and left
+        unnamed, because naming a number nobody has documented turns a gap
+        into a claim.
+        """
+        dump = self._parse()
+        for unnamed in (270, 279, 660):
+            assert unnamed in dump.master
+            assert unnamed not in m.MASTER_PARAMETER_NAMES
+
+    def test_an_absent_parameter_reads_none_not_zero(self):
+        dump = self._parse()
+        assert dump.parameter(261) is None
+        assert dump.parameter(m.Parameter.MASTER_TRANSPOSE) == 0
+
+    def test_a_block_that_declares_a_different_count_is_skipped_alone(self):
+        """One firmware's extra parameter should cost one block.
+
+        Decoding it anyway would slide every value in that block onto its
+        neighbour's ID; abandoning the whole dump would lose the four
+        blocks that are still fine.
+        """
+        counts = list(len(ids) for _l, ids in m.MASTER_BLOCKS)
+        counts[1] += 1                       # master MIDI grew by one
+        dump = self._parse(counts=counts)
+        assert 385 not in dump.master        # the block that grew
+        assert 257 in dump.master            # the ones that did not
+        assert 513 in dump.master
+        assert len(dump.undecoded) == 1
+        assert "master MIDI" in dump.undecoded[0]
+
+    def test_a_header_that_does_not_add_up_decodes_no_master_values(self):
+        """Better empty than plausibly wrong.
+
+        A count that is too small by one leaves the channel block where the
+        search finds it but every master value one slot out -- all of them
+        in range, none of them right.
+        """
+        # The real block lengths, but a lying header: the channel block
+        # stays where the search finds it and only the arithmetic breaks.
+        data = self._payload()
+        data[0:2] = m.pack14(len(m.MASTER_BLOCKS[0][1]) - 1)
+        dump = m.parse_setup_dump(m.parse(
+            m.frame(m.Command.SETUP_DUMP, data)))
+        assert dump.master == {}
+        assert dump.undecoded and "not decoded" in dump.undecoded[0]
+
+    def test_the_trailing_blocks_describe_themselves(self):
+        dump = self._parse()
+        labels = [block.label for block in dump.trailing]
+        assert labels == ["BEATS triggers", "BEATS parts"]
+        triggers = dump.trailing_block("BEATS triggers")
+        assert triggers.parameter_ids == (160, 161)
+        assert len(triggers.rows) == 24
+        assert triggers.rows[0] == (36, 0)
+        parts = dump.trailing_block("BEATS parts")
+        assert parts.parameter_ids == (164, 165, 166)
+        assert [row[2] for row in parts.rows[:5]] == [1, 1, 1, 1, 2]
+
+    def test_a_trailing_block_of_an_unknown_shape_is_kept_unidentified(self):
+        """Reporting a shape nobody recognises is how the next one is found."""
+        data = self._payload(trailing=False)
+        data.extend(m.pack14(3))
+        data.extend(m.pack14(2))
+        for row in range(3):
+            data.extend(m.pack14_signed(row))
+            data.extend(m.pack14_signed(0))
+        dump = m.parse_setup_dump(m.parse(m.frame(m.Command.SETUP_DUMP, data)))
+        assert len(dump.trailing) == 1
+        block = dump.trailing[0]
+        assert not block.identified
+        assert "3x2" in block.label
+        assert len(block.rows) == 3
+
+    def test_a_dump_that_stops_at_the_channel_block_is_still_read(self):
+        """The trailing region is not in the header, so it is not required."""
+        dump = self._parse(trailing=False)
+        assert dump.trailing == ()
+        assert dump.undecoded == ()
+        assert len(dump.master) == sum(
+            len(ids) for _label, ids in m.MASTER_BLOCKS)

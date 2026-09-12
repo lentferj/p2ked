@@ -178,17 +178,32 @@ it should be re-derived rather than hardcoded -- the dump's header declares
 the channel count and parameters per channel, and a future firmware may
 change what precedes them.
 
-## 10. The Setup Dump layout needs decoding properly
+## 10. The Setup Dump layout — DONE 2026-09-12
 
-**Status:** open.
+**Status:** done, and honestly bounded. See RESOLUTION_NOTES §10.
 
-Only the channel block is located, and only by structural search against one
-firmware. The 194 bytes before it (master general, MIDI and effects
-parameters, reserved) and the 200 after are undecoded. The MIDI Mode is in there somewhere too, but it no longer matters: it has
-its own parameter ID and is read directly (§9). Before decoding a structure,
-check whether the thing wanted has its own name in the protocol.
+The whole 970-byte payload is mapped: the 194 bytes before the channel block
+are the master general, MIDI, effects and arpeggiator blocks plus the three
+non-channel parameters, and the 200 after are two further self-describing
+sub-blocks holding the BEATS triggers and parts. `SetupDump.master` now
+carries all 82 master values, keyed by parameter ID.
 
-The specification's example is internally inconsistent *and* this unit runs
-firmware newer than any documentation to hand, so the layout cannot be
-derived from the published example at all. It has to come from the dump's
-own self-describing header plus structural search.
+It was not decoded from the layout. Every value was **read a second time as
+an individual parameter** and matched against the dump — 82 for 82. The
+published example was never used and is still wrong.
+
+Two findings that no document states: the dump **omits every ID the
+specification marks reserved**, and the block the header calls "reserved"
+is the **Master Arpeggiator**.
+
+**What is still not established**, and is recorded rather than papered over:
+
+- Three IDs in the dump (270, 279, 660) have no published name. They are
+  decoded and left unnamed; the prose's "Master Demo Mode Enable" may be one
+  of them, which is a hypothesis and is not printed as a fact.
+- The BEATS field order is confirmed for one row of each block, not all 40:
+  selecting a trigger or part needs a parameter *edit*, and nothing was
+  written to the unit.
+- This is one unit and one firmware. The parser obeys the declared counts
+  rather than these offsets, skips any one block whose count it does not
+  recognise, and still finds the channels by structural search.

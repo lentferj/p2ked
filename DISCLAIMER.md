@@ -27,14 +27,23 @@ over a DIN cable behind a U6MIDI Pro interface):
   matches the owner's sequencer template — which was written from neither.
   The channel block is found by structural search, because the published
   layout is both self-contradictory and older than this unit's firmware.
+- **The Setup Dump's master blocks.** All 82 master parameter values, and
+  the two undocumented blocks after the channels. Not read from a layout:
+  every value was read a second time as an individual parameter and
+  compared. See RESOLUTION_NOTES §10 for what is established and what is
+  not.
+- **Parameter Value Request (`02h` with sub-command `01h`).** Around 120
+  IDs asked for; the ones that exist answer, the ones that do not are
+  silent, and signed values come back signed.
 - **That a SIMM ID is the ROM's Bank Select MSB** -- p2ked's one guess, now
   confirmed for three ROMs. See below.
 
 **Not verified.** Everything else, including:
 
-- **Parameter edit and request**, and the whole preset-dump family. The
-  encoders exist and are tested against the demo device; nothing has been
-  sent to a unit.
+- **Parameter edit**, and the whole preset-dump family. The encoders exist
+  and are tested against the demo device; nothing that changes a unit has
+  been sent to one. (The parameter *request* is verified — see above. The
+  edit is the half that writes, and stays untested on purpose.)
 - **The checksum rule.** Still ambiguous, still worked around by sending
   `7Fh`. No checksummed message has been captured from a unit.
 - **`SEND_GAP`.** Still a guess. It has not failed at 10 ms across a few

@@ -154,23 +154,51 @@ class DemoDevice:
             m.SYSEX_END,
         ])
 
+    #: Invented master-parameter values, by parameter ID; anything in a
+    #: block and not named here is sent as 0. Chosen to be obviously a
+    #: demo (120 bpm, effects off) and not one unit's settings.
+    MASTER_VALUES = {
+        257: 120,                        # clock tempo, bpm
+        264: 2,                          # bend range, semitones
+        266: 1,                          # output format
+        272: -1, 273: -1,                # BEATS channels: use basic channel
+        385: m.MidiMode.MULTI,
+        386: 1,                          # mode change enabled
+        513: 1, 520: 1,                  # effects algorithms, min is 1
+        641: 0,                          # arpeggiator off
+        644: 10, 646: 100, 648: 1, 656: 127,
+        # Basic and FX-control channel 9 (0-based 8). Not decoration:
+        # a dump where every master value is 0 makes the channel
+        # block's structural search ambiguous, which the real unit's
+        # dump is not -- so the demo must not be flatter than life.
+        139: 8, 140: 8, 141: 0,          # basic / FX / tempo channels
+    }
+
     def _setup_reply(self) -> bytes:
         """A setup dump shaped like the real one.
 
-        Padded front and back so the channel block is NOT at offset 0 --
-        the parser finds it by structural search, and a fake that put it
-        first would let a parser that simply started at the beginning pass.
+        The master blocks are laid out by :data:`p2k.messages.MASTER_BLOCKS`,
+        which came from a unit rather than from the specification, so unlike
+        the rest of this file this part is *not* an independent reading of
+        the document -- there is no document to read. It is here so the
+        browser has something to show, and so the block arithmetic is
+        exercised at all.
+
+        The channel block is deliberately not at offset 0: the parser finds
+        it by structural search, and a fake that put it first would let a
+        parser that simply started at the beginning pass.
         """
         channels = 32
         per = len(m.CHANNEL_PARAMETERS)
+        counts = tuple(len(ids) for _label, ids in m.MASTER_BLOCKS)
         payload: List[int] = []
-        for count in (20, 22, 16, 21, 3, channels, per):
+        for count in counts + (channels, per):
             payload.extend(m.pack14(count))
         payload.extend(m.encode_name("Demo Setup"))
-        # Filler standing in for the master parameters, deliberately not all
-        # in the channel parameters' ranges, so it cannot be mistaken for a
-        # channel block.
-        payload.extend([0x7F, 0x7F] * 40)
+        for _label, ids in m.MASTER_BLOCKS:
+            for parameter_id in ids:
+                payload.extend(m.pack14_signed(
+                    self.MASTER_VALUES.get(parameter_id, 0)))
         for channel in range(channels):
             preset = channel
             rom_id = 0
@@ -186,7 +214,19 @@ class DemoDevice:
             }
             for name, _low, _high in m.CHANNEL_PARAMETERS:
                 payload.extend(m.pack14_signed(values[name]))
-        payload.extend([0x7F, 0x7F] * 40)
+        # The two self-describing sub-blocks the real dump ends with: 24
+        # BEATS triggers of two values, then 16 BEATS parts of three.
+        payload.extend(m.pack14(24))
+        payload.extend(m.pack14(2))
+        for trigger in range(24):
+            payload.extend(m.pack14_signed(36 + trigger))   # trigger key
+            payload.extend(m.pack14_signed(0))              # latch: off
+        payload.extend(m.pack14(16))
+        payload.extend(m.pack14(3))
+        for part in range(16):
+            payload.extend(m.pack14_signed(-1))             # use trigger vel
+            payload.extend(m.pack14_signed(0))              # transpose
+            payload.extend(m.pack14_signed(part // 4 + 1))  # group
         return m.frame(m.Command.SETUP_DUMP, payload, device=self.device_id)
 
     def _config_reply(self) -> bytes:

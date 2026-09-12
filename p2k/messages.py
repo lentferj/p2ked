@@ -64,13 +64,17 @@ worse, silently ignores.
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 __all__ = [
     "SYSEX_START",
     "ChannelState",
     "SetupDump",
     "CHANNEL_PARAMETERS",
+    "MASTER_BLOCKS",
+    "MASTER_PARAMETER_NAMES",
+    "TRAILING_BLOCKS",
+    "TrailingBlock",
     "setup_dump_request",
     "parse_setup_dump",
     "SYSEX_END",
@@ -161,6 +165,14 @@ class Parameter:
     MIDI_ID = 388
     #: Which channel the front panel calls "basic".
     MULTIMODE_BASIC_CHANNEL = 139
+    MULTIMODE_FX_CTRL_CHANNEL = 140
+    MULTIMODE_TEMPO_CTRL_CHAN = 141
+    MASTER_CLOCK_TEMPO = 257
+    MASTER_FX_BYPASS = 258
+    MASTER_TRANSPOSE = 259
+    MASTER_TUNE = 260
+    MASTER_BEND_RANGE = 264
+    MASTER_ARP_STATUS = 641
 
 
 class MidiMode:
@@ -619,6 +631,177 @@ CHANNEL_PARAMETERS: Tuple[Tuple[str, int, int], ...] = (
 )
 
 
+#: The master-parameter blocks a Setup Dump carries, in the order the dump's
+#: own header declares them, as the parameter IDs each block holds.
+#:
+#: **Derived from hardware on 2026-09-12, not from the specification.** The
+#: published example layout cannot be used -- it contradicts itself and
+#: predates this firmware -- so the blocks were mapped the other way round:
+#: each of these 82 values was read a second time as an individual parameter
+#: with a Parameter Value Request, and compared with the dump. All 82 agreed.
+#: See docs/RESOLUTION_NOTES.md §10.
+#:
+#: Two things to notice, because neither is guessable from the document:
+#:
+#: * **IDs the specification marks "(reserved)" are omitted from the dump.**
+#:   That is what makes the general block twenty entries rather than the
+#:   twenty-three its ID span covers, and the MIDI block twenty-two rather
+#:   than twenty-five.
+#: * **The block the header calls "reserved" is the Master Arpeggiator.**
+#:   Its twenty-one values are parameter IDs 641-661 in order. The
+#:   specification's own prose list of the dump's contents does say
+#:   "Arpeggiator" at that position; only its example layout calls it
+#:   reserved.
+#:
+#: Three IDs in here have no published name (270, 279 and 660). They are
+#: decoded -- they are values at known IDs -- and simply not named; see
+#: :data:`MASTER_PARAMETER_NAMES`.
+MASTER_BLOCKS: Tuple[Tuple[str, Tuple[int, ...]], ...] = (
+    ("master general", tuple(range(257, 261)) + tuple(range(264, 280))),
+    ("master MIDI", (385, 386, 388) + tuple(range(391, 410))),
+    ("master effects", tuple(range(513, 529))),
+    ("master arpeggiator", tuple(range(641, 662))),
+    ("non-channel", (139, 140, 141)),
+)
+
+#: The specification's name for each master parameter ID, where it has one.
+#: Transcribed from the parameter list in E-MU's specification v2.2. IDs
+#: absent from this table are absent from that list: they are in the dump and
+#: were read back from the unit, but nobody has published what they are, and
+#: inventing a name for a number is how a guess becomes a fact.
+MASTER_PARAMETER_NAMES: Dict[int, str] = {
+    139: "MULTIMODE_BASIC_CHANNEL",
+    140: "MULTIMODE_FX_CTRL_CHANNEL",
+    141: "MULTIMODE_TEMPO_CTRL_CHAN",
+    257: "MASTER_CLOCK_TEMPO",
+    258: "MASTER_FX_BYPASS",
+    259: "MASTER_TRANSPOSE",
+    260: "MASTER_TUNE",
+    264: "MASTER_BEND_RANGE",
+    265: "MASTER_VEL_CURVE",
+    266: "MASTER_OUTPUT_FORMAT",
+    267: "MASTER_KNOB_EDIT",
+    268: "DEEP_EDIT",
+    269: "EDIT_ALL_LAYERS",
+    271: "BEATS_MODE",
+    272: "BEATS_CHANNEL",
+    273: "BEATS_TRIGGER_CHANNEL",
+    274: "BEATS_TRIGGER_OFFSET",
+    275: "BEATS_IGNORE_TEMPO",
+    276: "BEATS_IGNORE_CONTROLLERS",
+    277: "MASTER_RIFF_ROM_ID",
+    278: "MASTER_RIFF_NDX",
+    385: "MIDI_MODE",
+    386: "MIDI_MODE_CHANGE",
+    388: "MIDI_ID",
+    391: "MIDI_A_CONTROL",
+    392: "MIDI_B_CONTROL",
+    393: "MIDI_C_CONTROL",
+    394: "MIDI_D_CONTROL",
+    395: "MIDI_E_CONTROL",
+    396: "MIDI_F_CONTROL",
+    397: "MIDI_G_CONTROL",
+    398: "MIDI_H_CONTROL",
+    399: "MIDI_FS1_CONTROL",
+    400: "MIDI_FS2_CONTROL",
+    401: "MIDI_FS3_CONTROL",
+    402: "MIDI_TEMPO_CTRL_UP",
+    403: "MIDI_TEMPO_CTRL_DOWN",
+    404: "MIDI_KNOB_OUT",
+    405: "MIDI_SYSEX_DELAY",
+    406: "MIDI_I_CONTROL",
+    407: "MIDI_J_CONTROL",
+    408: "MIDI_K_CONTROL",
+    409: "MIDI_L_CONTROL",
+    513: "MASTER_FX_A_ALGORITHM",
+    514: "MASTER_FX_A_DECAY",
+    515: "MASTER_FX_A_HFDAMP",
+    516: "MASTER_FXB_SEND_FXA",
+    517: "MASTER_FX_A_MIX_SEND_1",
+    518: "MASTER_FX_A_MIX_SEND_2",
+    519: "MASTER_FX_A_MIX_SEND_3",
+    520: "MASTER_FX_B_ALGORITHM",
+    521: "MASTER_FX_B_FEEDBACK",
+    522: "MASTER_FX_B_LFO_RATE",
+    523: "MASTER_FX_B_DELAY",
+    524: "MASTER_FX_B_MIX_SEND_1",
+    525: "MASTER_FX_B_MIX_SEND_2",
+    526: "MASTER_FX_B_MIX_SEND_3",
+    527: "MASTER_FX_A_MIX_SEND_4",
+    528: "MASTER_FX_B_MIX_SEND_4",
+    641: "MASTER_ARP_STATUS",
+    642: "MASTER_ARP_MODE",
+    643: "MASTER_ARP_PATTERN",
+    644: "MASTER_ARP_NOTE",
+    645: "MASTER_ARP_VEL",
+    646: "MASTER_ARP_GATE_TIME",
+    647: "MASTER_ARP_EXT_COUNT",
+    648: "MASTER_ARP_EXT_INT",
+    649: "MASTER_ARP_SYNC",
+    650: "MASTER_ARP_PREDELAY",
+    651: "MASTER_ARP_DURATION",
+    652: "MASTER_ARP_RECYCLE",
+    653: "MASTER_ARP_KBD_THRU",
+    654: "MASTER_ARP_LATCH",
+    655: "MASTER_ARP_KR_LOW",
+    656: "MASTER_ARP_KR_HIGH",
+    657: "MASTER_ARP_XMIT_MIDI",
+    658: "MASTER_ARP_SONG_START",
+    659: "MASTER_ARP_PATTERN_SPEED",
+    661: "ARP_POST_DELAY",
+}
+
+#: What follows the channel block, keyed by the ``(rows, values per row)``
+#: each sub-block declares about itself.
+#:
+#: The dump does not stop where its header says it does. After the channel
+#: block come two further self-describing sub-blocks, each a pair of counts
+#: followed by that many rows -- a shape the seven-value header never
+#: mentions, and the specification does not document at all.
+#:
+#: Identified from the specification's *prose*, which says the BEATS trigger
+#: parameters are "per 24 triggers" (two of them) and the BEATS part
+#: parameters "per 16 parts" (three of them). Those are exactly the two
+#: shapes the unit sends, and the values agree: 24 ascending trigger keys
+#: with latch off, then 16 parts at "use trigger velocity", no transpose,
+#: and group 1-4 four parts at a time. Confirmed by reading IDs 160, 161,
+#: 164, 165 and 166 back from the unit, which returned the selected
+#: trigger's and part's row exactly. See docs/RESOLUTION_NOTES.md §10.
+TRAILING_BLOCKS: Dict[Tuple[int, int], Tuple[str, Tuple[int, ...]]] = {
+    (24, 2): ("BEATS triggers", (160, 161)),
+    (16, 3): ("BEATS parts", (164, 165, 166)),
+}
+
+
+class TrailingBlock:
+    """One self-describing sub-block after the channel block.
+
+    Kept even when the shape is not one of :data:`TRAILING_BLOCKS` -- a
+    block whose rows are readable but whose meaning is not is still worth
+    reporting, and reporting it is how the next shape gets identified.
+    """
+
+    __slots__ = ("label", "offset", "rows", "parameter_ids")
+
+    def __init__(self, label: str, offset: int,
+                 rows: Sequence[Tuple[int, ...]],
+                 parameter_ids: Tuple[int, ...]) -> None:
+        self.label = label
+        self.offset = offset
+        self.rows: Tuple[Tuple[int, ...], ...] = tuple(rows)
+        #: The parameter IDs each row's values belong to, or ``()`` when the
+        #: block's shape is not one p2ked recognises.
+        self.parameter_ids = parameter_ids
+
+    @property
+    def identified(self) -> bool:
+        return bool(self.parameter_ids)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (f"TrailingBlock({self.label!r}, offset={self.offset}, "
+                f"rows={len(self.rows)})")
+
+
 class ChannelState:
     """One MIDI channel's slot in a setup."""
 
@@ -658,19 +841,36 @@ class ChannelState:
 class SetupDump:
     """A whole setup, as the unit reports it.
 
-    Only the per-channel block is decoded. The master parameters that
-    surround it -- including the MIDI Mode, which decides whether any of
-    this matters -- are not: the specification's published layout is
-    internally inconsistent *and* predates this firmware, so it cannot be
-    used to find them. See TODO.md item 10.
+    Both halves are decoded now: the per-channel block, and the master
+    parameters that surround it. They were established differently and the
+    difference matters --
+
+    * the channel block is found by **structural search**, unchanged, and
+      is what it always was;
+    * the master blocks are decoded **by parameter ID** from
+      :data:`MASTER_BLOCKS`, a mapping derived by reading every value back
+      from a unit individually, not from the published layout.
+
+    :attr:`master` is keyed by parameter ID rather than by invented
+    attribute names, because the ID is the protocol's own name for the
+    value and three of the IDs in the dump have no published name at all.
+    :data:`MASTER_PARAMETER_NAMES` names the ones E-MU documents.
+
+    :attr:`master` is **empty** rather than wrong when the dump's own
+    arithmetic does not add up -- see :func:`parse_setup_dump`.
     """
 
     __slots__ = ("name", "channels", "channel_count", "parameters_per_channel",
-                 "offset", "payload_size")
+                 "offset", "payload_size", "master", "trailing",
+                 "header_counts", "undecoded")
 
     def __init__(self, name: str, channels: Sequence["ChannelState"], *,
                  channel_count: int, parameters_per_channel: int,
-                 offset: int, payload_size: int) -> None:
+                 offset: int, payload_size: int,
+                 master: Optional[Dict[int, int]] = None,
+                 trailing: Sequence["TrailingBlock"] = (),
+                 header_counts: Sequence[int] = (),
+                 undecoded: Sequence[str] = ()) -> None:
         self.name = name
         self.channels: Tuple[ChannelState, ...] = tuple(channels)
         self.channel_count = channel_count
@@ -679,11 +879,93 @@ class SetupDump:
         #: by search, not by specification -- see :func:`parse_setup_dump`.
         self.offset = offset
         self.payload_size = payload_size
+        #: Master parameter values by parameter ID. Empty when the layout
+        #: could not be trusted; never partly guessed.
+        self.master: Dict[int, int] = dict(master or {})
+        #: The self-describing sub-blocks after the channel block.
+        self.trailing: Tuple[TrailingBlock, ...] = tuple(trailing)
+        #: The five block counts the header declares, in order.
+        self.header_counts: Tuple[int, ...] = tuple(header_counts)
+        #: Blocks that were skipped, and why, in words fit to show a user.
+        self.undecoded: Tuple[str, ...] = tuple(undecoded)
 
     def channel(self, channel: int) -> Optional["ChannelState"]:
         for entry in self.channels:
             if entry.channel == channel:
                 return entry
+        return None
+
+    def parameter(self, parameter_id: int) -> Optional[int]:
+        """One master parameter, or ``None`` if this dump did not carry it.
+
+        ``None`` and ``0`` are different answers and the caller has to tell
+        them apart: a parameter absent from the dump is not a parameter set
+        to zero.
+        """
+        return self.master.get(parameter_id)
+
+    @property
+    def midi_mode(self) -> Optional[int]:
+        """Omni / Poly / Multi, if the master block decoded.
+
+        The bridge reads this as parameter 385 directly and should keep
+        doing so -- one request, no layout, no way to be wrong. This is the
+        same number arriving by the long road, and is worth having only
+        because a dump already in hand need not be asked again.
+        """
+        return self.master.get(Parameter.MIDI_MODE)
+
+    @property
+    def midi_id(self) -> Optional[int]:
+        return self.master.get(Parameter.MIDI_ID)
+
+    @property
+    def basic_channel(self) -> Optional[int]:
+        """0-based, like the wire. Channel 9 on the panel reads 8."""
+        return self.master.get(Parameter.MULTIMODE_BASIC_CHANNEL)
+
+    @property
+    def fx_control_channel(self) -> Optional[int]:
+        return self.master.get(Parameter.MULTIMODE_FX_CTRL_CHANNEL)
+
+    @property
+    def tempo_control_channel(self) -> Optional[int]:
+        return self.master.get(Parameter.MULTIMODE_TEMPO_CTRL_CHAN)
+
+    @property
+    def clock_tempo(self) -> Optional[int]:
+        """BPM, or ``0`` meaning the unit follows an external clock."""
+        return self.master.get(Parameter.MASTER_CLOCK_TEMPO)
+
+    @property
+    def fx_bypass(self) -> Optional[int]:
+        return self.master.get(Parameter.MASTER_FX_BYPASS)
+
+    @property
+    def transpose(self) -> Optional[int]:
+        """Semitones, -12 to +12."""
+        return self.master.get(Parameter.MASTER_TRANSPOSE)
+
+    @property
+    def tune(self) -> Optional[int]:
+        """Fine tuning, -63 to +63. Not cents; the specification gives a
+        table. p2ked reports the raw value rather than a conversion it has
+        not checked."""
+        return self.master.get(Parameter.MASTER_TUNE)
+
+    @property
+    def bend_range(self) -> Optional[int]:
+        """Semitones, 0 to 12."""
+        return self.master.get(Parameter.MASTER_BEND_RANGE)
+
+    @property
+    def arp_status(self) -> Optional[int]:
+        return self.master.get(Parameter.MASTER_ARP_STATUS)
+
+    def trailing_block(self, label: str) -> Optional["TrailingBlock"]:
+        for block in self.trailing:
+            if block.label == label:
+                return block
         return None
 
 
@@ -713,6 +995,22 @@ def parse_setup_dump(packet: Packet) -> SetupDump:
     Raises :class:`ProtocolError` if no offset qualifies, or if more than
     one does -- an ambiguous answer is not an answer, and guessing between
     two candidates is how the wrong one gets shipped.
+
+    **The master parameters around it are decoded separately, and only when
+    the dump's own arithmetic agrees with the search.** The header's five
+    block counts, laid out from the end of the setup name, predict where the
+    channel block starts. On the unit this was derived from they agree
+    exactly -- 30 + 2x(20+22+16+21+3) = 194, which is where the search
+    independently lands. That agreement is the licence to read the master
+    blocks positionally; without it :attr:`SetupDump.master` stays empty and
+    the disagreement is recorded in :attr:`SetupDump.undecoded`, because a
+    master value read at the wrong offset is a plausible number nothing
+    downstream can reject.
+
+    A block whose declared count is not the number of parameter IDs p2ked
+    knows for it is skipped on its own, the rest still decoded: a firmware
+    that adds one parameter to one block should cost that block, not the
+    dump.
     """
     if packet.command != Command.SETUP_DUMP:
         raise ProtocolError(
@@ -769,10 +1067,96 @@ def parse_setup_dump(packet: Packet) -> SetupDump:
             fields[field] = unpack14_signed(data[position], data[position + 1])
         channels.append(ChannelState(index, **fields))
 
+    counts = tuple(unpack14(data[i], data[i + 1]) for i in range(0, 10, 2))
+    master, undecoded = _parse_master_blocks(data, counts, start)
+    trailing, trailing_notes = _parse_trailing_blocks(data, start + span)
+
     return SetupDump(name=name, channels=channels,
                      channel_count=channel_count,
                      parameters_per_channel=per_channel,
-                     offset=start, payload_size=len(data))
+                     offset=start, payload_size=len(data),
+                     master=master, trailing=trailing,
+                     header_counts=counts,
+                     undecoded=undecoded + trailing_notes)
+
+
+def _parse_master_blocks(data: Sequence[int], counts: Sequence[int],
+                         channel_offset: int
+                         ) -> Tuple[Dict[int, int], Tuple[str, ...]]:
+    """The five blocks between the setup name and the channel block.
+
+    Positional, and therefore only attempted when the header's own
+    arithmetic lands on the offset the structural search found.
+    """
+    master: Dict[int, int] = {}
+    undecoded: List[str] = []
+
+    cursor = 30 + 2 * sum(counts)
+    if cursor != channel_offset:
+        return master, (
+            f"master parameters not decoded: the header's block counts "
+            f"{tuple(counts)} put the channel block at byte {cursor}, but it "
+            f"is at {channel_offset}. Reading them positionally would "
+            f"produce values that look right and are not.",
+        )
+
+    cursor = 30
+    for (label, ids), count in zip(MASTER_BLOCKS, counts):
+        if count == len(ids):
+            for index, parameter_id in enumerate(ids):
+                position = cursor + index * 2
+                master[parameter_id] = unpack14_signed(
+                    data[position], data[position + 1])
+        else:
+            undecoded.append(
+                f"{label} block not decoded: it declares {count} parameters "
+                f"and p2ked knows {len(ids)} for it. One added parameter "
+                f"shifts every value after it.")
+        cursor += count * 2
+    return master, tuple(undecoded)
+
+
+def _parse_trailing_blocks(data: Sequence[int], cursor: int
+                           ) -> Tuple[Tuple["TrailingBlock", ...],
+                                      Tuple[str, ...]]:
+    """Whatever follows the channel block, read as it describes itself.
+
+    The seven-value header does not mention this region at all, so nothing
+    here is taken on faith: each sub-block states its own row count and row
+    width, and is decoded only if that fits inside the payload. An
+    unrecognised shape is still returned -- reporting it is how the next one
+    gets identified -- and a region that does not divide cleanly into
+    sub-blocks is reported rather than forced.
+    """
+    blocks: List[TrailingBlock] = []
+    notes: List[str] = []
+    while cursor + 4 <= len(data):
+        rows_declared = unpack14(data[cursor], data[cursor + 1])
+        width = unpack14(data[cursor + 2], data[cursor + 3])
+        end = cursor + 4 + rows_declared * width * 2
+        if rows_declared <= 0 or width <= 0 or end > len(data):
+            notes.append(
+                f"the {len(data) - cursor} bytes at {cursor} are not a "
+                f"self-describing block: they declare {rows_declared} rows "
+                f"of {width}.")
+            break
+        rows = []
+        for row in range(rows_declared):
+            base = cursor + 4 + row * width * 2
+            rows.append(tuple(
+                unpack14_signed(data[base + slot * 2], data[base + slot * 2 + 1])
+                for slot in range(width)))
+        label, ids = TRAILING_BLOCKS.get(
+            (rows_declared, width),
+            (f"unidentified {rows_declared}x{width} block", ()))
+        blocks.append(TrailingBlock(label, cursor, rows, ids))
+        cursor = end
+    else:
+        if cursor != len(data):
+            notes.append(
+                f"{len(data) - cursor} bytes at {cursor} are left over after "
+                f"the trailing blocks, too few to be one.")
+    return tuple(blocks), tuple(notes)
 
 
 # --- parameters --------------------------------------------------------------
