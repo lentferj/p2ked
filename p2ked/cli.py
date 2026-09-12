@@ -315,10 +315,15 @@ def _build_device(args):
 
     b.install_clean_exit()
     if args.port:
-        return b.ProteusBridge.open(
+        device = b.ProteusBridge.open(
             args.port, recv_port=args.recv_port,
             device_id=(args.device_id if args.device_id is not None
                        else msg.BROADCAST_DEVICE))
+        if args.device_id is None:
+            # Broadcast is not a safe default -- this Proteus ignores it,
+            # so identity answers and every read then times out.
+            device.learn_device_id(timeout=0.8)
+        return device
     return b.ProteusBridge.autodetect(
         on_try=lambda name: print(f"  probing {name}...", file=sys.stderr))
 

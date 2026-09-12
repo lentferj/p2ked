@@ -320,6 +320,25 @@ class ProteusBridge:
             "Exclusive reception is enabled."
         )
 
+    def learn_device_id(self, *, timeout: Optional[float] = None
+                        ) -> Optional[int]:
+        """Ask who is there and adopt the device ID it reports.
+
+        A unit need not answer the broadcast ID. This one does not: with
+        127 every preset-name request times out, and with the 0 it reports
+        every one answers. So opening a named port and assuming broadcast
+        gives a bridge that identifies fine and then reads nothing -- which
+        looks like a dead device rather than a wrong address.
+
+        :meth:`autodetect` has always adopted the reported ID; this is the
+        same step for the case where the user named the port.
+        """
+        fields = self.identify(timeout=timeout)
+        if fields is None or not fields.get("is_emu"):
+            return None
+        self.device_id = m.device_byte(fields["device"])
+        return self.device_id
+
     # --- operations ----------------------------------------------------------
 
     def hardware_config(self, *, timeout: Optional[float] = None

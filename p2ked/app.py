@@ -900,6 +900,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                     args.port, recv_port=args.recv_port,
                     device_id=(args.device_id if args.device_id is not None
                                else msg.BROADCAST_DEVICE))
+                if args.device_id is None:
+                    # Adopt the ID the unit reports. Broadcast is not a
+                    # safe default: this Proteus ignores it, so every read
+                    # times out while identity still answers.
+                    learned = device.learn_device_id(timeout=0.8)
+                    if learned is not None:
+                        print(f"  device ID {learned}", file=sys.stderr)
+                    else:
+                        print("  no identity reply; using broadcast",
+                              file=sys.stderr)
             else:
                 device = b.ProteusBridge.autodetect(
                     on_try=lambda n: print(f"  probing {n}...",
