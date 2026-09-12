@@ -186,3 +186,63 @@ class TestBrowserWiring:
             assert app.category_of("nosuchbank", 0) == ""
         finally:
             store.close()
+
+
+class TestBankListing:
+    """Only the ROMs the unit has, unless told otherwise."""
+
+    def _app(self, tmp_path, installed=None):
+        from p2ked.app import P2kedApp
+        from p2ked.demo import DemoDevice
+        store = Favorites(str(tmp_path / "f.db"))
+        return P2kedApp(DemoDevice(), favorites=store,
+                        installed=installed), store
+
+    def test_without_an_answer_every_bank_is_listed(self, tmp_path):
+        """A list silently cut down by a failed query is worse than a long one."""
+        from p2k import roms
+        app, store = self._app(tmp_path, installed=None)
+        try:
+            assert app._visible_banks() == roms.bank_ids()
+        finally:
+            store.close()
+
+    def test_only_the_fitted_roms_are_listed(self, tmp_path):
+        from p2k import roms
+        app, store = self._app(tmp_path, installed={4: True, 14: True})
+        try:
+            shown = app._visible_banks()
+            assert shown, "something must be listed"
+            assert len(shown) < len(roms.bank_ids())
+            msbs = {roms.bank(b).msb for b in shown}
+            assert msbs == {4, 14}
+        finally:
+            store.close()
+
+    def test_the_toggle_shows_everything_again(self, tmp_path):
+        from p2k import roms
+        app, store = self._app(tmp_path, installed={4: True})
+        try:
+            assert len(app._visible_banks()) < len(roms.bank_ids())
+            app._all_roms = True
+            assert app._visible_banks() == roms.bank_ids()
+        finally:
+            store.close()
+
+    def test_an_answer_with_nothing_fitted_still_lists_everything(self, tmp_path):
+        """Better a useless list than an empty screen with no explanation."""
+        from p2k import roms
+        app, store = self._app(tmp_path, installed={4: False, 14: False})
+        try:
+            assert app._visible_banks() == roms.bank_ids()
+        finally:
+            store.close()
+
+    def test_the_keys_are_all_in_the_legend(self):
+        from p2ked.app import KEY_HINTS, P2kedApp
+        legend = " ".join(KEY_HINTS)
+        for binding in P2kedApp.BINDINGS:
+            if binding.key in ("enter", "tab", "slash", "question_mark"):
+                continue
+            assert f"{binding.key} " in legend, \
+                f"{binding.key} is bound but missing from the legend"

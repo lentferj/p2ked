@@ -66,7 +66,9 @@ _SEP = " · "
 
 KEY_HINTS = (
     "↑↓ move", "tab pane", "⏎ select on the unit", "r read names",
-    "m channels", "/ search", "c channel", "i device", "? help", "q quit",
+    "m channels", "/ search", "c channel", "f favourite",
+    "F favourites only", "C category", "a all ROMs", "i device", "? help",
+    "q quit",
 )
 
 
@@ -337,6 +339,7 @@ class P2kedApp(App):
         Binding("f", "toggle_favorite", "Favourite"),
         Binding("F", "cycle_favorites", "Favourites view"),
         Binding("C", "pick_categories", "Categories"),
+        Binding("a", "toggle_all_roms", "All ROMs"),
         Binding("i", "device_info", "Device"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
@@ -344,7 +347,7 @@ class P2kedApp(App):
     ]
 
     def __init__(self, device, *, catalog=None, channel: int = 0,
-                 favorites=None) -> None:
+                 favorites=None, installed=None) -> None:
         super().__init__()
         self.device = device
         self.catalog = catalog if catalog is not None else cat.empty()
@@ -354,7 +357,13 @@ class P2kedApp(App):
         #: leaving two files in it.
         self.favorites = favorites
         self._lock = threading.RLock()
-        self._bank_ids: List[str] = roms.bank_ids()
+        #: ``{rom id: present}`` as the unit answered, or None if it was
+        #: never asked. None means show everything: a bank list silently
+        #: shortened by a failed query is worse than a long one.
+        self.installed: Optional[Dict[int, bool]] = installed
+        #: False = only the ROMs this unit actually has.
+        self._all_roms = False
+        self._bank_ids: List[str] = self._visible_banks()
         self._current_bank = self._bank_ids[0]
         self._current: List[roms.Preset] = []
         self._busy = False
@@ -364,6 +373,55 @@ class P2kedApp(App):
         #: Empty = every category. Categories are the "bas:" style prefix
         #: E-MU puts on a preset name.
         self._categories: set = set()
+
+    def _rom_id_of(self, bank_id: str) -> int:
+        entry = roms.bank(bank_id)
+        return (roms.USER_ROM_ID
+                if getattr(entry, "rom", None) is roms.USER else entry.msb)
+
+    def _visible_banks(self) -> List[str]:
+        """Bank ids to list: by default only ROMs the unit actually has.
+
+        A Proteus 2000 has four SIMM sockets and a table of twenty possible
+        ROMs, so listing all seventy-four banks means most of what is on
+        screen cannot be played. Filtering needs the unit's answer, so when
+        there is none -- demo mode, or a query that failed -- everything is
+        shown rather than a list quietly cut down to nothing.
+        """
+        every = roms.bank_ids()
+        if self._all_roms or not self.installed:
+            return every
+        kept = [b for b in every if self.installed.get(self._rom_id_of(b), False)]
+        return kept or every
+
+    def action_toggle_all_roms(self) -> None:
+        """Every ROM in the table, or only the ones fitted."""
+        if not self.installed:
+            self.notify_status(
+                "the unit was not asked which ROMs are fitted, so all are "
+                "shown")
+            return
+        self._all_roms = not self._all_roms
+        self._bank_ids = self._visible_banks()
+        if self._current_bank not in self._bank_ids:
+            self._current_bank = self._bank_ids[0]
+        self._fill_banks()
+        self._fill_presets(self._current_bank)
+        self.notify_status(
+            f"showing all {len(self._bank_ids)} banks" if self._all_roms
+            else f"showing the {len(self._bank_ids)} banks this unit has")
+
+    def _fill_banks(self) -> None:
+        table = self.query_one("#bank-table", DataTable)
+        self._filling = True
+        try:
+            table.clear()
+            for bank_id in self._bank_ids:
+                entry = roms.bank(bank_id)
+                table.add_row(entry.label, str(entry.msb), str(entry.lsb),
+                              str(entry.count), key=bank_id)
+        finally:
+            self._filling = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -380,14 +438,16 @@ class P2kedApp(App):
         for label, key in (("bank", "bank"), ("MSB", "msb"), ("LSB", "lsb"),
                            ("n", "n")):
             banks.add_column(label, key=key)
-        for bank_id in self._bank_ids:
-            entry = roms.bank(bank_id)
-            banks.add_row(entry.label, str(entry.msb), str(entry.lsb),
-                          str(entry.count), key=bank_id)
+        self._fill_banks()
 
         presets = self.query_one("#preset-table", DataTable)
-        for label, key in (("#", "pc"), ("name", "name"), ("PC", "pcn"),
-                           ("LSB", "lsb"), ("MSB", "msb"), ("ROM#", "rom")):
+        # The favourite marker gets a column of its own rather than a
+        # character glued to the name: a name that starts with a marker
+        # cannot be read straight down, and cannot be sorted or searched
+        # without the marker getting in the way.
+        for label, key in (("♥", "fav"), ("#", "pc"), ("name", "name"),
+                           ("PC", "pcn"), ("LSB", "lsb"), ("MSB", "msb"),
+                           ("ROM#", "rom")):
             presets.add_column(label, key=key)
         self._fill_presets(self._current_bank)
         banks.focus()
@@ -449,9 +509,9 @@ class P2kedApp(App):
                     shown = f"[b]{name}[/b]"
                 else:
                     shown = name
-                star = "*" if entry.program_change in marked else " "
+                star = "[b]♥[/b]" if entry.program_change in marked else ""
                 table.add_row(
-                    f"{entry.program_change:03d}", f"{star}{shown}",
+                    star, f"{entry.program_change:03d}", shown,
                     str(entry.program_change), str(entry.lsb), str(entry.msb),
                     str(entry.number), key=entry.key,
                 )
@@ -811,6 +871,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-id", type=int, default=None)
     parser.add_argument("--channel", type=int, default=None)
     parser.add_argument("--catalog", default=None)
+    parser.add_argument("--all-roms", action="store_true",
+                        help="list every ROM in the table, not just the "
+                             "ones this unit has")
     parser.add_argument("--favorites", default=None,
                         help="favourites database "
                              "(default: the per-platform data directory)")
@@ -848,8 +911,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     from p2k.favorites import Favorites
 
     store = Favorites(args.favorites)
+
+    # Ask the unit which ROMs it has before the interface starts. This is
+    # MIDI, so it does not belong on a Textual worker or in on_mount; doing
+    # it here keeps the rule that workers do MIDI and the main thread does
+    # the rest. A failure is not fatal -- every bank is shown instead.
+    installed = None
+    if not args.all_roms and hasattr(device, "installed_roms"):
+        try:
+            print("  asking which ROMs are fitted...", file=sys.stderr)
+            installed = device.installed_roms(timeout=0.6)
+            have = sum(1 for present in installed.values() if present)
+            print(f"  {have} of {len(installed)} ROMs answered",
+                  file=sys.stderr)
+        except Exception as exc:
+            print(f"  could not ask ({exc}); showing every bank",
+                  file=sys.stderr)
+
     app = P2kedApp(device, catalog=catalog, favorites=store,
-                   channel=(args.channel or 1) - 1)
+                   installed=installed, channel=(args.channel or 1) - 1)
     try:
         app.run()
     finally:
