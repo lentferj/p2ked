@@ -207,3 +207,149 @@ is the **Master Arpeggiator**.
 - This is one unit and one firmware. The parser obeys the declared counts
   rather than these offsets, skips any one block whose count it does not
   recognise, and still finds the channels by structural search.
+
+---
+
+*Items 11 onward came from a code review by MiMo V2.5 Free on 2026-09-19.
+Each has since been checked against the code; the verdict line says what
+that check found. Two do not reproduce and one is right about a third of
+what it cites.*
+
+## 11. Nothing enforces that config writes stay on the main thread
+
+**Status:** open, hypothetical today. **Verified, and worth restating.**
+
+The review frames this as `_update` rewriting the whole file, so two
+concurrent calls could interleave. Checked: no `@work` method in
+`p2ked/app.py` touches `config` at all, so there is no race now.
+
+But the reason there is no race is the project rule -- workers do MIDI and
+hand off -- and that rule is only enforced for two things. `tests/test_legend.py`
+has AST checks that no worker reaches `self.catalog` or queries widgets.
+A worker calling `config.save_channel` would pass every test in the suite.
+
+So the useful fix is not a file lock, which would make a worker doing this
+*work* and leave the rule unenforced. It is a third AST check of the same
+shape, so that the first worker to touch config fails the suite instead of
+the disk.
+
+**Blocked on:** nothing.
+
+## 12. `catalog.search` drops the disagreement it knows about
+
+**Status:** open, real, and the most useful item on this list. **Verified.**
+
+`Catalog.search` (`p2k/catalog.py:146`) returns `(bank_id, program_change,
+name)`, merging printed and live names into one dict and keeping whichever
+sorted last. The browser marks a slot whose live name differs from the
+printed one, via `Catalog.differs` / `Catalog.disagreement`; search shows
+the name flat, with nothing to say which source it came from or that the
+two disagree.
+
+That is the wrong way round. In the browser the user is already looking at
+the slot. In search they are looking at a list of names from banks they
+have not opened, which is exactly where "this one is not what the printed
+catalog says" is worth knowing -- it is how a user bank that somebody
+overwrote gets noticed at all.
+
+**Blocked on:** nothing. Return the `differs` flag alongside, and have the
+search report render the same marker the browser does.
+
+## 13. `bridge.identify` does not drain before sending
+
+**Status:** **rejected -- does not reproduce.**
+
+`ProteusBridge.identify` calls `self._drain()` as its first statement,
+`p2k/bridge.py:272`, and has since the initial commit `d003569`. The
+finding states the opposite. Every bridge method that sends a request
+drains first; there is no exception to align.
+
+## 14. `DemoDevice.preset_name` and the bridge's differ in return type
+
+**Status:** open, cosmetic. **Verified** -- `p2ked/demo.py:306` returns
+`Optional[str]`, `p2k/bridge.py:359` returns `str` and raises
+`TimeoutError` for silence.
+
+The demo is deliberately not a mock of the bridge; it is a second
+implementation that never opens a port. Still, the two are used
+interchangeably by the app, and the difference is exactly where a `None`
+would reach code written against the bridge's signature.
+
+**Blocked on:** nothing. Either match the bridge and raise, or say in
+`demo.py` why it does not.
+
+## 15. The `tomllib` fallback in `config.py` cannot execute
+
+**Status:** open, harmless. **Verified** -- `pyproject.toml:10` declares
+`requires-python = ">=3.11"` and `tomllib` entered the standard library in
+3.11, so the `except ModuleNotFoundError` branch at `p2k/config.py:42-44`
+is unreachable and `tomllib is None` is never true.
+
+Note there are guards downstream that test `tomllib is None` (`_read`
+returns early on it). Removing the fallback means removing those too, or
+they become the dead code instead.
+
+**Blocked on:** nothing.
+
+## 16. A tool reads a file without closing it
+
+**Status:** open, real in **one** of the three places cited.
+
+`tools/import_favourites.py:56` iterates `enumerate(open(path,
+encoding="utf-8"), 1)`, which holds the file open for the whole loop with
+no name to close it by. That one is real.
+
+The other two the review names are already correct: `tools/extract_catalog.py`
+lines 100 and 126 both use `with open(...) as handle`, as does line 337.
+
+**Blocked on:** nothing; one line.
+
+## 17. `wrap_blocks` does not guard against `width <= 0`
+
+**Status:** open, safe. **Verified** -- `p2ked/app.py:87`, no guard; the
+only caller clamps with `max(self.size.width - 2, 20)`.
+
+Worth noting what the function is for, per its own docstring: the legend
+wraps rather than truncating, because a footer that silently drops its
+last few keys teaches the user those keys do not exist. A width of 0 would
+be the degenerate version of exactly that failure.
+
+**Blocked on:** nothing. `width = max(width, 1)`.
+
+## 18. `roms.presets` recomputes its base offset on every call
+
+**Status:** open, cosmetic. **Verified** -- `p2k/roms.py:332-337` walks
+`entry.rom.lsbs` to find the bank's base each time, and `_fill_presets`
+calls it on every cursor move.
+
+At 128 presets across 74 banks this is not measurable. The reason to leave
+it alone is stronger than the reason to cache it: `lsbs` is the installed
+ROM set, which the app can change at runtime when the fitted-ROM filter is
+toggled, so a cache keyed on `bank_id` would need invalidating on exactly
+the event most likely to be forgotten.
+
+**Blocked on:** a reason. None yet.
+
+## 19. A test wrote `config.toml` into the working directory — FIXED
+
+**Status:** **fixed.** Real, and it had actually happened.
+
+`tests/test_favorites.py` called `config.save_last_port("some port")` with
+no path on the line *above* the correct call that passes one -- a leftover
+from adding the path argument. `config.DEFAULT_PATH` is the relative string
+`"config.toml"`, so the pathless call wrote into whatever directory pytest
+was started from. A `config.toml` dated during a test run was sitting in
+the repository root when this was checked.
+
+It is gitignored in all four sibling projects, which is why it never
+appeared in `git status` and why the review could only infer it.
+
+The relative default is **not** itself a bug: it is the same in rxved,
+kwsed and x5ded, and deliberate -- `config.toml` is a disposable
+per-checkout cache of which port answered last, as distinct from the
+favourites store, which is the user's own work and lives in the platform
+data directory.
+
+The duplicated line is gone, and `tests/test_legend.py` now carries an AST
+check that every `config.save_*` in the suite names its file, plus the
+usual guard that the check has something to match.

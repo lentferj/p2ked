@@ -115,3 +115,58 @@ class TestWorkersOnlyDoMidi:
         assert not offenders, (
             f"worker(s) {sorted(set(offenders))} query widgets directly; "
             f"that is the main thread's job")
+
+
+class TestConfigIsNotWrittenBehindTheSuitesBack:
+    """``config.DEFAULT_PATH`` is relative, so a pathless save hits the CWD.
+
+    That is the right default for the application -- ``config.toml`` is a
+    disposable per-checkout cache, gitignored in all four sibling projects --
+    and exactly the wrong thing for a test, which would drop the file into
+    whatever directory pytest was started from. It is gitignored, so it never
+    shows up in ``git status`` to give the game away; the only evidence is a
+    file appearing next to the source. The sibling rxved had the same bug with
+    backups and fixed it in ``1f5aa3a``.
+    """
+
+    def _test_sources(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        for name in sorted(os.listdir(here)):
+            if name.startswith("test_") and name.endswith(".py"):
+                path = os.path.join(here, name)
+                with open(path, encoding="utf-8") as handle:
+                    yield name, ast.parse(handle.read())
+
+    def test_every_config_save_in_the_suite_names_its_file(self):
+        offenders = []
+        for name, tree in self._test_sources():
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not (isinstance(func, ast.Attribute)
+                        and func.attr.startswith("save_")
+                        and isinstance(func.value, ast.Name)
+                        and func.value.id == "config"):
+                    continue
+                # a path is either the last positional or path=
+                has_path = (len(node.args) >= 2
+                            or any(kw.arg == "path" for kw in node.keywords))
+                if not has_path:
+                    offenders.append(f"{name}:{node.lineno} {func.attr}")
+        assert not offenders, (
+            f"{offenders} save to config.DEFAULT_PATH, which is relative to "
+            f"the working directory. Pass a tmp_path.")
+
+    def test_the_check_has_something_to_check(self):
+        """Guard against the search passing because it matched nothing."""
+        found = 0
+        for _, tree in self._test_sources():
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr.startswith("save_")
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "config"):
+                    found += 1
+        assert found, "no config.save_* calls found; the check is vacuous"
