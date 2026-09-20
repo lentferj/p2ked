@@ -45,7 +45,8 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 
 __all__ = [
     "DEFAULT_PATH", "load_channel", "save_channel", "load_last_port",
-    "save_last_port", "load_device_id", "save_device_id",
+    "save_last_port", "load_last_recv_port", "save_last_recv_port",
+    "load_device_id", "save_device_id",
 ]
 
 DEFAULT_PATH = "config.toml"
@@ -110,9 +111,25 @@ def save_last_port(port: str, path: str = DEFAULT_PATH) -> None:
     _update(path, port=str(port))
 
 
+def load_last_recv_port(path: str = DEFAULT_PATH) -> Optional[str]:
+    """The input port last opened, when it differed from the output one."""
+    value = _read(path)[0].get("recv_port")
+    return value if isinstance(value, str) and value else None
+
+
+def save_last_recv_port(port: str, path: str = DEFAULT_PATH) -> None:
+    _update(path, recv_port=str(port))
+
+
 def load_device_id(path: str = DEFAULT_PATH) -> Optional[int]:
     value = _read(path)[0].get("device_id")
-    return value if isinstance(value, int) else None
+    # `isinstance(True, int)` is True, so a hand-edited `device_id = true`
+    # would come back as device 1 -- a real device ID, and the wrong one.
+    # A wrong device ID is answered with silence by this instrument, which
+    # is the failure mode that hides behind every other.
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 0 <= value <= 127 else None
 
 
 def save_device_id(device_id: int, path: str = DEFAULT_PATH) -> None:

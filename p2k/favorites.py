@@ -70,7 +70,7 @@ __all__ = [
 ]
 
 #: Bumped whenever the schema changes; :meth:`Favorites._migrate` reads it.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 #: The directory name used under whichever per-platform data root applies.
@@ -281,14 +281,33 @@ class Favorites:
                     tags    TEXT    NOT NULL DEFAULT '',
                     note    TEXT    NOT NULL DEFAULT '',
                     added   REAL    NOT NULL DEFAULT 0,
+                    active  INTEGER NOT NULL DEFAULT 1,
                     PRIMARY KEY (bank_id, number)
                 );
                 CREATE INDEX IF NOT EXISTS favorites_rating
                     ON favorites (rating DESC);
                 """
             )
-            self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            self._db.commit()
+        if current < 2:
+            # Un-favouriting stopped deleting the row. It clears this flag
+            # instead, so a rating, tags, a note and the original `added`
+            # date survive a slot being toggled off and on -- two presses of
+            # `f` used to destroy all four, silently, on the one store this
+            # project calls the user's own. Every read filters on it.
+            #
+            # DEFAULT 1 is what makes the upgrade a no-op for existing rows:
+            # everything already in the table is a live favourite.
+            have = {row["name"] for row in
+                    self._db.execute("PRAGMA table_info(favorites)")}
+            if "active" not in have:
+                self._db.execute(
+                    "ALTER TABLE favorites ADD COLUMN active INTEGER "
+                    "NOT NULL DEFAULT 1")
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS favorites_active "
+                "ON favorites (active)")
+        self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        self._db.commit()
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -309,15 +328,30 @@ class Favorites:
     def __contains__(self, key) -> bool:
         bank_id, number = _split(key)
         row = self._db.execute(
-            "SELECT 1 FROM favorites WHERE bank_id = ? AND number = ?",
+            "SELECT 1 FROM favorites WHERE bank_id = ? AND number = ? "
+            "AND active = 1",
             (bank_id, number),
         ).fetchone()
         return row is not None
 
     def __len__(self) -> int:
-        return self._db.execute("SELECT COUNT(*) FROM favorites").fetchone()[0]
+        return self._db.execute(
+            "SELECT COUNT(*) FROM favorites WHERE active = 1").fetchone()[0]
 
     def get(self, bank_id: str, number: int) -> Optional[Favorite]:
+        row = self._db.execute(
+            "SELECT * FROM favorites WHERE bank_id = ? AND number = ? "
+            "AND active = 1",
+            (bank_id, int(number)),
+        ).fetchone()
+        return _to_favorite(row) if row is not None else None
+
+    def _row(self, bank_id: str, number: int) -> Optional[Favorite]:
+        """Like :meth:`get`, but sees un-favourited rows too.
+
+        Private because every caller outside this class means "is this a
+        favourite", and a dormant row is not one.
+        """
         row = self._db.execute(
             "SELECT * FROM favorites WHERE bank_id = ? AND number = ?",
             (bank_id, int(number)),
@@ -334,13 +368,14 @@ class Favorites:
         return {
             f"{row['bank_id']}:{row['number']:03d}"
             for row in self._db.execute(
-                "SELECT bank_id, number FROM favorites")
+                "SELECT bank_id, number FROM favorites WHERE active = 1")
         }
 
     def keys_for_bank(self, bank_id: str) -> set:
         return {
             row["number"] for row in self._db.execute(
-                "SELECT number FROM favorites WHERE bank_id = ?", (bank_id,))
+                "SELECT number FROM favorites WHERE bank_id = ? "
+                "AND active = 1", (bank_id,))
         }
 
     def all(self, *, order: str = "added") -> List[Favorite]:
@@ -362,7 +397,8 @@ class Favorites:
             )
         return [
             _to_favorite(row) for row in self._db.execute(
-                f"SELECT * FROM favorites ORDER BY {clauses[order]}")
+                f"SELECT * FROM favorites WHERE active = 1 "
+                f"ORDER BY {clauses[order]}")
         ]
 
     def search(self, needle: str) -> List[Favorite]:
@@ -370,8 +406,9 @@ class Favorites:
         pattern = f"%{needle}%"
         return [
             _to_favorite(row) for row in self._db.execute(
-                "SELECT * FROM favorites WHERE name LIKE ? OR tags LIKE ? "
-                "OR note LIKE ? ORDER BY bank_id, number",
+                "SELECT * FROM favorites WHERE active = 1 AND ("
+                "name LIKE ? OR tags LIKE ? OR note LIKE ?) "
+                "ORDER BY bank_id, number",
                 (pattern, pattern, pattern),
             )
         ]
@@ -408,14 +445,14 @@ class Favorites:
         a favourite is an edit, not a re-acquisition, and quietly resetting
         the date would corrupt the one ordering the user cannot reconstruct.
         """
-        existing = self.get(bank_id, number)
+        existing = self._row(bank_id, number)
         added = existing.added if existing is not None else time.time()
         self._db.execute(
             "INSERT INTO favorites (bank_id, number, name, rating, tags, "
-            "note, added) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "note, added, active) VALUES (?, ?, ?, ?, ?, ?, ?, 1) "
             "ON CONFLICT (bank_id, number) DO UPDATE SET "
             "name = excluded.name, rating = excluded.rating, "
-            "tags = excluded.tags, note = excluded.note",
+            "tags = excluded.tags, note = excluded.note, active = 1",
             (bank_id, int(number), name, int(rating), tags, note, added),
         )
         self._db.commit()
@@ -423,7 +460,30 @@ class Favorites:
                         added)
 
     def remove(self, bank_id: str, number: int) -> bool:
-        """Un-favourite a slot. ``True`` if there was one."""
+        """Un-favourite a slot. ``True`` if it was one.
+
+        The row is kept and its ``active`` flag cleared, not deleted. A
+        favourite carries a rating, tags, a note and the date it was made --
+        the user's own work, and the only thing here that cannot be
+        reconstructed from the instrument. Deleting the row put all four one
+        keystroke from destruction, since the browser's ``f`` unfavourites
+        without asking; keeping it means the same keystroke brings them
+        back. :meth:`forget` is the one that really deletes.
+        """
+        cursor = self._db.execute(
+            "UPDATE favorites SET active = 0 "
+            "WHERE bank_id = ? AND number = ? AND active = 1",
+            (bank_id, int(number)),
+        )
+        self._db.commit()
+        return cursor.rowcount > 0
+
+    def forget(self, bank_id: str, number: int) -> bool:
+        """Delete a slot's row outright, annotations and all.
+
+        What :meth:`remove` used to do. Nothing in the browser calls it: a
+        keystroke should not be able to reach it.
+        """
         cursor = self._db.execute(
             "DELETE FROM favorites WHERE bank_id = ? AND number = ?",
             (bank_id, int(number)),
@@ -431,12 +491,32 @@ class Favorites:
         self._db.commit()
         return cursor.rowcount > 0
 
+    def dormant(self) -> List[Favorite]:
+        """Slots un-favourited but still holding annotations."""
+        return [
+            _to_favorite(row) for row in self._db.execute(
+                "SELECT * FROM favorites WHERE active = 0 "
+                "ORDER BY bank_id, number")
+        ]
+
     def toggle(self, bank_id: str, number: int, *, name: str = ""
                ) -> bool:
-        """Flip a slot's favourite state. ``True`` if it is now a favourite."""
+        """Flip a slot's favourite state. ``True`` if it is now a favourite.
+
+        Re-favouriting restores whatever the slot carried when it was last
+        un-favourited rather than starting it blank, which is the whole
+        point of :meth:`remove` keeping the row. ``name`` is used only if
+        there is nothing to restore, or if the stored one is empty: the name
+        is a label that the instrument can supply again, unlike the rest.
+        """
         if self.remove(bank_id, number):
             return False
-        self.add(bank_id, number, name=name)
+        old = self._row(bank_id, number)
+        if old is None:
+            self.add(bank_id, number, name=name)
+        else:
+            self.add(bank_id, number, name=old.name or name,
+                     rating=old.rating, tags=old.tags, note=old.note)
         return True
 
     def set_rating(self, bank_id: str, number: int, rating: int) -> None:
@@ -461,7 +541,7 @@ class Favorites:
         "--". ``lookup(bank_id, number)`` returns a name or ``None``.
         """
         changed = 0
-        for fav in self.all(order="bank"):
+        for fav in self.all(order="bank") + self.dormant():
             fresh = lookup(fav.bank_id, fav.number)
             if fresh and fresh != fav.name:
                 self._db.execute(
@@ -478,10 +558,20 @@ class Favorites:
 
 
 def _split(key) -> Tuple[str, int]:
-    """Accept either ``("XLEAD2-1", 63)`` or ``"XLEAD2-1:063"``."""
+    """Accept either ``("XLEAD2-1", 63)`` or ``"XLEAD2-1:063"``.
+
+    A bare ``"XLEAD2-1"`` is neither, and is refused by name rather than
+    through ``int("")``: this reaches ``__contains__``, so the mistake it
+    reports is a membership test against a whole bank, and "invalid literal
+    for int() with base 10: ''" says nothing about that.
+    """
     if isinstance(key, tuple):
         return key[0], int(key[1])
-    bank_id, _, number = str(key).partition(":")
+    bank_id, colon, number = str(key).partition(":")
+    if not colon or not number.strip():
+        raise ValueError(
+            f"{key!r} names a bank but not a slot in it; a key is "
+            f"'BANK:NNN', as in 'XLEAD2-1:063'")
     return bank_id, int(number)
 
 

@@ -143,8 +143,16 @@ class Catalog:
 
     # --- search -------------------------------------------------------------
 
-    def search(self, needle: str) -> List[Tuple[str, int, str]]:
-        """Case-insensitive substring search over both sources."""
+    def search(self, needle: str) -> List[Tuple[str, int, str, bool]]:
+        """Case-insensitive substring search over both sources.
+
+        Each hit carries whether the unit and the printed list disagree
+        about that slot, so a caller can show the same ``*`` the browser
+        does. Search is where it matters most: the browser marks a slot the
+        user is already looking at, while a search result is a name from a
+        bank they have not opened -- which is how a user bank somebody has
+        saved over gets noticed at all.
+        """
         wanted = needle.strip().lower()
         if not wanted:
             return []
@@ -156,7 +164,8 @@ class Catalog:
             if wanted in name.lower():
                 bank_id, _, number = key.rpartition(":")
                 seen[key] = (bank_id, int(number), name)
-        return [seen[key] for key in sorted(seen)]
+        return [seen[key] + (self.differs(*seen[key][:2]),)
+                for key in sorted(seen)]
 
 
 def empty() -> Catalog:

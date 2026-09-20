@@ -235,9 +235,9 @@ the disk.
 
 **Blocked on:** nothing.
 
-## 12. `catalog.search` drops the disagreement it knows about
+## 12. `catalog.search` dropped the disagreement it knows about — FIXED
 
-**Status:** open, real, and the most useful item on this list. **Verified.**
+**Status:** **fixed 2026-09-20.** Was the most useful item on this list.
 
 `Catalog.search` (`p2k/catalog.py:146`) returns `(bank_id, program_change,
 name)`, merging printed and live names into one dict and keeping whichever
@@ -252,8 +252,9 @@ have not opened, which is exactly where "this one is not what the printed
 catalog says" is worth knowing -- it is how a user bank that somebody
 overwrote gets noticed at all.
 
-**Blocked on:** nothing. Return the `differs` flag alongside, and have the
-search report render the same marker the browser does.
+Fixed by returning the flag alongside, as item 23 spells out, and having
+both callers -- `p2ked find` and the TUI search report -- render the same
+marker the browser does.
 
 ## 13. `bridge.identify` does not drain before sending
 
@@ -266,7 +267,8 @@ drains first; there is no exception to align.
 
 ## 14. `DemoDevice.preset_name` and the bridge's differ in return type
 
-**Status:** open, cosmetic. **Verified** -- `p2ked/demo.py:306` returns
+**Status:** open, cosmetic; see item 22, which checked the hazard and found
+none. **Verified** -- `p2ked/demo.py:306` returns
 `Optional[str]`, `p2k/bridge.py:359` returns `str` and raises
 `TimeoutError` for silence.
 
@@ -353,3 +355,255 @@ data directory.
 The duplicated line is gone, and `tests/test_legend.py` now carries an AST
 check that every `config.save_*` in the suite names its file, plus the
 usual guard that the check has something to match.
+
+---
+
+*Items 20 onward come from a code review by **Nemotron 3 Ultra (free)** on
+2026-09-20. All code-level findings (items 11–19) were already tracked by the
+prior MiMo V2.5 Free review; this review independently confirmed them and
+adds the following process/tooling items.*
+
+
+## 20. No static type checking in CI
+
+**Status:** open, a suggestion rather than a defect. Not acted on.
+
+mypy is not installed here and none of the four sibling projects configures
+it. The two places the review names as beneficiaries have both since been
+settled by other means: item 22's signature mismatch is real but
+unreachable (see there), and item 23's return type has changed shape and is
+pinned by a test. Worth doing across all four together, or not at all --
+one project with `mypy --strict` and three without is the worst of both.
+
+**Blocked on:** a decision to adopt it everywhere.
+
+## 21. Test suite not parallelised
+
+**Status:** open, cosmetic. Not acted on.
+
+`pytest-xdist` is not installed and no sibling uses it. The ~24 s is almost
+entirely Textual pilot tests waiting on their own event loop, which xdist
+would genuinely help. Against that: it is a new dependency for a suite that
+runs in under half a minute, and it distributes across *processes*, so the
+relevant property is not the thread-safety the finding cites but whether
+two workers can collide on a shared path -- which item 19 showed they could
+until this week.
+
+**Blocked on:** wanting it.
+
+## 22. `DemoDevice.preset_name` silence behaviour differs from bridge
+
+**Status:** open, cosmetic. **The hazard it claims does not exist.**
+
+The return types do differ, as item 14 says: `Optional[str]` against `str`.
+
+But "the app calls both interchangeably" is not so. Checked every call
+site: `preset_name` has three callers, and each is inside the class that
+defines it -- `bridge.py:430`, `bridge.py:507` and `demo.py:323`. The app
+never calls it at all; it calls `read_bank_names`, and the demo's own
+version already skips `None`. There is no path by which a `None` reaches
+code written against the bridge's signature.
+
+So: a consistency wart worth tidying, not a crash waiting to happen. Fixing
+it is still the right call, and option (a) -- make the demo raise -- is
+still the better one.
+
+**Blocked on:** nothing.
+
+## 23. `catalog.search` return type should include `differs` flag — FIXED
+
+**Status:** **fixed 2026-09-20**, together with item 12, which is the same
+finding.
+
+`search` now returns `(bank_id, program_change, name, differs)`. Both
+callers render the `*`: `p2ked find` prints it with a footnote, and the TUI
+search report marks each row and says how many of the results differ.
+
+---
+
+*Items 24 onward came from a second, independent code review by
+**GLM-5.3-Flash** on 2026-09-20, which said it had reproduced each finding
+by executing the code. Each has now been reproduced or refuted here
+independently; the verdict line says which. Eleven hold. One does not.*
+
+## 24. The `[` and `]` channel keys were dead — FIXED
+
+**Status:** **fixed 2026-09-20.** Real and user-visible. **Reproduced**
+before fixing: a pilot set the channel to 4, pressed `]` then `[`, and the
+channel was still 4 both times.
+
+`app.py` bound `left_square_bracket` to `channel_down` and
+`right_square_bracket` to `channel_up`; neither action existed. The legend
+advertised them and `test_the_keys_are_all_in_the_legend` asserted the
+legend was complete -- so the suite verified the documentation of keys that
+did nothing.
+
+`action_channel_down`, `action_channel_up` and `_step_channel` now exist.
+Clamped at 1 and 16 rather than wrapped: wrapping from 16 to 1 on a key
+held a moment too long puts a selection on a channel the user did not
+choose and cannot see they are on. Three tests, including one that the
+keys send no MIDI.
+
+## 25. Toggling a favourite off and on destroyed its annotations — FIXED
+
+**Status:** **fixed 2026-09-20.** The one finding on either list that lost
+data. **Reproduced**: a favourite with `rating=4, tags='a, b',
+note='hello'` came back as `0, '', ''` -- and, unremarked by the review,
+with its `added` date reset too, which `add`'s own docstring calls "the one
+ordering the user cannot reconstruct".
+
+**It was in all four sibling projects, and live in rxved.** The review
+noted that `Favorites.toggle` "exists and is never called" -- true here,
+but rxved *does* call it, and its implementation is identical. kwsed and
+x5ded inline the same remove-then-add. So the fix went to all four.
+
+**What it does now**, per the decision taken on it: un-favouriting clears
+an `active` flag and keeps the row. Re-favouriting restores the rating,
+tags, note and original date exactly. Schema version 2; the migration adds
+the column with `DEFAULT 1`, so every row in an existing database stays a
+live favourite. `remove` no longer deletes; `forget` does, and nothing a
+keystroke can reach calls it. `dormant()` lists what is being held.
+
+## 26. `DemoDevice.select` dropped the channel — FIXED
+
+**Status:** **fixed 2026-09-20.** Real, and the test named for it was the
+reason it survived.
+
+`demo.select` accepted `channel` and stored nothing, while
+`test_selection_goes_out_on_the_chosen_channel` asserted only
+`len(selected_log) == 1`. The demo would have passed had the app sent every
+selection to channel 1 -- the project's own documented failure mode, two
+things sharing a misreading and agreeing perfectly.
+
+`selected_log` now holds `(preset, channel)` and the test asserts the
+channel is the one that was set.
+
+## 27. The config module's port and device-ID memory was dead code — FIXED
+
+**Status:** **fixed 2026-09-20.** Real. **Verified**: the only references
+to `save_last_port`, `load_last_port`, `save_device_id` and
+`load_device_id` anywhere outside the tests were the four names in
+`config.__all__`.
+
+`main()` now saves the port and device ID that worked, and tries the
+remembered port before the 20-port sweep. A remembered port that has gone
+is not an error -- it falls through to the sweep. This is the U6MIDI-Pro
+case the docs dwell on: no hint matches that port's name, so without it
+every launch meant `--port` or the full sweep.
+
+`ProteusBridge` now carries `port` and `recv_port`, because `description`
+is `"out -> in"` for display and is not something `open()` accepts back --
+saving it would have produced a config that never matched.
+
+The latent oddity the review spotted in passing is fixed too:
+`load_device_id` accepted TOML `device_id = true` as device 1, since
+`isinstance(True, int)`. Device 1 is a real device, and this instrument
+answers a wrong device ID with silence -- the failure mode that hides
+behind every other. It is now rejected, as is anything outside 0-127.
+
+## 28. `Favorites.refresh_names` was never called — FIXED
+
+**Status:** **fixed 2026-09-20.** Real. **Verified by grep**: no caller
+outside the tests.
+
+`_adopt_names` updated the catalog and left the favourites table alone, so
+a favourite made before any names were known kept its blank label -- in the
+favourites view and in `name` ordering -- even after the very bank read
+that supplied the real name. It now refreshes, on the main thread after the
+catalog is updated, because the store is SQLite and a worker must not touch
+it. Dormant rows are relabelled too, so a restored favourite does not come
+back labelled "--".
+
+## 29. Search matches a stale printed name and shows the live one
+
+**Status:** **rejected. Does not reproduce.**
+
+The claim: with a printed name `Real Name` and a live name
+`Renamed By Unit`, searching "real" returns the row *showing*
+`Renamed By Unit` -- matched on text it does not display.
+
+Executed. `search("real")` returns `('lead', 5, 'Real Name')`;
+`search("renamed")` returns `('lead', 5, 'Renamed By Unit')`. Both show
+what they matched.
+
+The reason is in the method the finding quotes. The second loop replaces a
+hit only `if wanted in name.lower()` -- that is, only when the *live* name
+also matches the needle, in which case showing the live name is correct and
+not a defect. The two loops key on the same `BANK:NNN` string, so there is
+one row per slot and no duplicate either.
+
+What was genuinely missing there is items 12 and 23, now fixed: which of
+the two a hit came from, and whether they disagree.
+
+## 30. `favorites._split` crashed on a bare bank id — FIXED
+
+**Status:** **fixed 2026-09-20.** Real and latent. **Reproduced**:
+`_split("XLEAD2-1")` raised `ValueError: invalid literal for int() with
+base 10: ''`.
+
+The docstring is the contract and it documented two forms; a third input
+produced a message about `int()`. `__contains__` inherits it, so the
+mistake being reported is a membership test against a whole bank, which
+that message says nothing about. It now names the problem and shows the
+shape it wanted.
+
+## 31. The import tool silently imported nameless favourites — FIXED
+
+**Status:** **fixed 2026-09-20.** Real. **Reproduced**: a line of `PC  5`
+with nothing after it parses to `('XLEAD2-1', 5, '', False)`.
+
+A blank label in the browser is indistinguishable from a deliberately
+anonymous favourite, and a truncated scan looks exactly like this. Such
+rows are now tagged `check-scan` -- the tag the tool already uses for
+entries it is unsure of -- and counted in the summary.
+
+## 32. A favourites database from a newer p2ked gave a traceback — FIXED
+
+**Status:** **fixed 2026-09-20.** Real.
+
+`_migrate` refuses a newer schema, which is the right refusal, but
+`main()` constructed the store outside any `try`, so the user saw a
+traceback where every other startup failure produces `error: ...`. Now it
+exits the same way.
+
+## 33. The all-favourites view ran one SQL query per displayed row — FIXED
+
+**Status:** **fixed 2026-09-20.** Real. Trivial at this scale, and the fix
+is smaller than the finding.
+
+`_fill_presets` called `self._favorite_keys(entry.bank_id)` inside the row
+loop, redrawn on every toggle. `Favorites.keys()` exists for exactly this,
+says so in its docstring, and was never called. One query now builds a
+bank-to-numbers map before the loop.
+
+## 34. Worst-case startup stall: ~12 s of silence against a half-answering unit
+
+**Status:** open, bounded, **not acted on** -- and partly mitigated by
+item 27.
+
+The sweep of 20 ROMs at 0.6 s still runs before the first paint, so a unit
+that answers identity and then goes quiet still costs up to 12 s with no
+per-ROM progress. What item 27 changes is the *other* stall in front of it:
+the port sweep is now skipped when a remembered port answers.
+
+Shortening the per-ROM timeout wants the same hardware session that
+measures `SEND_GAP` (item 4). Guessing it shorter without measuring is how
+a ROM that is fitted stops being listed.
+
+**Blocked on:** a measurement.
+
+## 35. App-level Enter could select a preset from an unfocused pane — FIXED
+
+**Status:** **fixed 2026-09-20.** Real, and audible. **Reproduced**: with
+`app.screen.set_focus(None)`, one press of Enter selected a preset -- the
+unit plays, from a pane the user is not looking at.
+
+The comment at the bindings correctly explained that a *focused* DataTable
+consumes Enter, which is why selection normally arrives as RowSelected. It
+did not follow that through to the case where nothing is focused, where the
+App-level binding fires and `action_select_preset` acts on the preset
+table's remembered cursor.
+
+The cursor-silence rule is about movement; this is the same surprise one
+step removed. Enter now means "the row I am looking at": it returns early
+unless the preset table has focus.

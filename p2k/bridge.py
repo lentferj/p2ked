@@ -192,6 +192,10 @@ class ProteusBridge:
         self._out = midi_out
         self.device_id = m.device_byte(device_id)
         self.description = description
+        #: The port names this was opened on, or None when it was not
+        #: opened by :meth:`open` -- a test double, for instance.
+        self.port: Optional[str] = None
+        self.recv_port: Optional[str] = None
         self.timeout = timeout
         self.config: Optional[m.HardwareConfig] = None
         self.selected: Optional[roms.Preset] = None
@@ -215,8 +219,13 @@ class ProteusBridge:
         midi_in = _client("in")
         midi_out.open_port(outs.index(port))
         midi_in.open_port(ins.index(listen))
-        return cls(midi_in, midi_out, device_id=device_id,
-                   description=f"{port} -> {listen}", timeout=timeout)
+        bridge = cls(midi_in, midi_out, device_id=device_id,
+                     description=f"{port} -> {listen}", timeout=timeout)
+        # The names as opened, kept apart from `description`, which is
+        # "out -> in" for display and is not something open() accepts back.
+        bridge.port = port
+        bridge.recv_port = listen
+        return bridge
 
     def close(self) -> None:
         for client in (self._in, self._out):

@@ -128,6 +128,10 @@ class TestChannel:
             for _ in range(6):
                 await pilot.pause()
             assert len(app.device.selected_log) == 1
+            _entry, channel = app.device.selected_log[0]
+            assert channel == 9, (
+                "the selection went out on the wrong channel; the test used "
+                "to assert only that something was sent")
 
 
 class TestChannelScreen:

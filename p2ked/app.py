@@ -583,6 +583,15 @@ class P2kedApp(App):
         self._current_bank = bank_id
         self._current = self._visible(bank_id)
         marked = self._favorite_keys(bank_id)
+        # The all-favourites view spans every bank, so asking the store per
+        # row was one SQL query per line, redrawn on every toggle. One query
+        # for the whole set instead -- which is what Favorites.keys exists
+        # for, and says so in its docstring.
+        every_bank: dict = {}
+        if self.view_mode == VIEW_ALL_FAVOURITES and self.favorites is not None:
+            for key in self.favorites.keys():
+                bank, _, number = key.rpartition(":")
+                every_bank.setdefault(bank, set()).add(int(number))
         column = table.columns.get("pc")
         if column is not None:
             from rich.text import Text
@@ -602,7 +611,7 @@ class P2kedApp(App):
                 else:
                     shown = name
                 across = self.view_mode == VIEW_ALL_FAVOURITES
-                fav_here = (self._favorite_keys(entry.bank_id) if across
+                fav_here = (every_bank.get(entry.bank_id, set()) if across
                             else marked)
                 star = ("[b]♥[/b]" if entry.program_change in fav_here else "")
                 number = (f"{roms.bank(entry.bank_id).label} "
@@ -631,12 +640,14 @@ class P2kedApp(App):
         if entry is None:
             return
         name = self.catalog.display_name(entry.bank_id, entry.program_change)
-        if self.favorites.get(entry.bank_id, entry.program_change) is not None:
-            self.favorites.remove(entry.bank_id, entry.program_change)
-            self.notify_status(f"unfavourited {name}")
-        else:
-            self.favorites.add(entry.bank_id, entry.program_change, name=name)
-            self.notify_status(f"favourited {name}")
+        # Favorites.toggle, not remove-then-add: un-favouriting keeps the
+        # row so that a rating, tags, a note and the original date survive
+        # being toggled off and on. Doing it here as a delete followed by a
+        # fresh add destroyed all four, and `f` is one keystroke.
+        now = self.favorites.toggle(entry.bank_id, entry.program_change,
+                                    name=name)
+        self.notify_status(
+            f"{'favourited' if now else 'unfavourited'} {name}")
         self._refill_bank_count(entry.bank_id)
         self._refill_keeping_place()
 
@@ -833,6 +844,15 @@ class P2kedApp(App):
         return None
 
     def action_select_preset(self) -> None:
+        # A focused DataTable consumes Enter itself, so selection normally
+        # arrives as RowSelected and this App-level binding never fires.
+        # When *neither* table has focus it does fire, and without this
+        # guard it would play whatever row the unfocused preset pane
+        # happens to remember -- an audible action from a pane the user is
+        # not looking at. Enter means "the row I am looking at".
+        table = self.query_one("#preset-table")
+        if not table.has_focus:
+            return
         entry = self._cursor_preset()
         if entry is None:
             return
@@ -889,11 +909,42 @@ class P2kedApp(App):
             self.catalog.set_live_name(bank_id, program_change, name)
         differing = sum(1 for pc in names
                         if self.catalog.differs(bank_id, pc))
+        # A favourite made before any names were known carries a blank
+        # label, and shows as one in the favourites view and in `name`
+        # ordering. This is the read that supplies the real name, so it is
+        # the moment to adopt it. Main thread, after the catalog is
+        # updated -- the favourites store is SQLite and a worker must not
+        # touch it.
+        if self.favorites is not None:
+            self.favorites.refresh_names(
+                lambda bank, number: self.catalog.live_name(bank, number))
         if bank_id == self._current_bank:
             self._fill_presets(bank_id)
         self.notify_status(
             f"read {len(names)} names from {bank_id}"
             + (f"; {differing} differ from the catalog" if differing else ""))
+
+    def action_channel_down(self) -> None:
+        """Previous MIDI channel. Sends nothing by itself."""
+        self._step_channel(-1)
+
+    def action_channel_up(self) -> None:
+        """Next MIDI channel. Sends nothing by itself."""
+        self._step_channel(1)
+
+    def _step_channel(self, by: int) -> None:
+        """Move one channel, clamped. 0-15 internally, 1-16 on screen.
+
+        Clamped rather than wrapped: wrapping from 16 to 1 on a key held
+        down a moment too long is how a selection ends up on a channel the
+        user did not choose and cannot see they are on.
+        """
+        channel = min(15, max(0, self.channel + by))
+        if channel == self.channel:
+            return
+        self.channel = channel
+        self._remember_channel(channel)
+        self.notify_status(f"channel {channel + 1}")
 
     def action_channels(self) -> None:
         """Show every MIDI channel. Reads one message; makes no sound."""
@@ -935,15 +986,21 @@ class P2kedApp(App):
                 self.notify_status(f"nothing matching {text!r}")
                 return
             lines = [f"{len(hits)} match(es) for {text!r}", ""]
-            for bank_id, program_change, name in hits[:400]:
+            marked = 0
+            for bank_id, program_change, name, differs in hits[:400]:
                 try:
                     entry = roms.preset(bank_id, program_change)
                 except LookupError:
                     continue
+                marked += bool(differs)
                 lines.append(
-                    f"{bank_id:<12} {program_change:03d}  {name:<18} "
+                    f"{bank_id:<12} {program_change:03d}  "
+                    f"{name + (' *' if differs else ''):<20} "
                     f"PC {entry.program_change:>3}  LSB {entry.lsb:>2}  "
                     f"MSB {entry.msb:>3}")
+            if marked:
+                lines += ["", f"* {marked} of these differ from the printed "
+                              f"catalog: the unit's name is shown."]
             if len(hits) > 400:
                 lines.append(f"... and {len(hits) - 400} more")
             self.push_screen(ReportScreen("Search", "\n".join(lines)))
@@ -1088,6 +1145,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.channel is not None and not 1 <= args.channel <= 16:
         sys.exit("error: --channel is 1-16")
 
+    from p2k import config as cfg
+
+    config_path = getattr(args, "config", None) or cfg.DEFAULT_PATH
+
     if args.demo:
         from p2ked.demo import DemoDevice
 
@@ -1114,15 +1175,45 @@ def main(argv: Optional[List[str]] = None) -> int:
                         print("  no identity reply; using broadcast",
                               file=sys.stderr)
             else:
-                device = b.ProteusBridge.autodetect(
-                    on_try=lambda n: print(f"  probing {n}...",
-                                           file=sys.stderr))
+                # The port that answered last time, before the sweep. The
+                # unit this was written for sits on a port whose name no
+                # hint matches, so without this the user passes --port on
+                # every launch or waits through 20 probes. A remembered
+                # port that has gone (different hub, different order) is
+                # not an error; it falls through to the sweep.
+                device = None
+                remembered = cfg.load_last_port(config_path)
+                if remembered:
+                    try:
+                        device = b.ProteusBridge.open(
+                            remembered,
+                            recv_port=cfg.load_last_recv_port(config_path),
+                            device_id=msg.BROADCAST_DEVICE)
+                        if device.learn_device_id(timeout=0.8) is None:
+                            device.close()
+                            device = None
+                        else:
+                            print(f"  {remembered} (remembered)",
+                                  file=sys.stderr)
+                    except Exception:
+                        device = None
+                if device is None:
+                    device = b.ProteusBridge.autodetect(
+                        on_try=lambda n: print(f"  probing {n}...",
+                                               file=sys.stderr))
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
-    from p2k import config as cfg
-
-    config_path = getattr(args, "config", None) or cfg.DEFAULT_PATH
+        # Remember what worked, so the next run skips the sweep.
+        try:
+            if getattr(device, "port", None):
+                cfg.save_last_port(device.port, config_path)
+            if getattr(device, "recv_port", None):
+                cfg.save_last_recv_port(device.recv_port, config_path)
+            if getattr(device, "device_id", None) is not None:
+                cfg.save_device_id(int(device.device_id), config_path)
+        except OSError:
+            pass          # a read-only directory must not stop the browser
     # The channel given on the command line wins; otherwise the one used
     # last time, so `c` does not have to be pressed again every run.
     channel = ((args.channel - 1) if args.channel is not None
@@ -1131,7 +1222,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     catalog = cat.load(args.catalog)
     from p2k.favorites import Favorites
 
-    store = Favorites(args.favorites)
+    try:
+        store = Favorites(args.favorites)
+    except Exception as exc:
+        # _migrate refuses a database written by a newer p2ked, which is the
+        # right refusal; every other startup failure in main() leaves by
+        # sys.exit, and this one used to print a traceback instead.
+        raise SystemExit(f"error: {exc}")
 
     # Ask the unit which ROMs it has before the interface starts. This is
     # MIDI, so it does not belong on a Textual worker or in on_mount; doing

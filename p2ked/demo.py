@@ -90,7 +90,9 @@ class DemoDevice:
         self.simms = tuple(simms)
         #: What the fake is "playing", so selection is not a no-op.
         self.selected: Optional[roms.Preset] = None
-        self.selected_log: List[roms.Preset] = []
+        #: (preset, channel) for every selection, in order.
+        self.selected_log: List[Tuple[roms.Preset, int]] = []
+        self.selected_channel: int = 0
         #: Every frame the fake was handed, for tests that care about the
         #: wire rather than the result.
         self.received: List[bytes] = []
@@ -328,7 +330,14 @@ class DemoDevice:
         return out
 
     def select(self, entry: roms.Preset, *, channel: int = 0) -> None:
-        """Select a preset. **This changes what the unit is playing.**"""
+        """Select a preset. **This changes what the unit is playing.**
+
+        The channel is recorded, not ignored. The real bridge puts it in
+        the status byte (``0xB0 | channel``); a demo that dropped it let a
+        test named for the channel pass while asserting only that
+        *something* was sent.
+        """
         self._tick()
         self.selected = entry
-        self.selected_log.append(entry)
+        self.selected_channel = channel
+        self.selected_log.append((entry, channel))

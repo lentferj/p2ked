@@ -109,7 +109,7 @@ def main(argv=None):
         return 0
 
     path = args.favorites or fav.default_path()
-    added = skipped = removed = 0
+    added = skipped = removed = nameless = 0
     with fav.Favorites(path) as store:
         if args.replace:
             for bank in banks:
@@ -123,12 +123,23 @@ def main(argv=None):
             tags = args.tag
             if uncertain:
                 tags = ",".join(t for t in (tags, "check-scan") if t)
+            if not name:
+                # A PC line with nothing after the number. It parses, and a
+                # blank label is indistinguishable in the browser from a
+                # deliberately anonymous favourite -- so it is tagged and
+                # counted rather than imported quietly. A truncated scan
+                # looks exactly like this.
+                nameless += 1
+                tags = ",".join(t for t in (tags, "check-scan") if t)
             store.add(bank, pc, name=name, tags=tags)
             added += 1
         total = len(store)
     if removed:
         print(f"removed {removed} existing favourite(s) in those banks")
     print(f"added {added}, already present {skipped}")
+    if nameless:
+        print(f"{nameless} had no name on their line and are tagged "
+              f"check-scan; a truncated scan looks like this")
     print(f"{total} favourite(s) now in {path}")
     return 0
 

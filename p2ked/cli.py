@@ -99,10 +99,14 @@ def _cmd_find(_device, args) -> None:
             entry = roms.preset(bank_id, program_change)
         except LookupError:
             continue
-        rows.append([bank_id, f"{program_change:03d}", name,
+        rows.append([bank_id, f"{program_change:03d}",
+                     name + (" *" if differs else ""),
                      str(entry.msb), str(entry.lsb),
                      str(entry.program_change)])
     print(_table(rows, ["bank", "#", "name", "MSB", "LSB", "PC"]))
+    if any(hit[3] for hit in hits):
+        print("\n* the unit and the printed catalog disagree about this "
+              "slot; the unit's name is shown")
 
 
 def _cmd_resolve(_device, args) -> None:
