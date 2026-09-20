@@ -36,6 +36,7 @@ and no "this will play the instrument" warning anywhere in p2ked.
 from __future__ import annotations
 
 import json
+import sys
 import os
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -187,10 +188,23 @@ def load(path: Optional[str] = None) -> Catalog:
     except (OSError, json.JSONDecodeError):
         return empty()
     entries = []
+    skipped = 0
     for bank_id, rows in payload.get("banks", {}).items():
         for row in rows:
-            entries.append(Entry(bank_id=bank_id,
-                                 program_change=int(row["pc"]),
-                                 name=row["name"]))
+            # One bad row must not cost the whole catalog. A missing one is
+            # already normal here -- the program runs on numbers alone and
+            # a connected unit can supply every name -- so a corrupt one
+            # taking the program down with it is the odd behaviour, not
+            # skipping it.
+            try:
+                entries.append(Entry(bank_id=bank_id,
+                                     program_change=int(row["pc"]),
+                                     name=row["name"]))
+            except (KeyError, TypeError, ValueError):
+                skipped += 1
+    if skipped:
+        print(f"warning: {target} has {skipped} unreadable row(s), skipped; "
+              f"regenerate it with tools/extract_catalog.py",
+              file=sys.stderr)
     return Catalog(entries, source=payload.get("source", ""),
                    generated=payload.get("generated", ""))

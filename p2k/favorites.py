@@ -403,11 +403,16 @@ class Favorites:
 
     def search(self, needle: str) -> List[Favorite]:
         """Favourites whose name, tags or note contain ``needle``."""
-        pattern = f"%{needle}%"
+        # % and _ are LIKE wildcards. Without escaping them a search for
+        # "%" matches every favourite and one for "_" matches every name of
+        # any length -- silently, as a result that looks like a real hit.
+        escaped = (needle.replace("\\", "\\\\")
+                         .replace("%", "\\%").replace("_", "\\_"))
+        pattern = f"%{escaped}%"
         return [
             _to_favorite(row) for row in self._db.execute(
                 "SELECT * FROM favorites WHERE active = 1 AND ("
-                "name LIKE ? OR tags LIKE ? OR note LIKE ?) "
+                "name LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\') "
                 "ORDER BY bank_id, number",
                 (pattern, pattern, pattern),
             )

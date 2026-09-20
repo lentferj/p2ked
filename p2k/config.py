@@ -64,6 +64,38 @@ def _read(path: str) -> Tuple[dict, str]:
         return {}, "unreadable"
 
 
+_TOML_ESCAPES = {
+    "\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r",
+    "\t": "\\t", "\b": "\\b", "\f": "\\f",
+}
+
+
+def _toml_string(value: str) -> str:
+    """One TOML basic string, escaped.
+
+    Writing a value straight between quotes is fine until it contains one.
+    A MIDI port name is an arbitrary string -- ALSA client names are
+    whatever the device reports -- so a quote in one produces a file that
+    is not TOML. ``_update`` then refuses to overwrite a file it cannot
+    parse, which is the right refusal and also means the cache never heals:
+    every later run reads nothing and writes nothing until somebody deletes
+    it by hand.
+
+    TOML basic strings interpret the usual backslash escapes as well, so a
+    literal tab or newline is written as an escape rather than embedded.
+    """
+    out = ['"']
+    for char in value:
+        if char in _TOML_ESCAPES:
+            out.append(_TOML_ESCAPES[char])
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            out.append("\\u%04X" % ord(char))
+        else:
+            out.append(char)
+    out.append('"')
+    return "".join(out)
+
+
 def _update(path: str, **changes) -> None:
     global _warned
     data, status = _read(path)
@@ -80,7 +112,7 @@ def _update(path: str, **changes) -> None:
         if isinstance(value, bool):
             lines.append(f"{key} = {'true' if value else 'false'}")
         elif isinstance(value, str):
-            lines.append(f'{key} = "{value}"')
+            lines.append(f"{key} = {_toml_string(value)}")
         else:
             lines.append(f"{key} = {value}")
     try:

@@ -576,6 +576,11 @@ class P2kedApp(App):
         if bank_id in self._auto_read or not self._is_user_bank(bank_id):
             return
         self._auto_read.add(bank_id)
+        # Set on the main thread, not in the worker. A
+        # @work(thread=True) method returns at once and would set the
+        # flag on its own thread, so two quick presses both passed the
+        # check above before either worker ran -- two of whatever the
+        # worker does, from one intent.
         self._read_worker(bank_id)
 
     def _fill_presets(self, bank_id: str) -> None:
@@ -881,12 +886,16 @@ class P2kedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
+        # Set on the main thread, not in the worker. A
+        # @work(thread=True) method returns at once and would set the
+        # flag on its own thread, so two quick presses both passed the
+        # check above before either worker ran -- two of whatever the
+        # worker does, from one intent.
         self._read_worker(self._current_bank)
 
     @work(thread=True)
     def _read_worker(self, bank_id: str) -> None:
         """**MIDI only** -- the catalog is updated on the main thread."""
-        self._busy = True
         try:
             def progress(done: int, total: int) -> None:
                 self.call_from_thread(
@@ -951,12 +960,16 @@ class P2kedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
+        # Set on the main thread, not in the worker. A
+        # @work(thread=True) method returns at once and would set the
+        # flag on its own thread, so two quick presses both passed the
+        # check above before either worker ran -- two of whatever the
+        # worker does, from one intent.
         self._channels_worker()
 
     @work(thread=True)
     def _channels_worker(self) -> None:
         """**MIDI only** -- the screen is built on the main thread."""
-        self._busy = True
         try:
             with self._lock:
                 dump = self.device.read_setup()

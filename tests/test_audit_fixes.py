@@ -27,6 +27,7 @@ import pytest
 from p2k import catalog as cat
 from p2k import config
 from p2k import favorites as fav
+from p2k.favorites import Favorites
 from p2ked.app import P2kedApp
 from p2ked.demo import DemoDevice
 
@@ -253,3 +254,63 @@ class TestARememberedPort:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write("device_id = 999\n")
         assert config.load_device_id(path) is None
+
+
+class TestAPortNameCannotPoisonTheConfig:
+    """A quote in a port name made the file unparsable, and it never healed.
+
+    ALSA client names are arbitrary strings, so this is reachable. `_update`
+    refuses to overwrite a file it cannot parse -- the right refusal, and
+    also why the cache stayed broken until somebody deleted it by hand.
+    Found by an audit of the sibling x5ded, where nothing was escaped at
+    all; here nothing was escaped either.
+    """
+
+    def test_a_quoted_port_name_round_trips(self, tmp_path):
+        path = str(tmp_path / "config.toml")
+        nasty = 'Odd "quoted"\tport\\with slash'
+        config.save_last_port(nasty, path)
+        assert config.load_last_port(path) == nasty
+
+    def test_the_cache_still_heals(self, tmp_path):
+        path = str(tmp_path / "config.toml")
+        config.save_last_port('has a " in it', path)
+        config.save_last_port('a sane port', path)
+        assert config.load_last_port(path) == "a sane port"
+
+
+class TestSearchWildcardsAreLiteral:
+    """% and _ are LIKE wildcards, and were not escaped.
+
+    A search for "%" matched every favourite and one for "_" matched every
+    name of any length -- silently, as a result that looks like a real hit.
+    """
+
+    def test_a_percent_matches_only_a_percent(self, tmp_path):
+        with Favorites(str(tmp_path / "f.db")) as store:
+            store.add("XLEAD2-1", 1, name="Invented One")
+            store.add("XLEAD2-1", 2, name="Ten % Off")
+            assert [f.number for f in store.search("%")] == [2]
+
+    def test_an_underscore_matches_only_an_underscore(self, tmp_path):
+        with Favorites(str(tmp_path / "f.db")) as store:
+            store.add("XLEAD2-1", 1, name="Invented One")
+            store.add("XLEAD2-1", 2, name="under_score")
+            assert [f.number for f in store.search("_")] == [2]
+
+
+class TestOneBadCatalogRowDoesNotCostTheOthers:
+    """The convention here is "degrade, don't crash"; this path did not."""
+
+    def test_the_good_rows_survive(self, tmp_path):
+        import json
+
+        from p2k.catalog import load as _load
+
+        path = str(tmp_path / "cat.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"banks": {"XLEAD2-1": [
+                {"pc": "not a number", "name": "Bad"},
+                {"pc": 1, "name": "Invented"},
+            ]}}, handle)
+        assert len(_load(path)) == 1

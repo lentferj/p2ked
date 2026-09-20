@@ -53,7 +53,9 @@ def parse(path):
     """``[(bank_id, pc, name, uncertain)]`` from the listing."""
     out = []
     bank = None
-    for lineno, line in enumerate(open(path, encoding="utf-8"), 1):
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    for lineno, line in enumerate(lines, 1):
         found = BANK.search(line)
         if found:
             bank = found.group(1)
