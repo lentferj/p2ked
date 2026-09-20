@@ -314,3 +314,55 @@ class TestOneBadCatalogRowDoesNotCostTheOthers:
                 {"pc": 1, "name": "Invented"},
             ]}}, handle)
         assert len(_load(path)) == 1
+
+
+class TestABoolIsNotANumber:
+    """`isinstance(True, int)` is True, and every range check passes for
+    it. A hand-edited `channel = true` came back as `True`, and
+    `0xC0 | True` is `0xC1` -- MIDI channel 2 when channel 1 was asked
+    for. A wrong channel is not an error anywhere: the instrument plays
+    nothing, or something else does.
+
+    The device-ID guard was written first and this one was missed, one
+    function away in the same file, in all seven projects. That is the
+    reason this test walks *every* loader rather than naming two.
+    """
+
+    def _loaders(self):
+        import inspect
+
+        import importlib
+
+        module = importlib.import_module("p2k.config")
+        for name, fn in vars(module).items():
+            if not name.startswith("load_") or not callable(fn):
+                continue
+            hints = getattr(fn, "__annotations__", {})
+            if "int" in str(hints.get("return", "")):
+                yield name, fn
+
+    def test_there_are_numeric_loaders_to_check(self):
+        assert list(self._loaders()), "the search matched nothing"
+
+    def test_no_numeric_loader_accepts_true(self, tmp_path):
+        offenders = []
+        for name, fn in self._loaders():
+            key = name[len("load_"):]
+            path = str(tmp_path / f"{key}.toml")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(f"{key} = true\n")
+            if fn(path) is not None:
+                offenders.append(name)
+        assert not offenders, (
+            f"{offenders} accept a TOML boolean as a number")
+
+    def test_no_numeric_loader_accepts_an_absurd_value(self, tmp_path):
+        offenders = []
+        for name, fn in self._loaders():
+            key = name[len("load_"):]
+            path = str(tmp_path / f"{key}.toml")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(f"{key} = 9999\n")
+            if fn(path) is not None:
+                offenders.append(name)
+        assert not offenders, f"{offenders} accept an out-of-range number"

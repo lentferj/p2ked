@@ -125,9 +125,19 @@ def _update(path: str, **changes) -> None:
 
 
 def load_channel(path: str = DEFAULT_PATH) -> Optional[int]:
-    """The channel last sent on, zero-based, or None."""
+    """The channel last sent on, zero-based, or None.
+
+    The bool check is not decoration. `isinstance(True, int)` is True and
+    `0 <= True <= 15` is true, so a hand-edited ``channel = true`` used to
+    come back as ``True`` and pass every range check downstream -- and
+    then `0xC0 | True` is `0xC1`, which is MIDI **channel 2**. A wrong
+    channel is not an error anywhere: the instrument simply plays nothing,
+    or something else does.
+    """
     value = _read(path)[0].get("channel")
-    return value if isinstance(value, int) and 0 <= value <= 15 else None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 0 <= value <= 15 else None
 
 
 def save_channel(channel: int, path: str = DEFAULT_PATH) -> None:
@@ -136,7 +146,7 @@ def save_channel(channel: int, path: str = DEFAULT_PATH) -> None:
 
 def load_last_port(path: str = DEFAULT_PATH) -> Optional[str]:
     value = _read(path)[0].get("port")
-    return value if isinstance(value, str) else None
+    return value if isinstance(value, str) and value else None
 
 
 def save_last_port(port: str, path: str = DEFAULT_PATH) -> None:
