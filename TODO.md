@@ -901,45 +901,100 @@ now exists and drives every command through `main()`, so the argument parser,
 the dispatch table and the offline/device split are all under test;
 `p2ked/cli.py` is at 78%.
 
-## 41. `(not installed)` is not returned by every ROM — OPEN, noted not fixed
+## 41. `(not installed)` is not returned by every ROM — CHARACTERISED 2026-10-02
 
-**Status:** open, and nothing in p2ked depends on it. Recorded 2026-10-02
-because it contradicts something RESOLUTION_NOTES §7 established from one
-sentinel, and a single observation generalised into a rule is exactly the
-kind of thing this file exists to stop.
+**Status:** characterised, and **closed for every use p2ked makes of it**.
+What remains is one unanswered question about the hardware, recorded rather
+than resolved, because answering it would take the front panel.
 
-`(not installed)` is load-bearing twice. `read_bank_names` drops absent slots
+`(not installed)` is load-bearing twice: `read_bank_names` drops absent slots
 by it, and `installed_roms` turns "is this ROM fitted?" from a timeout into
 an answer. §7 found it on X-Lead v2 and reasoned from there that a unit
 answers a request for a preset it does not have.
 
-**Three of the four fitted ROMs agree. Composer does not.** Measured on
-2026-10-02:
+**Three of the four fitted ROMs agree. Composer does not.**
 
-| ROM | last named preset | one past the end |
-|---|---|---|
-| X-Lead v2 | #639 `bts:Magic Air` | `(not installed)` |
-| Techno Synth | #511 `   :TemplateV2.0` | `(not installed)` |
-| Beat Garden | #511 `   :TemplateV1.0` | `(not installed)` |
-| **Composer** | #1022 `brs:SforzadoEnsb` | **`   :default`** |
+### What Composer actually does
 
-Past #1022 the Composer ROM answers `   :default` indefinitely, checked
-through #1032. It returns the sentinel for nothing.
+Asked for a preset it does not have, Composer returns `   :default` and
+keeps returning it. Not for a while -- for **every representable preset
+number**:
 
-**Why nothing is broken.** p2ked only ever asks about slots its own table
-says exist, and `roms_from_config` asks the Configuration response rather
-than probing names. Both work. The finding is a **constraint on future
-work**, not a defect: anything that extends a ROM's range at runtime — which
-is what item 5 still contemplates — must not assume the unit will say so.
+```
+COMPOSER  #1022  'brs:SforzadoEnsb'      the last real preset
+          #1023  '   :default'          the empty slot (TODO 5)
+          #1024  '   :default'
+          #2048  '   :default'
+          #8192  '   :default'
+          #16382 '   :default'          the largest number but one
+```
 
-**Not investigated, on purpose.** Whether Composer really holds more than
-1024 presets, or whether the unit clamps within-bank requests to empty slots.
-§7 records that the published patch lists are sometimes wrong about extent,
-so 1024 is not beyond suspicion — but a guess would be a guess, and nothing
-depends on it. See RESOLUTION_NOTES §11.
+There is no point at which it admits the preset does not exist. **A name
+request cannot discover Composer's extent**, and by extension no amount of
+probing would tell p2ked where that ROM ends.
 
-**Blocked on:** a person who wants Composer's real extent. It takes the front
-panel, or an off-unit dump.
+(The other three ROMs are exact and deterministic -- 6 repeats of each
+boundary slot, 6/6 identical: X-Lead v2 #639 named then #640 absent,
+Techno Synth #511 named then #512 absent, Beat Garden likewise.)
+
+### Why this does not bite p2ked, measured rather than argued
+
+Two places depend on the sentinel. Both were checked against the unit:
+
+**1. `installed_roms` is sound.** It asks preset 0 of every ROM in the
+table and reads the reply. All **15 unfitted** ROMs answer `(not installed)`
+for preset 0 -- Extreme, Audity, Protozoa, Definitive B-3, Xtreme Lead,
+Sounds of the ZR, World Expedition, both Orchestrals, Pure Phatt,
+Ensoniq Project, Proteus 2500, Vintage Collection, Holy Grail and Advanced
+Orchestra -- and all 4 fitted ones answer with a name. The sentinel is
+reliable for the only question p2ked ever asks of it.
+
+**2. `read_bank_names` is safe.** It only ever asks about slots the table
+says exist, and drops anything that comes back absent. Composer's empty
+#1023 is kept and shown as "default", which is what the unit says and what
+the catalog says too.
+
+**3. And this is the finding that closes the last loophole:** Composer's
+behaviour is exactly why **runtime correction of the ROM table was dropped**
+in item 5 rather than deferred. A scheme that worked out each ROM's extent
+by probing would have worked for three ROMs and failed silently for
+Composer — reporting a ROM far larger than it is, which is the one failure
+mode item 5 existed to prevent.
+
+### The constraint, stated for whoever extends this
+
+The sentinel is a **courtesy, not a guarantee**. Anything that needs to know
+where a ROM ends must not assume the unit will say so. The ways p2ked gets
+that right today are the ROM table (from E-MU's files, checked against this
+unit for all four fitted ROMs) and the Configuration response's per-SIMM
+count. Neither is a name request.
+
+### Two smaller things found on the way
+
+- **Preset number 16383 is silent on every ROM tested**, fitted or not --
+  Techno Synth and Composer alike. It is the largest 14-bit value, so this
+  looks like a reserved edge in the firmware rather than an extent boundary.
+  Nothing in p2ked asks for it.
+- **The unit can go briefly unresponsive.** Once, immediately after a sweep
+  of 1664 names, three consecutive requests timed out at 2 s each and then
+  the unit recovered and answered normally. Six repeats of each boundary
+  slot afterwards were identical every time, so this is not boundary
+  nondeterminism. p2ked degrades safely -- `read_bank_names` catches the
+  timeout per slot and records no name for it -- and
+  `tools/measure_send_gap.py` is built to catch exactly this, which is why
+  it compares against a reference read instead of counting successes.
+
+### What is still open
+
+**Why** Composer differs, and **whether its true extent is 1024**. The
+catalog says 1024 names, the table says 1024 slots, the Configuration
+response says 1024, and the unit holds 1023 populated presets plus one
+empty slot -- three independent sources agreeing. The likeliest reading is
+that this ROM simply answers "empty" rather than "absent", but that is a
+hypothesis about firmware behaviour and is not recorded as a fact.
+
+Answering it properly needs the front panel, or a unit with a different
+Composer ROM revision. See RESOLUTION_NOTES §11.
 
 ## 42. `pytest-asyncio` was never a declared dependency — FIXED
 

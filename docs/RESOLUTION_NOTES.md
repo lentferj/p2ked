@@ -699,22 +699,54 @@ Expected, on the strength of §7: X-Lead v2 answers preset 639 and says
 | Beat Garden | #511 `   :TemplateV1.0` | `(not installed)` |
 | **Composer** | #1022 `brs:SforzadoEnsb` | **`   :default`** |
 
-Composer does not. It answers `(not installed)` for nothing: past #1022 it
-returns `   :default` indefinitely, checked through #1032.
+Composer does not, and pushing the probe further only makes it worse: it
+returns `   :default` for **every representable preset number** up to #16382,
+the largest but one. There is no point at which it admits the preset does not
+exist, so **a name request cannot discover this ROM's extent at all**.
 
-That is worth recording because `(not installed)` is load-bearing in two
-places — `read_bank_names` drops absent slots by it, and `installed_roms`
-turns "is this ROM fitted?" from a timeout into an answer. Both work here, but
-only because p2ked never asks about a slot its own table says does not exist.
-**The sentinel is a courtesy, not a guarantee.** Anyone who extends a ROM's
-range at runtime must not assume the unit will say so.
+The other three are exact and deterministic — six repeats of each boundary
+slot, six out of six identical every time.
 
-Not investigated further: whether the Composer ROM really holds more than
-1024 presets, or whether the unit simply clamps within-bank requests to empty
-slots. §7 already records that the published patch list for other ROMs is
-sometimes wrong about extent, so 1024 from the instrument-definition file is
-not beyond suspicion — but a guess here would be a guess, and nothing in
-p2ked depends on the answer.
+That matters because `(not installed)` is load-bearing in two places, so both
+were checked against the unit rather than reasoned about:
+
+- **`installed_roms` is sound.** It asks preset 0 of every ROM in the table.
+  All **15 unfitted** ROMs answer `(not installed)`; all four fitted ones
+  answer with a name. The sentinel is reliable for the only question p2ked
+  ever asks of it.
+- **`read_bank_names` is safe.** It only asks about slots the table says
+  exist, and drops what comes back absent.
+
+And it retroactively justifies a decision. Runtime correction of the ROM
+table was **dropped** rather than deferred in item 5, on the grounds that the
+counts already agree everywhere they can be checked. Composer's behaviour is
+the hard reason: a scheme that worked out each ROM's extent by probing would
+have worked for three ROMs and silently over-reported Composer — the exact
+failure item 5 existed to prevent.
+
+**The sentinel is a courtesy, not a guarantee.** The ROM table and the
+Configuration response's per-SIMM count are what p2ked actually relies on,
+and neither is a name request.
+
+### Two smaller things, found by looking
+
+**Preset number 16383 is silent on every ROM tested**, fitted or not. It is
+the largest 14-bit value, so this reads as a reserved edge in the firmware
+rather than an extent boundary. Nothing in p2ked asks for it.
+
+**The unit can go briefly unresponsive.** Once, right after a sweep of 1664
+names, three consecutive requests timed out at 2 s each; the unit then
+recovered and answered normally, and six repeats of every boundary slot
+afterwards were identical. So it is not boundary nondeterminism. p2ked
+degrades safely — `read_bank_names` catches the timeout per slot — and
+`tools/measure_send_gap.py` exists to catch exactly this, which is why it
+compares each read against a reference rather than counting successes.
+
+Not investigated: *why* Composer differs, and whether its true extent really
+is 1024. The catalog, the table and the Configuration response all say 1024,
+and the unit holds 1023 populated presets plus one empty slot. The likeliest
+reading is that this ROM answers "empty" rather than "absent", but that is a
+hypothesis about firmware behaviour and is not recorded as a fact.
 
 ### The startup sweep was asking twenty questions where one would do
 
@@ -745,6 +777,11 @@ itself.
 ### What this session did not settle
 
 - The other fifteen ROM rows. Unreachable without the boards.
+- **Why Composer answers `:default` where three other ROMs answer
+  `(not installed)`, and whether its true extent is 1024.** Three
+  independent sources agree on 1024 and the unit holds 1023 populated
+  presets plus one empty slot, so nothing is at stake — but the question
+  is about firmware behaviour and is not answered by guessing.
 - Whether a different unit, firmware or interface has the same 18 ms answer,
-  or returns the sentinel everywhere.
+  or returns the sentinel everywhere, or can go briefly unresponsive.
 - Writing. Still nothing was written, still out of scope.

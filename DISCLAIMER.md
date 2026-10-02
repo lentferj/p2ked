@@ -124,10 +124,17 @@ are a different claim from "this works".
   these appear on screen as "the printed list is wrong; the unit is right".
 - **`(not installed)` is not universal.** Three of the four fitted ROMs
   answer a request past their last preset with that name; **Composer does
-  not** — it returns `   :default` indefinitely (measured 2026-10-02).
-  p2ked is unaffected, because it only ever asks about slots its own table
-  says exist, but the sentinel is a courtesy and not a guarantee. See
-  TODO.md item 41.
+  not** — it returns `   :default` for every representable preset number up
+  to #16382, so its extent cannot be discovered by asking at all (measured
+  2026-10-02). p2ked is unaffected and this was checked rather than assumed:
+  all 15 unfitted ROMs do return the sentinel for preset 0, which is the only
+  question `installed_roms` asks of it, and `read_bank_names` only ever asks
+  about slots the table says exist. But the sentinel is a courtesy, not a
+  guarantee, and anything that needs to know where a ROM ends must use the
+  ROM table or the Configuration response instead. See TODO.md item 41.
+- **Preset number 16383 is silent on every ROM tested**, fitted or not. It
+  is the largest 14-bit value, so this reads as a reserved firmware edge
+  rather than an extent boundary. Nothing in p2ked asks for it.
 - **Everything else.** The list above is what is known to be uncertain, not
   the extent of the uncertainty.
 
