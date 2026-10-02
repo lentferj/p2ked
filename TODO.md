@@ -94,33 +94,121 @@ a success count cannot see.
 One unit, one firmware, one interface; none of this generalises. See
 RESOLUTION_NOTES §11.
 
-## 5. Preset counts are bank counts — PARTLY RESOLVED 2026-10-02
+## 5. Preset counts are bank counts — RESOLVED for the fitted ROMs, 2026-10-02
 
-**Status:** the worry does not apply to any ROM the unit has. The
-generalisation to the other fifteen rows is still open, and cannot be
-reached without the boards.
+**Status:** the policy is right, and it is now right *with evidence* rather
+than by argument. What remains is only the fifteen ROMs not fitted here,
+which cannot be reached without the boards.
 
-The table gives every ROM `banks * 128`, from instrument-definition files
-that describe banks rather than populated presets. A ROM whose last bank is
-partly empty will therefore show rows that name nothing. Deliberate: an
-over-long bank shows empty rows, a short one hides presets, and a hidden
-preset is not discoverable by the person looking for it.
+This item asked whether giving every ROM `banks * 128` -- taken from
+instrument-definition files that describe **banks**, not populated presets --
+overstates the ROM. It was defended on a trade-off: an over-long bank shows
+rows that name nothing, a short one *hides* presets, and a hidden preset is
+not discoverable by the person looking for it. That is now measured, at
+scale, on two whole ROMs.
 
-The unit reports its own per-SIMM count. On 2026-10-02, all four fitted ROMs
-and user memory agreed with `roms.py` exactly:
+### 1. The slot counts are exactly right
 
-| SIMM | p2ked `count` | unit reports |
-|---|---:|---:|
-| 4 Composer | 1024 | 1024 |
-| 14 X-Lead v2 | 640 | 640 |
-| 65 Techno Synth | 512 | 512 |
-| 67 Beat Garden | 512 | 512 |
-| user memory | 512 | 512 |
+Every preset of every fitted ROM was read off the unit and counted:
 
-**What remains:** the fifteen ROMs not fitted here, and the last-bank-partly-
-empty case, which none of the four happens to exhibit. Correcting the table
-at runtime from the Configuration response is still not done, and is still
-not obviously worth it now that the counts agree where they can be checked.
+| ROM | slots read | named | empty | absent | `roms.py` says | unit reports |
+|---|---:|---:|---:|---:|---:|---:|
+| Composer | 1024 | 1023 | 1 | 0 | 1024 | 1024 |
+| X-Lead v2 | 640 | 640 | 0 | 0 | 640 | 640 |
+| Techno Synth | 512 | 512 | 0 | 0 | 512 | 512 |
+| Beat Garden | 512 | 512 | 0 | 0 | 512 | 512 |
+| user memory | 512 | -- | -- | -- | 512 | 512 |
+
+Not one slot over, not one under, on any of the five. `banks * 128` is the
+right answer for every ROM this unit has, and the Configuration response
+agrees with the table on all of them.
+
+### 2. The partly-empty last bank is real -- and it is Composer
+
+The trade-off above was hypothetical. It is not: **COMPOSER-7 pc 127 is an
+empty slot.** The last preset of the last bank holds nothing.
+
+```
+COMPOSER  #1021  'brs:Section'
+          #1022  'brs:SforzadoEnsb'
+          #1023  '   :default'      <- empty slot
+          #1024  '   :default'      <- past the end: still :default
+```
+
+And the **catalog records it as `:default` too** -- the instrument-definition
+files say the same thing the unit says. So the table, the catalog and the
+unit agree on all three, and `read_bank_names` keeps the slot for exactly the
+reason its comment gives: "default" is what the unit says, and a blank row
+would leave the user wondering whether the read failed or the slot is
+genuinely empty.
+
+Note also that Composer is the ROM that **does not** answer `(not
+installed)` past its end -- TODO 41. The two findings are the same fact seen
+twice: this ROM answers `:default` rather than reporting absence, so its
+extent has to come from the table and the catalog, which is precisely the
+arrangement this item was worried about. It works.
+
+### 3. Fifty slots where the printed list is wrong and the unit is right
+
+Diffing Composer's 1024 names and X-Lead v2's 640 against the generated
+catalog:
+
+| ROM | differences |
+|---|---:|
+| X-Lead v2 | 11 |
+| Composer | 49 |
+
+**X-Lead v2's 11 reproduce RESOLUTION_NOTES §7 exactly** -- every one a
+double space on the instrument where the document prints one:
+
+```
+XLEAD2-0 pc  25  printed='kit:K-1 HPF'    unit='kit:K-1  HPF'
+XLEAD2-0 pc  90  printed='hit:Dance 1'    unit='hit:Dance  1'
+```
+
+That is an independent re-derivation of a finding recorded three weeks
+earlier, on a different sample.
+
+**Composer's 49 are a different and more interesting kind.** Not whitespace
+-- real errors in the published patch list:
+
+```
+COMPOSER-0 pc  19  printed='brs:TrumpetMure2'   unit='brs:TrumpetMute2'
+COMPOSER-1 pc  47  printed='syn:808 Synthax'    unit='syn:8O8 Synthax'
+COMPOSER-3 pc  85  printed='kit:Clean RsrB'     unit='kit:Clean R&B'
+COMPOSER-0 pc  16  printed='brr:Trumpet FX 7'   unit='brs:Trumpet FX 7'
+COMPOSER-4 pc   9  printed='kb3:DX Organ'       unit='kit:Kit 1'
+```
+
+Broken by kind: 28 typos and garbled text (`Mure`/`Mute`, `808`/`8O8`,
+`Voxwav`/`VS Vox`), 12 whitespace, 4 case, 3 truncated, and 2 with the
+wrong category prefix -- one of which is not a typo at all but a
+different instrument entirely (`kb3:DX Organ` against `kit:Kit 1`).
+
+**All 49 are the case `Catalog.disagreement` was written for.** A ROM cannot
+be saved over, so a difference in a ROM bank cannot mean "somebody stored
+their own sound here"; it means the printed list is wrong and the unit is
+right. That is what the screen will say, on all 49, and it is correct.
+
+### 4. The cost, measured at the same time
+
+1664 names in 31.0 seconds: **18.6 ms per name**, from a sample three
+orders of magnitude larger than the SEND_GAP measurement in §11, and
+agreeing with it. It is also the honest cost of the feature: reading a whole
+fitted ROM takes the better part of half a minute, which is why startup
+asks the Configuration response instead (TODO 34).
+
+### What is left
+
+- **The fifteen unfitted ROM rows.** Unreachable without the boards, and
+  the same reasoning that leaves §7's SIMM-ID mapping confirmed for three
+  ROMs rather than nineteen.
+- **Correcting the table at runtime from the Configuration response.** Not
+  done, and **no longer worth doing**: the counts agree on every ROM that
+  can be checked, so there is nothing for it to correct. It would only
+  ever fire on a unit whose ROMs are laid out differently, and the
+  Configuration response is a whole-unit statement rather than a per-ROM
+  one -- it would suppress a ROM p2ked can address. Item closed.
 
 See RESOLUTION_NOTES §11.
 

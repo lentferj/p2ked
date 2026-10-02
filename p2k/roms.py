@@ -225,6 +225,20 @@ def _rom(
 #: until a real unit is asked. That is preferred to inventing a count: an
 #: over-long bank shows empty rows, while a short one *hides* presets, and a
 #: hidden preset is not discoverable by the person looking for it.
+#:
+#: **Both halves of that trade-off have now been measured**, on 2026-10-02
+#: against a Proteus 2000, by reading every preset of every fitted ROM:
+#:
+#: * The counts are exact. Composer 1024, X-Lead v2 640, Techno Synth 512,
+#:   Beat Garden 512, user memory 512 -- every slot read, none over, none
+#:   under, and the Configuration response agrees with all of them.
+#: * The partly-empty last bank is real, not hypothetical, and it is
+#:   Composer: COMPOSER-7 pc 127 is an empty slot, and the generated
+#:   catalog records it as ``:default`` too, so the table, the catalog and
+#:   the unit all agree. The row is shown, named "default", which is true.
+#:
+#: So the policy stands, now on evidence rather than on argument. What it
+#: does not cover is the fifteen ROMs not fitted to that unit.
 ROMS: Tuple[Rom, ...] = (
     _rom("USER", "User", 0, (0, 1, 2, 3), 512, writable=True),
     _rom("XTREME", "Extreme", 2, (0, 1), 256),

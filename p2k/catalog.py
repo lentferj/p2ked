@@ -111,11 +111,23 @@ class Catalog:
         bank it cannot mean that -- ROM does not change -- so it means the
         printed list is wrong, and the unit is right.
 
-        That is not hypothetical. Reading all 640 presets of one ROM off a
-        unit on 2026-09-12 and comparing them with E-MU's own patch list for
-        that ROM left 11 names differing, every one by internal whitespace
-        alone -- the instrument holds two spaces where the document prints
-        one. Callers should say which kind of disagreement they are
+        That is not hypothetical, and it is not only whitespace. Reading
+        whole ROMs off a unit and comparing them with E-MU's own published
+        patch lists leaves disagreements in two distinct kinds:
+
+        * **X-Lead v2**, 640 presets, 2026-09-12: 11 differences, every one
+          internal whitespace -- the instrument holds two spaces where the
+          document prints one.
+        * **Composer**, all 1024 presets, 2026-10-02: **49**, and mostly not
+          whitespace at all but errors in the published list itself --
+          ``TrumpetMure2`` for ``TrumpetMute2``, ``808 Synthax`` for
+          ``8O8 Synthax``, ``Clean RsrB`` for ``Clean R&B``, and two rows
+          carrying the wrong category prefix (one of them naming a different
+          instrument entirely: ``kb3:DX Organ`` against ``kit:Kit 1``).
+
+        In both cases the unit is right and the printed list is wrong, which
+        is exactly what this method's docstring says a ROM-bank difference
+        means. Callers should say which kind of disagreement they are
         showing; see :meth:`disagreement` and p2ked/app.py.
         """
         live = self.live_name(bank_id, program_change)

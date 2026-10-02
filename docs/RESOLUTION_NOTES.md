@@ -601,8 +601,10 @@ untouched here, and nothing above generalises to another unit.
 ### The preset counts in `roms.py` are right for all four fitted ROMs
 
 TODO 5 said the table's counts come from the instrument-definition files,
-which describe banks rather than populated presets. The unit reports its own,
-per SIMM:
+which describe banks rather than populated presets, and asked whether
+`banks * 128` might therefore overstate a ROM.
+
+The unit reports its own per-SIMM count, and all four agree exactly:
 
 | SIMM | p2ked `count` | unit reports | agree |
 |---|---:|---:|---|
@@ -611,11 +613,79 @@ per SIMM:
 | 65 Techno Synth | 512 | 512 | yes |
 | 67 Beat Garden | 512 | 512 | yes |
 
-User memory: 512, against 512 in the table.
+User memory: 512, against 512 in the table. The next section reads two of
+these ROMs slot by slot, which is what turned "the counts agree" into "the
+counts are right, and here is the one empty slot".
 
-So the concern behind TODO 5 — that `banks * 128` might overstate a ROM —
-**does not apply to any ROM this unit has.** What remains of the item is
-generalisation to the other fifteen rows, which this session cannot reach.
+### Preset extents, read whole: two ROMs, 1664 names
+
+§7 compared 640 X-Lead v2 names against the document. Done again on
+2026-10-02 at more scale, and extended to a second ROM, this is the
+clearest result of the session.
+
+Every preset of two fitted ROMs was read off the unit and counted:
+
+| ROM | slots read | named | empty | absent | table says |
+|---|---:|---:|---:|---:|---:|
+| Composer | 1024 | 1023 | **1** | 0 | 1024 |
+| X-Lead v2 | 640 | 640 | 0 | 0 | 640 |
+
+**The `banks * 128` policy is exactly right** for every ROM this unit has:
+not one slot over, not one under. TODO 5 asked whether it would overstate a
+ROM, and it does not.
+
+**And the partly-empty last bank is not hypothetical.** COMPOSER-7 pc 127
+is an empty slot -- the last preset of the last bank holds nothing. The
+catalog records it as `:default` too, so table, catalog and unit all agree,
+and `read_bank_names` keeps the slot for the reason its comment gives:
+"default" is what the unit says, and a blank row would leave the user
+wondering whether the read failed or the slot is genuinely empty.
+
+Composer is also the ROM that will not answer `(not installed)` past its
+end, discussed next. The two findings are one fact seen twice: this ROM
+answers `:default` rather than reporting absence, so its extent has to come
+from the table and the catalog -- which is exactly the arrangement TODO 5
+was worried about. It works.
+
+### Fifty slots where the printed list is wrong and the unit is right
+
+Diffing those 1664 names against the generated catalog:
+
+| ROM | differences | kind |
+|---|---:|---|
+| X-Lead v2 | 11 | whitespace, every one a double space on the instrument |
+| Composer | **49** | typos, lost characters, truncation, case, 2 wrong prefixes |
+
+**X-Lead v2's 11 reproduce §7 exactly** -- an independent re-derivation of a
+finding recorded three weeks earlier, on a different sample:
+
+    XLEAD2-0 pc 25  printed='kit:K-1 HPF'  unit='kit:K-1  HPF'
+    XLEAD2-0 pc 90  printed='hit:Dance 1'  unit='hit:Dance  1'
+
+**Composer's 49 are something else** -- real errors in the published patch
+list, not transcription artefacts of ours:
+
+    COMPOSER-0 pc 19  printed='brs:TrumpetMure2'  unit='brs:TrumpetMute2'
+    COMPOSER-1 pc 47  printed='syn:808 Synthax'   unit='syn:8O8 Synthax'
+    COMPOSER-3 pc 85  printed='kit:Clean RsrB'    unit='kit:Clean R&B'
+    COMPOSER-0 pc 16  printed='brr:Trumpet FX 7'  unit='brs:Trumpet FX 7'
+    COMPOSER-4 pc  9  printed='kb3:DX Organ'      unit='kit:Kit 1'
+
+Broken down: 28 typos and garbled text (`Mure`/`Mute`, `808`/`8O8`,
+`Voxwav`/`VS Vox`), 12 whitespace, 4 case, 3 truncated, 2 with the wrong
+category prefix. One of those two is not a typo but a different instrument
+altogether -- `kb3:DX Organ` where the unit holds `kit:Kit 1`.
+
+**All 49 are what `Catalog.disagreement` was written for.** A ROM cannot be
+saved over, so a difference in a ROM bank cannot mean "somebody stored their
+own sound here". It means the printed list is wrong and the unit is right,
+which is what the screen will say on all 49.
+
+**The cost, measured at the same time:** 1664 names in 31.0 s, or
+**18.6 ms per name** -- three orders of magnitude more sample than the
+SEND_GAP measurement above, and agreeing with it. It is also the honest
+price of the feature: reading one whole fitted ROM takes the better part of
+half a minute, which is why startup asks the Configuration response instead.
 
 ### The absent-preset sentinel is not returned by every ROM
 

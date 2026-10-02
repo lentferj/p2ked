@@ -109,11 +109,19 @@ are a different claim from "this works".
   dominates, so the gap is neither a bottleneck nor a risk at any value
   tried. Left at 10 ms, measured, and re-derivable with
   `tools/measure_send_gap.py`.
-- **Preset counts per ROM.** RESOLVED for the four fitted, 2026-10-02: the
-  unit's own per-SIMM counts match `roms.py` exactly for all of them and for
-  user memory. The other fifteen rows still come from the
-  instrument-definition files, which describe *banks*, not populated
-  presets.
+- **Preset counts per ROM.** RESOLVED for the four fitted, 2026-10-02, by
+  reading every preset of every fitted ROM rather than trusting the
+  Configuration response alone: Composer 1024, X-Lead v2 640, Techno Synth
+  512, Beat Garden 512, user memory 512 — not one slot over or under. The
+  other fifteen rows still come from the instrument-definition files, which
+  describe *banks*, not populated presets.
+- **E-MU's published patch lists contain errors.** Measured 2026-10-02 by
+  diffing 1664 names read off a unit against the generated catalog: 11
+  differences in X-Lead v2 (all whitespace) and **49 in Composer**, mostly
+  typos and lost characters in the published list itself —
+  `TrumpetMure2` for `TrumpetMute2`, `Clean RsrB` for `Clean R&B`, and two
+  rows with the wrong category prefix. The unit is right in every case, so
+  these appear on screen as "the printed list is wrong; the unit is right".
 - **`(not installed)` is not universal.** Three of the four fitted ROMs
   answer a request past their last preset with that name; **Composer does
   not** — it returns `   :default` indefinitely (measured 2026-10-02).
