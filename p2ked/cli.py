@@ -105,7 +105,13 @@ def _cmd_find(_device, args) -> None:
         print(f"nothing matching {args.name!r}", file=sys.stderr)
         return
     rows = []
-    for bank_id, program_change, name in hits:
+    # Four names, not three: `Catalog.search` returns
+    # `(bank_id, program_change, name, differs)` -- the flag was added so
+    # this command could mark a disagreement, and the loop below is what
+    # marks it. It unpacked three and used a fourth name that was never
+    # bound, so every non-empty search raised before reaching the marker.
+    # See TODO.md item 40.
+    for bank_id, program_change, name, differs in hits:
         try:
             entry = roms.preset(bank_id, program_change)
         except LookupError:
