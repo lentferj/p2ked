@@ -101,8 +101,20 @@ AUTODETECT_TIMEOUT = 0.6
 #: to order the autodetect sweep, never to decide the answer -- the Identity
 #: Reply decides that. A unit on a DIN cable sits behind an interface whose
 #: name says nothing about it.
-_HINTS = ("proteus", "audity", "xtreme", "e-mu", "emu", "mp-7", "xl-7",
-          "px-7", "pk-6", "halo", "vintage keys", "orbit")
+_HINTS = (
+    "proteus",
+    "audity",
+    "xtreme",
+    "e-mu",
+    "emu",
+    "mp-7",
+    "xl-7",
+    "px-7",
+    "pk-6",
+    "halo",
+    "vintage keys",
+    "orbit",
+)
 
 
 class MidiUnavailable(RuntimeError):
@@ -164,6 +176,7 @@ def likely_proteus_ports() -> List[str]:
 
 def install_clean_exit(on_exit: Optional[Callable[[], None]] = None) -> None:
     """Close ports on SIGINT/SIGTERM rather than leaving them open."""
+
     def handler(signum, _frame):  # pragma: no cover - signal path
         if on_exit is not None:
             try:
@@ -185,9 +198,15 @@ def install_clean_exit(on_exit: Optional[Callable[[], None]] = None) -> None:
 class ProteusBridge:
     """One open conversation with one unit."""
 
-    def __init__(self, midi_in, midi_out, *, device_id: int,
-                 description: str = "",
-                 timeout: float = DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self,
+        midi_in,
+        midi_out,
+        *,
+        device_id: int,
+        description: str = "",
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
         self._in = midi_in
         self._out = midi_out
         self.device_id = m.device_byte(device_id)
@@ -204,17 +223,20 @@ class ProteusBridge:
     # --- lifecycle ----------------------------------------------------------
 
     @classmethod
-    def open(cls, port: str, *, recv_port: Optional[str] = None,
-             device_id: int = m.BROADCAST_DEVICE,
-             timeout: float = DEFAULT_TIMEOUT) -> "ProteusBridge":
+    def open(
+        cls,
+        port: str,
+        *,
+        recv_port: Optional[str] = None,
+        device_id: int = m.BROADCAST_DEVICE,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> "ProteusBridge":
         ins, outs = list_ports()
         listen = recv_port or port
         if port not in outs:
-            raise DeviceError(
-                f"no output port named {port!r}; have {outs}")
+            raise DeviceError(f"no output port named {port!r}; have {outs}")
         if listen not in ins:
-            raise DeviceError(
-                f"no input port named {listen!r}; have {ins}")
+            raise DeviceError(f"no input port named {listen!r}; have {ins}")
         midi_out = _client("out")
         midi_in = _client("in")
         try:
@@ -231,8 +253,13 @@ class ProteusBridge:
                 except Exception:
                     pass
             raise
-        bridge = cls(midi_in, midi_out, device_id=device_id,
-                     description=f"{port} -> {listen}", timeout=timeout)
+        bridge = cls(
+            midi_in,
+            midi_out,
+            device_id=device_id,
+            description=f"{port} -> {listen}",
+            timeout=timeout,
+        )
         # The names as opened, kept apart from `description`, which is
         # "out -> in" for display and is not something open() accepts back.
         bridge.port = port
@@ -263,8 +290,9 @@ class ProteusBridge:
         self._out.send_message(list(frame))
         time.sleep(SEND_GAP)
 
-    def _await(self, matches: Callable[[m.Packet], bool], *,
-               timeout: Optional[float] = None) -> m.Packet:
+    def _await(
+        self, matches: Callable[[m.Packet], bool], *, timeout: Optional[float] = None
+    ) -> m.Packet:
         deadline = time.time() + (self.timeout if timeout is None else timeout)
         while time.time() < deadline:
             message = self._in.get_message()
@@ -273,7 +301,7 @@ class ProteusBridge:
                 continue
             packet = m.parse(message[0])
             if packet is None:
-                continue          # somebody else's traffic on a shared port
+                continue  # somebody else's traffic on a shared port
             if packet.device not in (self.device_id, m.BROADCAST_DEVICE):
                 continue
             if matches(packet):
@@ -292,8 +320,7 @@ class ProteusBridge:
         """Ask who is on the other end, on the already-open ports."""
         self._drain()
         self._out.send_message(list(m.identity_request(m.BROADCAST_DEVICE)))
-        deadline = time.time() + (
-            AUTODETECT_TIMEOUT if timeout is None else timeout)
+        deadline = time.time() + (AUTODETECT_TIMEOUT if timeout is None else timeout)
         while time.time() < deadline:
             message = self._in.get_message()
             if message is None:
@@ -305,9 +332,12 @@ class ProteusBridge:
         return None
 
     @classmethod
-    def autodetect(cls, *, timeout: float = AUTODETECT_TIMEOUT,
-                   on_try: Optional[Callable[[str], None]] = None
-                   ) -> "ProteusBridge":
+    def autodetect(
+        cls,
+        *,
+        timeout: float = AUTODETECT_TIMEOUT,
+        on_try: Optional[Callable[[str], None]] = None,
+    ) -> "ProteusBridge":
         """Find a unit by broadcasting an Identity Request on every port.
 
         Hinted ports are tried first, which only changes the order. The
@@ -315,17 +345,16 @@ class ProteusBridge:
         so discovery ends knowing what to address, with no sweep over IDs.
         """
         hinted = likely_proteus_ports()
-        candidates = hinted + [p for p in bidirectional_ports()
-                               if p not in hinted]
+        candidates = hinted + [p for p in bidirectional_ports() if p not in hinted]
         if not candidates:
             raise DeviceNotFound(
                 "no bidirectional MIDI ports on this host, so nothing can "
-                "be asked who it is.")
+                "be asked who it is."
+            )
         for port in candidates:
             if on_try is not None:
                 on_try(port)
-            bridge = cls.open(port, device_id=m.BROADCAST_DEVICE,
-                              timeout=timeout)
+            bridge = cls.open(port, device_id=m.BROADCAST_DEVICE, timeout=timeout)
             try:
                 fields = bridge.identify(timeout=timeout)
             except Exception:
@@ -347,8 +376,7 @@ class ProteusBridge:
             "Exclusive reception is enabled."
         )
 
-    def learn_device_id(self, *, timeout: Optional[float] = None
-                        ) -> Optional[int]:
+    def learn_device_id(self, *, timeout: Optional[float] = None) -> Optional[int]:
         """Ask who is there and adopt the device ID it reports.
 
         A unit need not answer the broadcast ID. This one does not: with
@@ -368,8 +396,7 @@ class ProteusBridge:
 
     # --- operations ----------------------------------------------------------
 
-    def hardware_config(self, *, timeout: Optional[float] = None
-                        ) -> m.HardwareConfig:
+    def hardware_config(self, *, timeout: Optional[float] = None) -> m.HardwareConfig:
         """What ROMs are installed. Read-only, makes no sound.
 
         The message that saves p2ked from guessing. Its result is cached on
@@ -378,12 +405,14 @@ class ProteusBridge:
         self._drain()
         self._send(m.config_request(device=self.device_id))
         packet = self._await(
-            lambda p: p.command == m.Command.CONFIGURATION, timeout=timeout)
+            lambda p: p.command == m.Command.CONFIGURATION, timeout=timeout
+        )
         self.config = m.parse_config(packet)
         return self.config
 
-    def preset_name(self, number: int, rom_id: int, *,
-                    timeout: Optional[float] = None) -> str:
+    def preset_name(
+        self, number: int, rom_id: int, *, timeout: Optional[float] = None
+    ) -> str:
         """One preset's name. Read-only, and **makes no sound**.
 
         A unit answers for a preset that does not exist rather than
@@ -399,8 +428,9 @@ class ProteusBridge:
         one preset.
         """
         self._drain()
-        self._send(m.name_request(m.ObjectType.PRESET, number, rom_id,
-                                  device=self.device_id))
+        self._send(
+            m.name_request(m.ObjectType.PRESET, number, rom_id, device=self.device_id)
+        )
 
         def matches(packet: m.Packet) -> bool:
             if packet.command != m.Command.GENERIC_NAME:
@@ -409,8 +439,11 @@ class ProteusBridge:
                 reply = m.parse_name(packet)
             except m.ProtocolError:
                 return False
-            return (reply.object_type == m.ObjectType.PRESET
-                    and reply.number == number and reply.rom_id == rom_id)
+            return (
+                reply.object_type == m.ObjectType.PRESET
+                and reply.number == number
+                and reply.rom_id == rom_id
+            )
 
         return m.parse_name(self._await(matches, timeout=timeout)).name
 
@@ -438,9 +471,13 @@ class ProteusBridge:
                 )
         return wanted
 
-    def read_bank_names(self, bank_id: str, *,
-                        on_progress: Optional[Callable[[int, int], None]] = None,
-                        timeout: Optional[float] = None) -> Dict[int, str]:
+    def read_bank_names(
+        self,
+        bank_id: str,
+        *,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[int, str]:
         """Every name in a bank. Read-only, and **makes no sound**.
 
         Worth restating because the sibling project cannot do it: this reads
@@ -467,8 +504,9 @@ class ProteusBridge:
                 on_progress(index, len(entries))
         return out
 
-    def read_parameter(self, parameter_id: int, *,
-                       timeout: Optional[float] = None) -> int:
+    def read_parameter(
+        self, parameter_id: int, *, timeout: Optional[float] = None
+    ) -> int:
         """One parameter's value. Read-only, makes no sound.
 
         The reply is matched on the parameter ID it reports, not merely on
@@ -510,11 +548,11 @@ class ProteusBridge:
         self._drain()
         self._send(m.setup_dump_request(device=self.device_id))
         packet = self._await(
-            lambda p: p.command == m.Command.SETUP_DUMP, timeout=timeout)
+            lambda p: p.command == m.Command.SETUP_DUMP, timeout=timeout
+        )
         return m.parse_setup_dump(packet)
 
-    def installed_roms(self, *, timeout: Optional[float] = None
-                       ) -> Dict[int, bool]:
+    def installed_roms(self, *, timeout: Optional[float] = None) -> Dict[int, bool]:
         """Which ROM IDs this unit actually answers for. Silent.
 
         One name request per ROM in the table, reading the reply rather than
@@ -529,11 +567,11 @@ class ProteusBridge:
         """
         out: Dict[int, bool] = {}
         for entry in roms.ROMS:
-            rom_id = (roms.USER_ROM_ID if entry is roms.USER else entry.msb)
+            rom_id = roms.USER_ROM_ID if entry is roms.USER else entry.msb
             try:
                 name = self.preset_name(0, rom_id, timeout=timeout)
             except TimeoutError:
-                continue          # unknown, not absent -- say nothing
+                continue  # unknown, not absent -- say nothing
             out[rom_id] = not roms.is_absent(name)
         return out
 

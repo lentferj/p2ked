@@ -210,8 +210,14 @@ class ObjectType:
     DEMO = 5
     RIFF = 6
 
-    NAMES = {PRESET: "preset", INSTRUMENT: "instrument", ARP: "arp",
-             SETUP: "setup", DEMO: "demo", RIFF: "riff"}
+    NAMES = {
+        PRESET: "preset",
+        INSTRUMENT: "instrument",
+        ARP: "arp",
+        SETUP: "setup",
+        DEMO: "demo",
+        RIFF: "riff",
+    }
 
 
 class ProtocolError(ValueError):
@@ -237,7 +243,8 @@ def device_byte(device: int) -> int:
     if not 0x00 <= value <= 0x7E:
         raise ProtocolError(
             f"device ID {value} is outside 0-126 (and is not {BROADCAST_DEVICE}"
-            f", the broadcast ID)")
+            f", the broadcast ID)"
+        )
     return value
 
 
@@ -305,8 +312,9 @@ def checksum(data: Iterable[int]) -> int:
 IGNORE_CHECKSUM = 0x7F
 
 
-def frame(command: int, payload: Sequence[int] = (), *,
-          device: int = BROADCAST_DEVICE) -> bytes:
+def frame(
+    command: int, payload: Sequence[int] = (), *, device: int = BROADCAST_DEVICE
+) -> bytes:
     """Build an editor System Exclusive message.
 
     ``payload`` is everything between the command byte and ``F7``, already
@@ -318,12 +326,21 @@ def frame(command: int, payload: Sequence[int] = (), *,
         if not 0 <= byte <= 0x7F:
             raise ProtocolError(
                 f"{byte:#04x} is not a 7-bit data byte; every byte between "
-                f"F0 and F7 must have bit 7 clear")
+                f"F0 and F7 must have bit 7 clear"
+            )
     if not 0 <= command <= 0x7F:
         raise ProtocolError(f"command {command:#04x} is not a 7-bit value")
     return bytes(
-        [SYSEX_START, EMU_ID, PROTEUS_ID, device_byte(device), EDITOR_BYTE,
-         command, *payload, SYSEX_END]
+        [
+            SYSEX_START,
+            EMU_ID,
+            PROTEUS_ID,
+            device_byte(device),
+            EDITOR_BYTE,
+            command,
+            *payload,
+            SYSEX_END,
+        ]
     )
 
 
@@ -338,13 +355,18 @@ class Packet:
         self.payload = payload
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return (f"Packet(device={self.device}, command={self.command:#04x}, "
-                f"payload={self.payload.hex(' ')})")
+        return (
+            f"Packet(device={self.device}, command={self.command:#04x}, "
+            f"payload={self.payload.hex(' ')})"
+        )
 
     def __eq__(self, other) -> bool:
-        return (isinstance(other, Packet) and other.device == self.device
-                and other.command == self.command
-                and other.payload == self.payload)
+        return (
+            isinstance(other, Packet)
+            and other.device == self.device
+            and other.command == self.command
+            and other.payload == self.payload
+        )
 
 
 def parse(message: Sequence[int]) -> Optional[Packet]:
@@ -378,8 +400,7 @@ def identity_request(device: int = BROADCAST_DEVICE) -> bytes:
     device ID: broadcast it, and the reply carries both the identity and the
     ID the unit is set to.
     """
-    return bytes([SYSEX_START, 0x7E, device_byte(device), 0x06, 0x01,
-                  SYSEX_END])
+    return bytes([SYSEX_START, 0x7E, device_byte(device), 0x06, 0x01, SYSEX_END])
 
 
 def identity_reply_fields(message: Sequence[int]) -> Optional[dict]:
@@ -422,19 +443,19 @@ class HardwareConfig:
 
     __slots__ = ("user_presets", "simms")
 
-    def __init__(self, user_presets: int,
-                 simms: Sequence["SimmInfo"] = ()) -> None:
+    def __init__(self, user_presets: int, simms: Sequence["SimmInfo"] = ()) -> None:
         self.user_presets = user_presets
         self.simms: Tuple["SimmInfo", ...] = tuple(simms)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return (f"HardwareConfig(user_presets={self.user_presets}, "
-                f"simms={self.simms!r})")
+        return f"HardwareConfig(user_presets={self.user_presets}, simms={self.simms!r})"
 
     def __eq__(self, other) -> bool:
-        return (isinstance(other, HardwareConfig)
-                and other.user_presets == self.user_presets
-                and other.simms == self.simms)
+        return (
+            isinstance(other, HardwareConfig)
+            and other.user_presets == self.user_presets
+            and other.simms == self.simms
+        )
 
 
 class SimmInfo:
@@ -448,14 +469,18 @@ class SimmInfo:
         self.instruments = instruments
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return (f"SimmInfo(simm_id={self.simm_id}, presets={self.presets}, "
-                f"instruments={self.instruments})")
+        return (
+            f"SimmInfo(simm_id={self.simm_id}, presets={self.presets}, "
+            f"instruments={self.instruments})"
+        )
 
     def __eq__(self, other) -> bool:
-        return (isinstance(other, SimmInfo)
-                and other.simm_id == self.simm_id
-                and other.presets == self.presets
-                and other.instruments == self.instruments)
+        return (
+            isinstance(other, SimmInfo)
+            and other.simm_id == self.simm_id
+            and other.presets == self.presets
+            and other.instruments == self.instruments
+        )
 
 
 def config_request(device: int = BROADCAST_DEVICE) -> bytes:
@@ -481,22 +506,23 @@ def parse_config(packet: Packet) -> HardwareConfig:
     """
     if packet.command != Command.CONFIGURATION:
         raise ProtocolError(
-            f"command {packet.command:#04x} is not a Configuration response")
+            f"command {packet.command:#04x} is not a Configuration response"
+        )
     data = packet.payload
     if not data:
         raise ProtocolError("configuration response is empty")
 
     general_len = data[0]
     cursor = 1
-    general = data[cursor:cursor + general_len]
+    general = data[cursor : cursor + general_len]
     if len(general) < general_len:
         raise ProtocolError(
-            f"configuration says {general_len} general bytes, {len(general)} "
-            f"present")
+            f"configuration says {general_len} general bytes, {len(general)} present"
+        )
     if general_len < 2:
         raise ProtocolError(
-            "configuration general block is too short to hold the user "
-            "preset count")
+            "configuration general block is too short to hold the user preset count"
+        )
     user_presets = unpack14(general[0], general[1])
     cursor += general_len
 
@@ -508,20 +534,24 @@ def parse_config(packet: Packet) -> HardwareConfig:
 
     simms: List[SimmInfo] = []
     for index in range(simm_count):
-        chunk = data[cursor:cursor + per_simm]
+        chunk = data[cursor : cursor + per_simm]
         if len(chunk) < per_simm:
             raise ProtocolError(
                 f"configuration declares {simm_count} SIMMs but the data ends "
-                f"during SIMM {index + 1}")
+                f"during SIMM {index + 1}"
+            )
         if per_simm < 6:
             raise ProtocolError(
                 f"configuration says {per_simm} bytes per SIMM, too few for "
-                f"an ID, a preset count and an instrument count")
-        simms.append(SimmInfo(
-            simm_id=unpack14(chunk[0], chunk[1]),
-            presets=unpack14(chunk[2], chunk[3]),
-            instruments=unpack14(chunk[4], chunk[5]),
-        ))
+                f"an ID, a preset count and an instrument count"
+            )
+        simms.append(
+            SimmInfo(
+                simm_id=unpack14(chunk[0], chunk[1]),
+                presets=unpack14(chunk[2], chunk[3]),
+                instruments=unpack14(chunk[4], chunk[5]),
+            )
+        )
         cursor += per_simm
     return HardwareConfig(user_presets=user_presets, simms=simms)
 
@@ -534,23 +564,26 @@ class NameReply:
 
     __slots__ = ("object_type", "number", "rom_id", "name")
 
-    def __init__(self, object_type: int, number: int, rom_id: int,
-                 name: str) -> None:
+    def __init__(self, object_type: int, number: int, rom_id: int, name: str) -> None:
         self.object_type = object_type
         self.number = number
         self.rom_id = rom_id
         self.name = name
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return (f"NameReply(type={self.object_type}, number={self.number}, "
-                f"rom_id={self.rom_id}, name={self.name!r})")
+        return (
+            f"NameReply(type={self.object_type}, number={self.number}, "
+            f"rom_id={self.rom_id}, name={self.name!r})"
+        )
 
     def __eq__(self, other) -> bool:
-        return (isinstance(other, NameReply)
-                and other.object_type == self.object_type
-                and other.number == self.number
-                and other.rom_id == self.rom_id
-                and other.name == self.name)
+        return (
+            isinstance(other, NameReply)
+            and other.object_type == self.object_type
+            and other.number == self.number
+            and other.rom_id == self.rom_id
+            and other.name == self.name
+        )
 
 
 def decode_name(data: Sequence[int]) -> str:
@@ -559,9 +592,7 @@ def decode_name(data: Sequence[int]) -> str:
     Only the trailing ones: a name may legitimately begin with a space, and
     stripping both ends would silently change it.
     """
-    return "".join(
-        chr(byte) if 32 <= byte <= 126 else " " for byte in data
-    ).rstrip()
+    return "".join(chr(byte) if 32 <= byte <= 126 else " " for byte in data).rstrip()
 
 
 def encode_name(name: str) -> List[int]:
@@ -574,8 +605,9 @@ def encode_name(name: str) -> List[int]:
     return out
 
 
-def name_request(object_type: int, number: int, rom_id: int, *,
-                 device: int = BROADCAST_DEVICE) -> bytes:
+def name_request(
+    object_type: int, number: int, rom_id: int, *, device: int = BROADCAST_DEVICE
+) -> bytes:
     """Ask for one object's name. Read-only, and **makes no sound**.
 
     This is the message that shapes the whole program. A Proteus will tell
@@ -592,18 +624,17 @@ def name_request(object_type: int, number: int, rom_id: int, *,
 def parse_name(packet: Packet) -> NameReply:
     """Decode a Generic Name response."""
     if packet.command != Command.GENERIC_NAME:
-        raise ProtocolError(
-            f"command {packet.command:#04x} is not a Generic Name")
+        raise ProtocolError(f"command {packet.command:#04x} is not a Generic Name")
     data = packet.payload
     if len(data) < 5 + NAME_LEN:
         raise ProtocolError(
-            f"name message carries {len(data)} bytes, expected at least "
-            f"{5 + NAME_LEN}")
+            f"name message carries {len(data)} bytes, expected at least {5 + NAME_LEN}"
+        )
     return NameReply(
         object_type=data[0],
         number=unpack14(data[1], data[2]),
         rom_id=unpack14(data[3], data[4]),
-        name=decode_name(data[5:5 + NAME_LEN]),
+        name=decode_name(data[5 : 5 + NAME_LEN]),
     )
 
 
@@ -783,9 +814,13 @@ class TrailingBlock:
 
     __slots__ = ("label", "offset", "rows", "parameter_ids")
 
-    def __init__(self, label: str, offset: int,
-                 rows: Sequence[Tuple[int, ...]],
-                 parameter_ids: Tuple[int, ...]) -> None:
+    def __init__(
+        self,
+        label: str,
+        offset: int,
+        rows: Sequence[Tuple[int, ...]],
+        parameter_ids: Tuple[int, ...],
+    ) -> None:
         self.label = label
         self.offset = offset
         self.rows: Tuple[Tuple[int, ...], ...] = tuple(rows)
@@ -798,15 +833,27 @@ class TrailingBlock:
         return bool(self.parameter_ids)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return (f"TrailingBlock({self.label!r}, offset={self.offset}, "
-                f"rows={len(self.rows)})")
+        return (
+            f"TrailingBlock({self.label!r}, offset={self.offset}, "
+            f"rows={len(self.rows)})"
+        )
 
 
 class ChannelState:
     """One MIDI channel's slot in a setup."""
 
-    __slots__ = ("channel", "preset", "volume", "pan", "mix_output", "arp",
-                 "enable", "bank_map", "receive_program_change", "rom_id")
+    __slots__ = (
+        "channel",
+        "preset",
+        "volume",
+        "pan",
+        "mix_output",
+        "arp",
+        "enable",
+        "bank_map",
+        "receive_program_change",
+        "rom_id",
+    )
 
     def __init__(self, channel: int, **fields) -> None:
         self.channel = channel
@@ -834,8 +881,10 @@ class ChannelState:
         return None
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return (f"ChannelState(channel={self.channel}, preset={self.preset}, "
-                f"rom_id={self.rom_id}, enable={self.enable})")
+        return (
+            f"ChannelState(channel={self.channel}, preset={self.preset}, "
+            f"rom_id={self.rom_id}, enable={self.enable})"
+        )
 
 
 class SetupDump:
@@ -860,17 +909,33 @@ class SetupDump:
     arithmetic does not add up -- see :func:`parse_setup_dump`.
     """
 
-    __slots__ = ("name", "channels", "channel_count", "parameters_per_channel",
-                 "offset", "payload_size", "master", "trailing",
-                 "header_counts", "undecoded")
+    __slots__ = (
+        "name",
+        "channels",
+        "channel_count",
+        "parameters_per_channel",
+        "offset",
+        "payload_size",
+        "master",
+        "trailing",
+        "header_counts",
+        "undecoded",
+    )
 
-    def __init__(self, name: str, channels: Sequence["ChannelState"], *,
-                 channel_count: int, parameters_per_channel: int,
-                 offset: int, payload_size: int,
-                 master: Optional[Dict[int, int]] = None,
-                 trailing: Sequence["TrailingBlock"] = (),
-                 header_counts: Sequence[int] = (),
-                 undecoded: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        name: str,
+        channels: Sequence["ChannelState"],
+        *,
+        channel_count: int,
+        parameters_per_channel: int,
+        offset: int,
+        payload_size: int,
+        master: Optional[Dict[int, int]] = None,
+        trailing: Sequence["TrailingBlock"] = (),
+        header_counts: Sequence[int] = (),
+        undecoded: Sequence[str] = (),
+    ) -> None:
         self.name = name
         self.channels: Tuple[ChannelState, ...] = tuple(channels)
         self.channel_count = channel_count
@@ -1013,27 +1078,29 @@ def parse_setup_dump(packet: Packet) -> SetupDump:
     dump.
     """
     if packet.command != Command.SETUP_DUMP:
-        raise ProtocolError(
-            f"command {packet.command:#04x} is not a Setup Dump")
+        raise ProtocolError(f"command {packet.command:#04x} is not a Setup Dump")
     data = packet.payload
     if len(data) < 30:
         raise ProtocolError(
-            f"setup dump carries {len(data)} bytes, too few for its header")
+            f"setup dump carries {len(data)} bytes, too few for its header"
+        )
 
     channel_count = unpack14(data[10], data[11])
     per_channel = unpack14(data[12], data[13])
-    name = decode_name(data[14:14 + NAME_LEN])
+    name = decode_name(data[14 : 14 + NAME_LEN])
 
     if not 0 < channel_count <= 64:
         raise ProtocolError(
             f"setup dump declares {channel_count} MIDI channels, which is "
-            f"not a number this family has")
+            f"not a number this family has"
+        )
     if per_channel != len(CHANNEL_PARAMETERS):
         raise ProtocolError(
             f"setup dump declares {per_channel} parameters per channel; "
             f"p2ked knows {len(CHANNEL_PARAMETERS)}. A firmware that added "
             f"one would shift every field after it, so this is refused "
-            f"rather than decoded into plausible nonsense.")
+            f"rather than decoded into plausible nonsense."
+        )
 
     span = channel_count * per_channel * 2
 
@@ -1046,17 +1113,18 @@ def parse_setup_dump(packet: Packet) -> SetupDump:
                 return False
         return True
 
-    candidates = [start for start in range(0, len(data) - span + 1)
-                  if fits(start)]
+    candidates = [start for start in range(0, len(data) - span + 1) if fits(start)]
     if not candidates:
         raise ProtocolError(
             "no offset in this setup dump holds a channel block in which "
             "every value is in range. Either the parameter order has "
-            "changed or this is not a dump p2ked understands.")
+            "changed or this is not a dump p2ked understands."
+        )
     if len(candidates) > 1:
         raise ProtocolError(
             f"the channel block is ambiguous: offsets {candidates} all fit. "
-            f"Refusing to pick one.")
+            f"Refusing to pick one."
+        )
 
     start = candidates[0]
     channels = []
@@ -1071,18 +1139,23 @@ def parse_setup_dump(packet: Packet) -> SetupDump:
     master, undecoded = _parse_master_blocks(data, counts, start)
     trailing, trailing_notes = _parse_trailing_blocks(data, start + span)
 
-    return SetupDump(name=name, channels=channels,
-                     channel_count=channel_count,
-                     parameters_per_channel=per_channel,
-                     offset=start, payload_size=len(data),
-                     master=master, trailing=trailing,
-                     header_counts=counts,
-                     undecoded=undecoded + trailing_notes)
+    return SetupDump(
+        name=name,
+        channels=channels,
+        channel_count=channel_count,
+        parameters_per_channel=per_channel,
+        offset=start,
+        payload_size=len(data),
+        master=master,
+        trailing=trailing,
+        header_counts=counts,
+        undecoded=undecoded + trailing_notes,
+    )
 
 
-def _parse_master_blocks(data: Sequence[int], counts: Sequence[int],
-                         channel_offset: int
-                         ) -> Tuple[Dict[int, int], Tuple[str, ...]]:
+def _parse_master_blocks(
+    data: Sequence[int], counts: Sequence[int], channel_offset: int
+) -> Tuple[Dict[int, int], Tuple[str, ...]]:
     """The five blocks between the setup name and the channel block.
 
     Positional, and therefore only attempted when the header's own
@@ -1106,19 +1179,21 @@ def _parse_master_blocks(data: Sequence[int], counts: Sequence[int],
             for index, parameter_id in enumerate(ids):
                 position = cursor + index * 2
                 master[parameter_id] = unpack14_signed(
-                    data[position], data[position + 1])
+                    data[position], data[position + 1]
+                )
         else:
             undecoded.append(
                 f"{label} block not decoded: it declares {count} parameters "
                 f"and p2ked knows {len(ids)} for it. One added parameter "
-                f"shifts every value after it.")
+                f"shifts every value after it."
+            )
         cursor += count * 2
     return master, tuple(undecoded)
 
 
-def _parse_trailing_blocks(data: Sequence[int], cursor: int
-                           ) -> Tuple[Tuple["TrailingBlock", ...],
-                                      Tuple[str, ...]]:
+def _parse_trailing_blocks(
+    data: Sequence[int], cursor: int
+) -> Tuple[Tuple["TrailingBlock", ...], Tuple[str, ...]]:
     """Whatever follows the channel block, read as it describes itself.
 
     The seven-value header does not mention this region at all, so nothing
@@ -1138,32 +1213,36 @@ def _parse_trailing_blocks(data: Sequence[int], cursor: int
             notes.append(
                 f"the {len(data) - cursor} bytes at {cursor} are not a "
                 f"self-describing block: they declare {rows_declared} rows "
-                f"of {width}.")
+                f"of {width}."
+            )
             break
         rows = []
         for row in range(rows_declared):
             base = cursor + 4 + row * width * 2
-            rows.append(tuple(
-                unpack14_signed(data[base + slot * 2], data[base + slot * 2 + 1])
-                for slot in range(width)))
+            rows.append(
+                tuple(
+                    unpack14_signed(data[base + slot * 2], data[base + slot * 2 + 1])
+                    for slot in range(width)
+                )
+            )
         label, ids = TRAILING_BLOCKS.get(
-            (rows_declared, width),
-            (f"unidentified {rows_declared}x{width} block", ()))
+            (rows_declared, width), (f"unidentified {rows_declared}x{width} block", ())
+        )
         blocks.append(TrailingBlock(label, cursor, rows, ids))
         cursor = end
     else:
         if cursor != len(data):
             notes.append(
                 f"{len(data) - cursor} bytes at {cursor} are left over after "
-                f"the trailing blocks, too few to be one.")
+                f"the trailing blocks, too few to be one."
+            )
     return tuple(blocks), tuple(notes)
 
 
 # --- parameters --------------------------------------------------------------
 
 
-def parameter_request(parameter_id: int, *,
-                      device: int = BROADCAST_DEVICE) -> bytes:
+def parameter_request(parameter_id: int, *, device: int = BROADCAST_DEVICE) -> bytes:
     """Ask for one parameter's value.
 
     Note the shape: the Proteus is addressed by **parameter ID**, a flat
@@ -1176,8 +1255,9 @@ def parameter_request(parameter_id: int, *,
     return frame(Command.PARAMETER_REQUEST, payload, device=device)
 
 
-def parameter_edit(parameter_id: int, value: int, *,
-                   device: int = BROADCAST_DEVICE) -> bytes:
+def parameter_edit(
+    parameter_id: int, value: int, *, device: int = BROADCAST_DEVICE
+) -> bytes:
     """Set one parameter. **This changes the instrument.**
 
     Signed, because parameter values can be negative and the encoding is
@@ -1195,12 +1275,12 @@ def parse_parameter(packet: Packet) -> Tuple[int, int]:
     unsigned turns -1 into 16383, which no range check would catch.
     """
     if packet.command != Command.PARAMETER_EDIT:
-        raise ProtocolError(
-            f"command {packet.command:#04x} is not a Parameter Value")
+        raise ProtocolError(f"command {packet.command:#04x} is not a Parameter Value")
     data = packet.payload
     if len(data) < 5:
         raise ProtocolError(
-            f"parameter message carries {len(data)} bytes, expected at least 5")
+            f"parameter message carries {len(data)} bytes, expected at least 5"
+        )
     # data[0] is the count of byte *pairs*, which p2ked reads rather than
     # assumes: the command can legitimately carry many parameters at once.
     return (unpack14(data[1], data[2]), unpack14_signed(data[3], data[4]))

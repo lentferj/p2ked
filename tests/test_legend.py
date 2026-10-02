@@ -74,16 +74,18 @@ class TestWorkersOnlyDoMidi:
     def _workers(self):
         source = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "p2ked", "app.py")
+            "p2ked",
+            "app.py",
+        )
         tree = ast.parse(open(source, encoding="utf-8").read())
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef):
                 continue
             decorated = any(
-                (isinstance(d, ast.Call)
-                 and getattr(d.func, "id", "") == "work")
+                (isinstance(d, ast.Call) and getattr(d.func, "id", "") == "work")
                 or getattr(d, "id", "") == "work"
-                for d in node.decorator_list)
+                for d in node.decorator_list
+            )
             if decorated:
                 yield node
 
@@ -95,26 +97,32 @@ class TestWorkersOnlyDoMidi:
         offenders = []
         for node in self._workers():
             for inner in ast.walk(node):
-                if (isinstance(inner, ast.Attribute)
-                        and inner.attr == "catalog"
-                        and isinstance(inner.value, ast.Name)
-                        and inner.value.id == "self"):
+                if (
+                    isinstance(inner, ast.Attribute)
+                    and inner.attr == "catalog"
+                    and isinstance(inner.value, ast.Name)
+                    and inner.value.id == "self"
+                ):
                     offenders.append(node.name)
         assert not offenders, (
             f"worker(s) {sorted(set(offenders))} touch self.catalog; workers "
-            f"do MIDI and hand off with call_from_thread")
+            f"do MIDI and hand off with call_from_thread"
+        )
 
     def test_no_worker_queries_widgets(self):
         offenders = []
         for node in self._workers():
             for inner in ast.walk(node):
-                if (isinstance(inner, ast.Call)
-                        and isinstance(inner.func, ast.Attribute)
-                        and inner.func.attr == "query_one"):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "query_one"
+                ):
                     offenders.append(node.name)
         assert not offenders, (
             f"worker(s) {sorted(set(offenders))} query widgets directly; "
-            f"that is the main thread's job")
+            f"that is the main thread's job"
+        )
 
 
 class TestConfigIsNotWrittenBehindTheSuitesBack:
@@ -144,29 +152,35 @@ class TestConfigIsNotWrittenBehindTheSuitesBack:
                 if not isinstance(node, ast.Call):
                     continue
                 func = node.func
-                if not (isinstance(func, ast.Attribute)
-                        and func.attr.startswith("save_")
-                        and isinstance(func.value, ast.Name)
-                        and func.value.id == "config"):
+                if not (
+                    isinstance(func, ast.Attribute)
+                    and func.attr.startswith("save_")
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "config"
+                ):
                     continue
                 # a path is either the last positional or path=
-                has_path = (len(node.args) >= 2
-                            or any(kw.arg == "path" for kw in node.keywords))
+                has_path = len(node.args) >= 2 or any(
+                    kw.arg == "path" for kw in node.keywords
+                )
                 if not has_path:
                     offenders.append(f"{name}:{node.lineno} {func.attr}")
         assert not offenders, (
             f"{offenders} save to config.DEFAULT_PATH, which is relative to "
-            f"the working directory. Pass a tmp_path.")
+            f"the working directory. Pass a tmp_path."
+        )
 
     def test_the_check_has_something_to_check(self):
         """Guard against the search passing because it matched nothing."""
         found = 0
         for _, tree in self._test_sources():
             for node in ast.walk(tree):
-                if (isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Attribute)
-                        and node.func.attr.startswith("save_")
-                        and isinstance(node.func.value, ast.Name)
-                        and node.func.value.id == "config"):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr.startswith("save_")
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "config"
+                ):
                     found += 1
         assert found, "no config.save_* calls found; the check is vacuous"

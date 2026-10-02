@@ -43,8 +43,9 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 __all__ = ["Entry", "Catalog", "load", "empty", "DEFAULT_PATH"]
 
-DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "data", "catalog.json")
+DEFAULT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "catalog.json"
+)
 
 
 @dataclass(frozen=True)
@@ -61,8 +62,9 @@ class Entry:
 class Catalog:
     """Printed names, plus whatever has been read from a unit."""
 
-    def __init__(self, entries: Iterable[Entry] = (), *, source: str = "",
-                 generated: str = "") -> None:
+    def __init__(
+        self, entries: Iterable[Entry] = (), *, source: str = "", generated: str = ""
+    ) -> None:
         self._entries: Dict[str, Entry] = {}
         for entry in entries:
             self._entries[entry.key] = entry
@@ -91,8 +93,7 @@ class Catalog:
 
     # --- live ---------------------------------------------------------------
 
-    def set_live_name(self, bank_id: str, program_change: int,
-                      name: str) -> None:
+    def set_live_name(self, bank_id: str, program_change: int, name: str) -> None:
         self._live[f"{bank_id}:{program_change:03d}"] = name
 
     def live_name(self, bank_id: str, program_change: int) -> Optional[str]:
@@ -123,8 +124,9 @@ class Catalog:
         printed = self.name(bank_id, program_change)
         return printed is not None and printed != live
 
-    def disagreement(self, bank_id: str, program_change: int,
-                     writable: bool) -> Optional[str]:
+    def disagreement(
+        self, bank_id: str, program_change: int, writable: bool
+    ) -> Optional[str]:
         """Why the unit and the catalog differ here, in words.
 
         ``None`` when they agree or the slot has not been read.
@@ -165,8 +167,7 @@ class Catalog:
             if wanted in name.lower():
                 bank_id, _, number = key.rpartition(":")
                 seen[key] = (bank_id, int(number), name)
-        return [seen[key] + (self.differs(*seen[key][:2]),)
-                for key in sorted(seen)]
+        return [seen[key] + (self.differs(*seen[key][:2]),) for key in sorted(seen)]
 
 
 def empty() -> Catalog:
@@ -197,14 +198,21 @@ def load(path: Optional[str] = None) -> Catalog:
             # taking the program down with it is the odd behaviour, not
             # skipping it.
             try:
-                entries.append(Entry(bank_id=bank_id,
-                                     program_change=int(row["pc"]),
-                                     name=row["name"]))
+                entries.append(
+                    Entry(
+                        bank_id=bank_id, program_change=int(row["pc"]), name=row["name"]
+                    )
+                )
             except (KeyError, TypeError, ValueError):
                 skipped += 1
     if skipped:
-        print(f"warning: {target} has {skipped} unreadable row(s), skipped; "
-              f"regenerate it with tools/extract_catalog.py",
-              file=sys.stderr)
-    return Catalog(entries, source=payload.get("source", ""),
-                   generated=payload.get("generated", ""))
+        print(
+            f"warning: {target} has {skipped} unreadable row(s), skipped; "
+            f"regenerate it with tools/extract_catalog.py",
+            file=sys.stderr,
+        )
+    return Catalog(
+        entries,
+        source=payload.get("source", ""),
+        generated=payload.get("generated", ""),
+    )

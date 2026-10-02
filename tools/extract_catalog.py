@@ -51,11 +51,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from p2k import roms  # noqa: E402
 
-DEFAULT_INS = os.path.expanduser(
-    "~/Dokumente/SYNTHS/Proteus 2000/P2k_All.ins")
+DEFAULT_INS = os.path.expanduser("~/Dokumente/SYNTHS/Proteus 2000/P2k_All.ins")
 DEFAULT_OUTPUT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "p2k", "data", "catalog.json")
+    "p2k",
+    "data",
+    "catalog.json",
+)
 
 _SECTION = re.compile(r"^\[(?P<name>[^\]]+)\]\s*$")
 _ENTRY = re.compile(r"^(?P<pc>\d+)\s*=\s*(?P<name>.*)$")
@@ -143,10 +145,13 @@ def read_bank_refs(path: str) -> Dict[int, str]:
                 corrected[section] = (indexed, bank)
             refs[bank] = section
     for section, (indexed, bank) in sorted(corrected.items()):
-        print(f"note: {os.path.basename(path)} indexes {section!r} as bank "
-              f"{indexed}; using {bank} from its own label. Trusting the "
-              f"index would put this bank's names under bank {indexed}'s "
-              f"numbers.", file=sys.stderr)
+        print(
+            f"note: {os.path.basename(path)} indexes {section!r} as bank "
+            f"{indexed}; using {bank} from its own label. Trusting the "
+            f"index would put this bank's names under bank {indexed}'s "
+            f"numbers.",
+            file=sys.stderr,
+        )
     return refs
 
 
@@ -157,11 +162,14 @@ def read_bank_refs(path: str) -> Dict[int, str]:
 #: mark them with its "the unit disagrees with the book" flag, which is
 #: reserved for somebody having saved over a preset.
 _TYPOGRAPHIC = {
-    "\u2018": "'", "\u2019": "'",          # single quotes
-    "\u201c": '"', "\u201d": '"',          # double quotes
-    "\u2013": "-", "\u2014": "-",          # en and em dashes
-    "\u2026": "...",                       # ellipsis
-    "\u00a0": " ",                         # non-breaking space
+    "\u2018": "'",
+    "\u2019": "'",  # single quotes
+    "\u201c": '"',
+    "\u201d": '"',  # double quotes
+    "\u2013": "-",
+    "\u2014": "-",  # en and em dashes
+    "\u2026": "...",  # ellipsis
+    "\u00a0": " ",  # non-breaking space
 }
 
 
@@ -214,14 +222,15 @@ def read_odt(path: str) -> Dict[int, Dict[int, str]]:
         xml = archive.read("content.xml").decode("utf-8", "replace")
 
     # Spaces first, while the elements still exist.
-    xml = re.sub(r'<text:s\s+text:c="(\d+)"\s*/>',
-                 lambda m: " " * int(m.group(1)), xml)
+    xml = re.sub(r'<text:s\s+text:c="(\d+)"\s*/>', lambda m: " " * int(m.group(1)), xml)
     xml = re.sub(r"<text:s\s*/>", " ", xml)
     xml = re.sub(r"<text:tab\s*/>", " ", xml)
 
-    lines = [html.unescape(line).strip()
-             for line in re.sub(r"<[^>]+>", "\n", xml).split("\n")
-             if line.strip()]
+    lines = [
+        html.unescape(line).strip()
+        for line in re.sub(r"<[^>]+>", "\n", xml).split("\n")
+        if line.strip()
+    ]
 
     out: Dict[int, Dict[int, str]] = {}
     bank: Optional[int] = None
@@ -272,7 +281,8 @@ def build(paths: List[str]) -> Tuple[Dict[str, List[dict]], List[str]]:
         for msb, count in sorted(unclaimed.items()):
             notes.append(
                 f"{os.path.basename(path)}: MSB {msb} has {count} bank(s) "
-                f"that p2k/roms.py does not list")
+                f"that p2k/roms.py does not list"
+            )
 
     for rows in out.values():
         rows.sort(key=lambda row: row["pc"])
@@ -281,13 +291,18 @@ def build(paths: List[str]) -> Tuple[Dict[str, List[dict]], List[str]]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--ins", action="append", default=None,
-                        help="a Cakewalk .ins file (repeatable)")
-    parser.add_argument("--odt", action="append", default=None,
-                        metavar="ROM=FILE",
-                        help="an OpenDocument patch list for one ROM, as "
-                             "ROMID=FILE (repeatable). The only source for "
-                             "ROMs the .ins files do not cover.")
+    parser.add_argument(
+        "--ins", action="append", default=None, help="a Cakewalk .ins file (repeatable)"
+    )
+    parser.add_argument(
+        "--odt",
+        action="append",
+        default=None,
+        metavar="ROM=FILE",
+        help="an OpenDocument patch list for one ROM, as "
+        "ROMID=FILE (repeatable). The only source for "
+        "ROMs the .ins files do not cover.",
+    )
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT)
     args = parser.parse_args(argv)
 
@@ -298,7 +313,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"error: no such file: {', '.join(missing)}\n"
             f"       These ship with the Proteus family's Cakewalk "
             f"instrument definitions. p2ked works without them, showing "
-            f"numbers only.")
+            f"numbers only."
+        )
 
     banks_out, notes = build(paths)
     for note in notes:
@@ -308,29 +324,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         rom_id, _, path = item.partition("=")
         if not path:
             raise SystemExit(f"error: --odt wants ROM=FILE, got {item!r}")
-        entry = roms.rom(rom_id)        # fail now on an unknown ROM
+        entry = roms.rom(rom_id)  # fail now on an unknown ROM
         if not os.path.exists(path):
             raise SystemExit(f"error: no such file: {path}")
         found = read_odt(path)
         for bank, rows in sorted(found.items()):
             if bank >= len(entry.lsbs):
-                print(f"note: {os.path.basename(path)} has a bank {bank} "
-                      f"that {rom_id} does not answer on; skipped",
-                      file=sys.stderr)
+                print(
+                    f"note: {os.path.basename(path)} has a bank {bank} "
+                    f"that {rom_id} does not answer on; skipped",
+                    file=sys.stderr,
+                )
                 continue
             bank_id = f"{rom_id}-{entry.lsbs[bank]}"
             have = {row["pc"] for row in banks_out.get(bank_id, [])}
             banks_out.setdefault(bank_id, []).extend(
                 {"pc": pc, "name": name}
-                for pc, name in sorted(rows.items()) if pc not in have)
+                for pc, name in sorted(rows.items())
+                if pc not in have
+            )
             banks_out[bank_id].sort(key=lambda row: row["pc"])
 
     payload = {
         "source": "; ".join(os.path.basename(path) for path in paths),
         "generated": datetime.date.today().isoformat(),
-        "note": ("Generated locally by tools/extract_catalog.py from the "
-                 "user's own instrument-definition files. Not distributed "
-                 "with p2ked."),
+        "note": (
+            "Generated locally by tools/extract_catalog.py from the "
+            "user's own instrument-definition files. Not distributed "
+            "with p2ked."
+        ),
         "banks": banks_out,
     }
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)

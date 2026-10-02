@@ -52,19 +52,19 @@ class TestUnfavouritingKeepsWhatTheUserTyped:
     """
 
     def test_a_toggle_cycle_keeps_rating_tags_and_note(self, store):
-        store.add("XLEAD2-1", 5, name="Invented",
-                  rating=4, tags="a, b", note="hello")
+        store.add("XLEAD2-1", 5, name="Invented", rating=4, tags="a, b", note="hello")
         before = store.get("XLEAD2-1", 5)
 
-        assert store.toggle("XLEAD2-1", 5) is False     # off
+        assert store.toggle("XLEAD2-1", 5) is False  # off
         assert store.get("XLEAD2-1", 5) is None, "it should not be a favourite"
-        assert store.toggle("XLEAD2-1", 5) is True      # on again
+        assert store.toggle("XLEAD2-1", 5) is True  # on again
 
         after = store.get("XLEAD2-1", 5)
         assert (after.rating, after.tags, after.note) == (4, "a, b", "hello")
         assert after.added == before.added, (
             "the date it was first favourited is the one ordering the user "
-            "cannot reconstruct")
+            "cannot reconstruct"
+        )
 
     def test_an_unfavourited_slot_is_not_a_favourite(self, store):
         store.add("XLEAD2-1", 5, name="Invented", rating=3)
@@ -80,8 +80,7 @@ class TestUnfavouritingKeepsWhatTheUserTyped:
         store.add("XLEAD2-1", 5, name="Invented", rating=3)
         store.remove("XLEAD2-1", 5)
         held = store.dormant()
-        assert [(f.bank_id, f.number, f.rating) for f in held] == [
-            ("XLEAD2-1", 5, 3)]
+        assert [(f.bank_id, f.number, f.rating) for f in held] == [("XLEAD2-1", 5, 3)]
 
     def test_forget_really_deletes(self, store):
         store.add("XLEAD2-1", 5, name="Invented", rating=3)
@@ -101,9 +100,12 @@ class TestUnfavouritingKeepsWhatTheUserTyped:
                 tags TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
                 added REAL NOT NULL DEFAULT 0,
                 PRIMARY KEY (bank_id, number));
-            """)
-        db.execute("INSERT INTO favorites (bank_id, number, name, rating) "
-                   "VALUES ('XLEAD2-1', 7, 'Invented', 5)")
+            """
+        )
+        db.execute(
+            "INSERT INTO favorites (bank_id, number, name, rating) "
+            "VALUES ('XLEAD2-1', 7, 'Invented', 5)"
+        )
         db.execute("PRAGMA user_version = 1")
         db.commit()
         db.close()
@@ -158,8 +160,7 @@ class TestTheChannelKeys:
 class TestEnterMeansTheRowYouAreLookingAt:
     """Item 35. With neither table focused, Enter played the hidden pane."""
 
-    async def test_enter_does_nothing_when_the_preset_pane_is_not_focused(
-            self, app):
+    async def test_enter_does_nothing_when_the_preset_pane_is_not_focused(self, app):
         async with app.run_test() as pilot:
             await pilot.pause()
             app.screen.set_focus(None)
@@ -167,7 +168,8 @@ class TestEnterMeansTheRowYouAreLookingAt:
             for _ in range(6):
                 await pilot.pause()
             assert app.device.selected_log == [], (
-                "Enter played a preset from a pane the user is not in")
+                "Enter played a preset from a pane the user is not in"
+            )
 
     async def test_enter_still_works_when_it_is_focused(self, app):
         async with app.run_test() as pilot:
@@ -184,12 +186,14 @@ class TestSearchSaysWhenTheUnitDisagrees:
 
     def _catalog(self):
         c = cat.empty()
-        c._entries["lead:005"] = cat.Entry(bank_id="lead", program_change=5,
-                                           name="Printed Name")
-        c._entries["lead:006"] = cat.Entry(bank_id="lead", program_change=6,
-                                           name="Printed Other")
-        c.set_live_name("lead", 5, "Printed Name")      # agrees
-        c.set_live_name("lead", 6, "Saved Over")        # disagrees
+        c._entries["lead:005"] = cat.Entry(
+            bank_id="lead", program_change=5, name="Printed Name"
+        )
+        c._entries["lead:006"] = cat.Entry(
+            bank_id="lead", program_change=6, name="Printed Other"
+        )
+        c.set_live_name("lead", 5, "Printed Name")  # agrees
+        c.set_live_name("lead", 6, "Saved Over")  # disagrees
         return c
 
     def test_a_hit_carries_whether_the_two_sources_differ(self):
@@ -235,8 +239,7 @@ class TestARememberedPort:
     def test_the_port_round_trips(self, tmp_path):
         path = str(tmp_path / "config.toml")
         config.save_last_port("U6MIDI Pro:U6MIDI Pro MIDI 1 44:0", path)
-        assert config.load_last_port(path) == (
-            "U6MIDI Pro:U6MIDI Pro MIDI 1 44:0")
+        assert config.load_last_port(path) == ("U6MIDI Pro:U6MIDI Pro MIDI 1 44:0")
 
     def test_a_device_id_of_true_is_not_device_1(self, tmp_path):
         """isinstance(True, int) is True, and device 1 is a real device.
@@ -275,7 +278,7 @@ class TestAPortNameCannotPoisonTheConfig:
     def test_the_cache_still_heals(self, tmp_path):
         path = str(tmp_path / "config.toml")
         config.save_last_port('has a " in it', path)
-        config.save_last_port('a sane port', path)
+        config.save_last_port("a sane port", path)
         assert config.load_last_port(path) == "a sane port"
 
 
@@ -309,10 +312,17 @@ class TestOneBadCatalogRowDoesNotCostTheOthers:
 
         path = str(tmp_path / "cat.json")
         with open(path, "w", encoding="utf-8") as handle:
-            json.dump({"banks": {"XLEAD2-1": [
-                {"pc": "not a number", "name": "Bad"},
-                {"pc": 1, "name": "Invented"},
-            ]}}, handle)
+            json.dump(
+                {
+                    "banks": {
+                        "XLEAD2-1": [
+                            {"pc": "not a number", "name": "Bad"},
+                            {"pc": 1, "name": "Invented"},
+                        ]
+                    }
+                },
+                handle,
+            )
         assert len(_load(path)) == 1
 
 
@@ -347,19 +357,18 @@ class TestABoolIsNotANumber:
     def test_no_numeric_loader_accepts_true(self, tmp_path):
         offenders = []
         for name, fn in self._loaders():
-            key = name[len("load_"):]
+            key = name[len("load_") :]
             path = str(tmp_path / f"{key}.toml")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(f"{key} = true\n")
             if fn(path) is not None:
                 offenders.append(name)
-        assert not offenders, (
-            f"{offenders} accept a TOML boolean as a number")
+        assert not offenders, f"{offenders} accept a TOML boolean as a number"
 
     def test_no_numeric_loader_accepts_an_absurd_value(self, tmp_path):
         offenders = []
         for name, fn in self._loaders():
-            key = name[len("load_"):]
+            key = name[len("load_") :]
             path = str(tmp_path / f"{key}.toml")
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(f"{key} = 9999\n")

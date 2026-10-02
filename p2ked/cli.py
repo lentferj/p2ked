@@ -42,11 +42,14 @@ def _table(rows: List[List[str]], headers: List[str]) -> str:
     for row in rows:
         for index, cell in enumerate(row):
             widths[index] = max(widths[index], len(cell))
-    out = ["  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)).rstrip(),
-           "  ".join("-" * widths[i] for i in range(len(headers)))]
+    out = [
+        "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)).rstrip(),
+        "  ".join("-" * widths[i] for i in range(len(headers))),
+    ]
     for row in rows:
-        out.append("  ".join(cell.ljust(widths[i])
-                             for i, cell in enumerate(row)).rstrip())
+        out.append(
+            "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
+        )
     return "\n".join(out)
 
 
@@ -61,29 +64,37 @@ def _cmd_roms(_device, args) -> None:
     catalog = _catalog(args)
     rows = []
     for entry in roms.ROMS:
-        named = sum(1 for bank in roms.banks(entry.id)
-                    if catalog.has(bank.id))
-        rows.append([
-            entry.id, entry.name, str(entry.msb),
-            f"{min(entry.lsbs)}-{max(entry.lsbs)}" if len(entry.lsbs) > 1
-            else str(entry.lsbs[0]),
-            str(entry.count), f"{named}/{entry.bank_count}",
-            "user" if entry.writable else "",
-        ])
-    print(_table(rows, ["id", "name", "MSB", "LSB", "presets", "named",
-                        "note"]))
+        named = sum(1 for bank in roms.banks(entry.id) if catalog.has(bank.id))
+        rows.append(
+            [
+                entry.id,
+                entry.name,
+                str(entry.msb),
+                f"{min(entry.lsbs)}-{max(entry.lsbs)}"
+                if len(entry.lsbs) > 1
+                else str(entry.lsbs[0]),
+                str(entry.count),
+                f"{named}/{entry.bank_count}",
+                "user" if entry.writable else "",
+            ]
+        )
+    print(_table(rows, ["id", "name", "MSB", "LSB", "presets", "named", "note"]))
 
 
 def _cmd_list(_device, args) -> None:
     catalog = _catalog(args)
     rows = []
     for entry in roms.presets(args.bank):
-        rows.append([
-            f"{entry.program_change:03d}",
-            catalog.display_name(args.bank, entry.program_change),
-            str(entry.msb), str(entry.lsb), str(entry.program_change),
-            str(entry.number),
-        ])
+        rows.append(
+            [
+                f"{entry.program_change:03d}",
+                catalog.display_name(args.bank, entry.program_change),
+                str(entry.msb),
+                str(entry.lsb),
+                str(entry.program_change),
+                str(entry.number),
+            ]
+        )
     print(_table(rows, ["#", "name", "MSB", "LSB", "PC", "ROM#"]))
 
 
@@ -99,14 +110,22 @@ def _cmd_find(_device, args) -> None:
             entry = roms.preset(bank_id, program_change)
         except LookupError:
             continue
-        rows.append([bank_id, f"{program_change:03d}",
-                     name + (" *" if differs else ""),
-                     str(entry.msb), str(entry.lsb),
-                     str(entry.program_change)])
+        rows.append(
+            [
+                bank_id,
+                f"{program_change:03d}",
+                name + (" *" if differs else ""),
+                str(entry.msb),
+                str(entry.lsb),
+                str(entry.program_change),
+            ]
+        )
     print(_table(rows, ["bank", "#", "name", "MSB", "LSB", "PC"]))
     if any(hit[3] for hit in hits):
-        print("\n* the unit and the printed catalog disagree about this "
-              "slot; the unit's name is shown")
+        print(
+            "\n* the unit and the printed catalog disagree about this "
+            "slot; the unit's name is shown"
+        )
 
 
 def _cmd_resolve(_device, args) -> None:
@@ -115,12 +134,16 @@ def _cmd_resolve(_device, args) -> None:
         raise SystemExit(
             f"error: no ROM in p2ked's table answers on MSB {args.msb} / "
             f"LSB {args.lsb}. That is not necessarily wrong -- it may be a "
-            f"ROM this table has no row for.")
+            f"ROM this table has no row for."
+        )
     catalog = _catalog(args)
-    print(f"{found.bank.label} {found.program_change:03d}  "
-          f"{catalog.display_name(found.bank_id, found.program_change)}")
-    print(f"ROM {found.rom.name} ({found.rom.id}), preset {found.number} "
-          f"within the ROM")
+    print(
+        f"{found.bank.label} {found.program_change:03d}  "
+        f"{catalog.display_name(found.bank_id, found.program_change)}"
+    )
+    print(
+        f"ROM {found.rom.name} ({found.rom.id}), preset {found.number} within the ROM"
+    )
 
 
 # --- device ------------------------------------------------------------------
@@ -130,8 +153,10 @@ def _cmd_status(device, _args) -> None:
     fields = device.identify()
     if fields is None:
         raise SystemExit("error: nothing answered an Identity Request.")
-    print(f"manufacturer   {fields['manufacturer']:#04x}"
-          f"{'  (E-MU)' if fields['is_emu'] else ''}")
+    print(
+        f"manufacturer   {fields['manufacturer']:#04x}"
+        f"{'  (E-MU)' if fields['is_emu'] else ''}"
+    )
     print(f"family         {fields['family']}")
     print(f"member         {fields['member']}")
     print(f"device ID      {fields['device']}")
@@ -145,16 +170,20 @@ def _cmd_config(device, _args) -> None:
     rows = []
     for simm in config.simms:
         guess = roms.rom_for_simm_id(simm.simm_id)
-        rows.append([
-            str(simm.simm_id), str(simm.presets), str(simm.instruments),
-            guess.name if guess else "not in p2ked's table",
-        ])
+        rows.append(
+            [
+                str(simm.simm_id),
+                str(simm.presets),
+                str(simm.instruments),
+                guess.name if guess else "not in p2ked's table",
+            ]
+        )
     print()
     print(_table(rows, ["SIMM id", "presets", "instruments", "ROM"]))
     print("\nThe ROM column reads the SIMM ID as that ROM's Bank Select MSB.")
     print("No E-MU document to hand says they are the same number; it was")
     print("confirmed against hardware for three ROMs on 2026-09-12, which is")
-    print("not all twenty. A row saying \"not in p2ked's table\" means the")
+    print('not all twenty. A row saying "not in p2ked\'s table" means the')
     print("instrument-definition files do not cover that MSB -- the presets")
     print("are still readable, only the ROM's name is unknown.")
 
@@ -173,39 +202,55 @@ def _cmd_channels(device, args) -> None:
     if mode is None:
         print("MIDI mode      could not be read")
     else:
-        print(f"MIDI mode      {msg.MidiMode.name(mode)}"
-              + ("" if msg.MidiMode.is_multitimbral(mode)
-                 else "   -- NOT multitimbral; the settings below are "
-                      "stored but not in effect"))
+        print(
+            f"MIDI mode      {msg.MidiMode.name(mode)}"
+            + (
+                ""
+                if msg.MidiMode.is_multitimbral(mode)
+                else "   -- NOT multitimbral; the settings below are "
+                "stored but not in effect"
+            )
+        )
     print()
     rows = []
     for entry in dump.channels:
-        rom = (roms.USER if entry.rom_id == roms.USER_ROM_ID
-               else roms.rom_for_simm_id(entry.rom_id))
+        rom = (
+            roms.USER
+            if entry.rom_id == roms.USER_ROM_ID
+            else roms.rom_for_simm_id(entry.rom_id)
+        )
         plays = f"ROM {entry.rom_id} preset {entry.preset}"
         if rom is not None:
             index, pc = divmod(entry.preset, roms.PRESETS_PER_BANK)
             if index < len(rom.lsbs):
                 bank_id = f"{rom.id}-{rom.lsbs[index]}"
-                plays = (f"{rom.name} {entry.preset} "
-                         f"{catalog.display_name(bank_id, pc)}").rstrip()
-        rows.append([
-            str(entry.channel_display), plays, str(entry.volume),
-            str(entry.pan - 64), str(entry.mix_output),
-            "on" if entry.receive_program_change else "OFF",
-            entry.silent_because or "",
-        ])
+                plays = (
+                    f"{rom.name} {entry.preset} {catalog.display_name(bank_id, pc)}"
+                ).rstrip()
+        rows.append(
+            [
+                str(entry.channel_display),
+                plays,
+                str(entry.volume),
+                str(entry.pan - 64),
+                str(entry.mix_output),
+                "on" if entry.receive_program_change else "OFF",
+                entry.silent_because or "",
+            ]
+        )
     print(_table(rows, ["ch", "plays", "vol", "pan", "out", "rxPC", ""]))
-    audible = [c.channel_display for c in dump.channels
-               if c.silent_because is None]
+    audible = [c.channel_display for c in dump.channels if c.silent_because is None]
     print()
-    print("Channels that would sound: "
-          + (", ".join(map(str, audible)) if audible else "none"))
+    print(
+        "Channels that would sound: "
+        + (", ".join(map(str, audible)) if audible else "none")
+    )
     print("Channels 17-32 are this family's second MIDI interface.")
 
 
 def _cmd_names(device, args) -> None:
     """Read a bank's names off the unit. Read-only, **makes no sound**."""
+
     def progress(done: int, total: int) -> None:
         print(f"\r  {done}/{total}", end="", file=sys.stderr)
 
@@ -216,8 +261,14 @@ def _cmd_names(device, args) -> None:
     for program_change in sorted(names):
         printed = catalog.name(args.bank, program_change) or ""
         live = names[program_change]
-        rows.append([f"{program_change:03d}", live, printed,
-                     "*" if printed and printed != live else ""])
+        rows.append(
+            [
+                f"{program_change:03d}",
+                live,
+                printed,
+                "*" if printed and printed != live else "",
+            ]
+        )
     print(_table(rows, ["#", "on the unit", "in the catalog", ""]))
 
 
@@ -225,8 +276,10 @@ def _cmd_select(device, args) -> None:
     """Select a preset. **This changes what the unit is playing.**"""
     entry = roms.preset(args.bank, args.pc)
     device.select(entry, channel=(args.channel or 1) - 1)
-    print(f"selected {entry} on MIDI channel {args.channel or 1} "
-          f"(MSB {entry.msb}, LSB {entry.lsb}, PC {entry.program_change})")
+    print(
+        f"selected {entry} on MIDI channel {args.channel or 1} "
+        f"(MSB {entry.msb}, LSB {entry.lsb}, PC {entry.program_change})"
+    )
 
 
 _COMMANDS: Dict[str, Callable] = {
@@ -234,7 +287,7 @@ _COMMANDS: Dict[str, Callable] = {
     "list": _cmd_list,
     "find": _cmd_find,
     "resolve": _cmd_resolve,
-    "ports": None,          # filled in below; needs the MIDI import
+    "ports": None,  # filled in below; needs the MIDI import
     "status": _cmd_status,
     "config": _cmd_config,
     "channels": _cmd_channels,
@@ -247,8 +300,7 @@ _OFFLINE = {"roms", "list", "find", "resolve"}
 
 
 def _cmd_ports(_device, _args) -> None:
-    from p2k.bridge import (MidiUnavailable, likely_proteus_ports,
-                            list_ports)
+    from p2k.bridge import MidiUnavailable, likely_proteus_ports, list_ports
 
     try:
         ins, outs = list_ports()
@@ -275,14 +327,19 @@ _OFFLINE.add("ports")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="p2kcli", description="Browse an E-MU Proteus 2000's presets.")
+        prog="p2kcli", description="Browse an E-MU Proteus 2000's presets."
+    )
     parser.add_argument("--port", help="MIDI port name")
     parser.add_argument("--recv-port")
-    parser.add_argument("--demo", action="store_true",
-                        help="use the built-in demo device; opens no ports")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="use the built-in demo device; opens no ports",
+    )
     parser.add_argument("--device-id", type=int, default=None)
-    parser.add_argument("--channel", type=int, default=None,
-                        help="MIDI channel 1-16 for select")
+    parser.add_argument(
+        "--channel", type=int, default=None, help="MIDI channel 1-16 for select"
+    )
     parser.add_argument("--catalog", default=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -298,9 +355,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("ports", help="MIDI ports on this host")
     sub.add_parser("status", help="ask the unit who it is")
     sub.add_parser("config", help="which ROMs are fitted")
-    sub.add_parser("channels",
-                   help="every MIDI channel: what it plays, and why it "
-                        "might not (makes no sound)")
+    sub.add_parser(
+        "channels",
+        help="every MIDI channel: what it plays, and why it might not (makes no sound)",
+    )
     sp = sub.add_parser("names", help="read a bank's names (makes no sound)")
     sp.add_argument("bank")
     sp = sub.add_parser("select", help="select a preset ON THE UNIT")
@@ -320,16 +378,20 @@ def _build_device(args):
     b.install_clean_exit()
     if args.port:
         device = b.ProteusBridge.open(
-            args.port, recv_port=args.recv_port,
-            device_id=(args.device_id if args.device_id is not None
-                       else msg.BROADCAST_DEVICE))
+            args.port,
+            recv_port=args.recv_port,
+            device_id=(
+                args.device_id if args.device_id is not None else msg.BROADCAST_DEVICE
+            ),
+        )
         if args.device_id is None:
             # Broadcast is not a safe default -- this Proteus ignores it,
             # so identity answers and every read then times out.
             device.learn_device_id(timeout=0.8)
         return device
     return b.ProteusBridge.autodetect(
-        on_try=lambda name: print(f"  probing {name}...", file=sys.stderr))
+        on_try=lambda name: print(f"  probing {name}...", file=sys.stderr)
+    )
 
 
 def main(argv: Optional[List[str]] = None) -> int:

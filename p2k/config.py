@@ -44,9 +44,15 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
     tomllib = None
 
 __all__ = [
-    "DEFAULT_PATH", "load_channel", "save_channel", "load_last_port",
-    "save_last_port", "load_last_recv_port", "save_last_recv_port",
-    "load_device_id", "save_device_id",
+    "DEFAULT_PATH",
+    "load_channel",
+    "save_channel",
+    "load_last_port",
+    "save_last_port",
+    "load_last_recv_port",
+    "save_last_recv_port",
+    "load_device_id",
+    "save_device_id",
 ]
 
 DEFAULT_PATH = "config.toml"
@@ -65,8 +71,13 @@ def _read(path: str) -> Tuple[dict, str]:
 
 
 _TOML_ESCAPES = {
-    "\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r",
-    "\t": "\\t", "\b": "\\b", "\f": "\\f",
+    "\\": "\\\\",
+    '"': '\\"',
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
 }
 
 
@@ -102,9 +113,12 @@ def _update(path: str, **changes) -> None:
     if status == "unreadable":
         if not _warned:
             _warned = True
-            print(f"p2ked: {path} could not be parsed, so settings are not "
-                  f"being saved. Fix or delete it; nothing has been "
-                  f"overwritten.", file=sys.stderr)
+            print(
+                f"p2ked: {path} could not be parsed, so settings are not "
+                f"being saved. Fix or delete it; nothing has been "
+                f"overwritten.",
+                file=sys.stderr,
+            )
         return
     data.update(changes)
     lines = ["# p2ked local config - gitignored, safe to delete."]

@@ -67,11 +67,11 @@ def parse(path):
             raise SystemExit(
                 f"{path}:{lineno}: a PC line before any bank header. Each "
                 f"bank's entries must follow a header naming its catalog key "
-                f"in brackets, e.g. [XLEAD2-1].")
+                f"in brackets, e.g. [XLEAD2-1]."
+            )
         pc = int(entry.group(1))
         if not 0 <= pc <= 127:
-            raise SystemExit(f"{path}:{lineno}: program change {pc} is "
-                             f"outside 0-127")
+            raise SystemExit(f"{path}:{lineno}: program change {pc} is outside 0-127")
         rest = entry.group(2)
         uncertain = "<--" in rest
         out.append((bank, pc, NOTE.sub("", rest).strip(), uncertain))
@@ -81,17 +81,29 @@ def parse(path):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("listing")
-    ap.add_argument("--favorites", default=None,
-                    help="database path (default: the per-platform one)")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="say what would be imported and write nothing")
-    ap.add_argument("--replace", action="store_true",
-                    help="first clear existing favourites in the banks this "
-                         "file mentions")
-    ap.add_argument("--tag", default="",
-                    help="tag to attach to every imported favourite")
-    ap.add_argument("--skip-uncertain", action="store_true",
-                    help="leave out marks the listing flags as faint")
+    ap.add_argument(
+        "--favorites",
+        default=None,
+        help="database path (default: the per-platform one)",
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="say what would be imported and write nothing",
+    )
+    ap.add_argument(
+        "--replace",
+        action="store_true",
+        help="first clear existing favourites in the banks this file mentions",
+    )
+    ap.add_argument(
+        "--tag", default="", help="tag to attach to every imported favourite"
+    )
+    ap.add_argument(
+        "--skip-uncertain",
+        action="store_true",
+        help="leave out marks the listing flags as faint",
+    )
     args = ap.parse_args(argv)
 
     rows = parse(args.listing)
@@ -99,8 +111,10 @@ def main(argv=None):
         rows = [r for r in rows if not r[3]]
     banks = sorted({r[0] for r in rows})
     flagged = sum(1 for r in rows if r[3])
-    print(f"{len(rows)} favourite(s) across {len(banks)} bank(s) "
-          f"in {os.path.basename(args.listing)}")
+    print(
+        f"{len(rows)} favourite(s) across {len(banks)} bank(s) "
+        f"in {os.path.basename(args.listing)}"
+    )
     if flagged:
         print(f"  {flagged} of them flagged faint in the listing")
     if args.dry_run:
@@ -140,8 +154,10 @@ def main(argv=None):
         print(f"removed {removed} existing favourite(s) in those banks")
     print(f"added {added}, already present {skipped}")
     if nameless:
-        print(f"{nameless} had no name on their line and are tagged "
-              f"check-scan; a truncated scan looks like this")
+        print(
+            f"{nameless} had no name on their line and are tagged "
+            f"check-scan; a truncated scan looks like this"
+        )
     print(f"{total} favourite(s) now in {path}")
     return 0
 

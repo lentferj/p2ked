@@ -66,7 +66,7 @@ class TestTwoNumbers:
     def test_and_diverge_after_it(self):
         later = roms.preset("XLEAD-1", 5)
         assert later.program_change == 5
-        assert later.number == 133          # 128 + 5
+        assert later.number == 133  # 128 + 5
 
     def test_the_rom_number_counts_across_banks(self):
         last = roms.presets("COMPOSER-7")[-1]
@@ -107,8 +107,7 @@ class TestSimmIdIsTheBankSelectMsb:
         assert roms.rom_for_simm_id(7) is roms.rom("XLEAD")
 
     def test_the_confirmed_three_resolve(self):
-        for simm_id, rom_id in ((4, "COMPOSER"), (65, "TECHNO"),
-                                (67, "BEATGARDEN")):
+        for simm_id, rom_id in ((4, "COMPOSER"), (65, "TECHNO"), (67, "BEATGARDEN")):
             assert roms.rom_for_simm_id(simm_id) is roms.rom(rom_id)
 
     def test_an_unknown_id_is_none(self):
@@ -209,21 +208,27 @@ class TestWhatADisagreementMeans:
     def _catalog(self):
         from p2k import catalog as cat
 
-        c = cat.Catalog([cat.Entry("USER-0", 0, "Book Name"),
-                         cat.Entry("XLEAD2-0", 90, "abc:Woven 1")])
+        c = cat.Catalog(
+            [
+                cat.Entry("USER-0", 0, "Book Name"),
+                cat.Entry("XLEAD2-0", 90, "abc:Woven 1"),
+            ]
+        )
         c.set_live_name("USER-0", 0, "My Own Sound")
-        c.set_live_name("XLEAD2-0", 90, "abc:Woven  1")   # two spaces
+        c.set_live_name("XLEAD2-0", 90, "abc:Woven  1")  # two spaces
         return c
 
     def test_a_user_bank_difference_means_it_was_saved_over(self):
         c = self._catalog()
         assert c.disagreement("USER-0", 0, roms.USER.writable) == (
-            "saved over the factory preset")
+            "saved over the factory preset"
+        )
 
     def test_a_rom_difference_means_the_book_is_wrong(self):
         c = self._catalog()
         assert "printed list is wrong" in c.disagreement(
-            "XLEAD2-0", 90, roms.rom("XLEAD2").writable)
+            "XLEAD2-0", 90, roms.rom("XLEAD2").writable
+        )
 
     def test_agreement_is_not_a_disagreement(self):
         from p2k import catalog as cat

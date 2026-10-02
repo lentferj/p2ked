@@ -77,10 +77,23 @@ VIEW_LABELS = {
 }
 
 KEY_HINTS = (
-    "↑↓ move", "tab pane", "⏎ select on the unit", "r read names",
-    "m channels", "/ search", "[ ] channel", "c set channel",
-    "f favourite", "F favourites view", "t tags", "n note", "C category",
-    "a all ROMs", "i device", "? help", "q quit",
+    "↑↓ move",
+    "tab pane",
+    "⏎ select on the unit",
+    "r read names",
+    "m channels",
+    "/ search",
+    "[ ] channel",
+    "c set channel",
+    "f favourite",
+    "F favourites view",
+    "t tags",
+    "n note",
+    "C category",
+    "a all ROMs",
+    "i device",
+    "? help",
+    "q quit",
 )
 
 
@@ -136,8 +149,7 @@ class ReportScreen(ModalScreen[None]):
     ReportScreen .body { height: 1fr; overflow-y: auto; }
     """
 
-    BINDINGS = [Binding("escape", "close", "Close"),
-                Binding("q", "close", "Close")]
+    BINDINGS = [Binding("escape", "close", "Close"), Binding("q", "close", "Close")]
 
     def __init__(self, title: str, body: str) -> None:
         super().__init__()
@@ -218,8 +230,7 @@ class ChannelScreen(ModalScreen[None]):
     ChannelScreen .note { height: auto; color: $text-muted; padding-top: 1; }
     """
 
-    BINDINGS = [Binding("escape", "close", "Close"),
-                Binding("q", "close", "Close")]
+    BINDINGS = [Binding("escape", "close", "Close"), Binding("q", "close", "Close")]
 
     def __init__(self, dump, catalog, mode=None) -> None:
         super().__init__()
@@ -229,35 +240,48 @@ class ChannelScreen(ModalScreen[None]):
         self._mode = mode
 
     def compose(self) -> ComposeResult:
-        title = (f"[b]Channels — setup “{self._dump.name}”[/b]"
-                 if self._dump.name else "[b]Channels[/b]")
+        title = (
+            f"[b]Channels — setup “{self._dump.name}”[/b]"
+            if self._dump.name
+            else "[b]Channels[/b]"
+        )
         if self._mode is None:
             title += "  [dim](MIDI mode could not be read)[/dim]"
         elif params.MidiMode.is_multitimbral(self._mode):
             title += f"  MIDI mode [b]{params.MidiMode.name(self._mode)}[/b]"
         else:
-            title += (f"  [b]MIDI mode {params.MidiMode.name(self._mode)} — "
-                      f"NOT multitimbral[/b]")
+            title += (
+                f"  [b]MIDI mode {params.MidiMode.name(self._mode)} — "
+                f"NOT multitimbral[/b]"
+            )
         with Vertical():
             yield Label(title)
-            yield DataTable(id="channel-table", cursor_type="row",
-                            zebra_stripes=True)
+            yield DataTable(id="channel-table", cursor_type="row", zebra_stripes=True)
             yield Static(self._report(), classes="note")
             yield Static("[dim]esc / q to close[/dim]")
 
     def on_mount(self) -> None:
         table = self.query_one("#channel-table", DataTable)
-        for label, key in (("ch", "ch"), ("plays", "plays"), ("vol", "vol"),
-                           ("pan", "pan"), ("out", "out"), ("rxPC", "rxpc"),
-                           ("", "flag")):
+        for label, key in (
+            ("ch", "ch"),
+            ("plays", "plays"),
+            ("vol", "vol"),
+            ("pan", "pan"),
+            ("out", "out"),
+            ("rxPC", "rxpc"),
+            ("", "flag"),
+        ):
             table.add_column(label, key=key)
         for entry in self._dump.channels:
             table.add_row(*self._row(entry), key=str(entry.channel))
 
     def _plays(self, entry) -> str:
         """What this channel is set to, named if p2ked can name it."""
-        rom = (roms.USER if entry.rom_id == roms.USER_ROM_ID
-               else roms.rom_for_simm_id(entry.rom_id))
+        rom = (
+            roms.USER
+            if entry.rom_id == roms.USER_ROM_ID
+            else roms.rom_for_simm_id(entry.rom_id)
+        )
         if rom is None:
             return f"[dim]ROM {entry.rom_id}, preset {entry.preset}[/dim]"
         index, program_change = divmod(entry.preset, roms.PRESETS_PER_BANK)
@@ -284,8 +308,7 @@ class ChannelScreen(ModalScreen[None]):
 
     def _lines(self) -> List[str]:
         out: List[str] = []
-        if self._mode is not None and not params.MidiMode.is_multitimbral(
-                self._mode):
+        if self._mode is not None and not params.MidiMode.is_multitimbral(self._mode):
             # First, and alone: in this mode nothing below is in effect, and
             # listing per-channel faults would send somebody to fix a
             # channel when the mode is the answer.
@@ -293,33 +316,37 @@ class ChannelScreen(ModalScreen[None]):
                 f"This unit is in {params.MidiMode.name(self._mode).upper()} "
                 f"mode, which is NOT multitimbral. The channel settings "
                 f"below are stored but not in effect. Only in MULTI does a "
-                f"per-channel setting mean anything.")
+                f"per-channel setting mean anything."
+            )
             return out
         audible = [c for c in self._dump.channels if c.silent_because is None]
         if audible:
             out.append(
                 "Channels that would sound: "
-                + ", ".join(str(c.channel_display) for c in audible))
+                + ", ".join(str(c.channel_display) for c in audible)
+            )
         else:
             out.append("No channel on this unit would sound.")
 
-        deaf = [c for c in self._dump.channels
-                if not c.receive_program_change]
+        deaf = [c for c in self._dump.channels if not c.receive_program_change]
         if deaf:
             out.append(
                 "Ignores Program Change on channel "
                 + ", ".join(str(c.channel_display) for c in deaf)
-                + " — a select aimed there does nothing.")
+                + " — a select aimed there does nothing."
+            )
 
         out.append(
             "This unit has two MIDI interfaces, so channels 17-32 are the "
             "second one. They are real channels whether or not anything is "
-            "plugged into it.")
+            "plugged into it."
+        )
         if self._mode is None:
             out.append(
                 "The MIDI Mode could not be read. In Omni or Poly none of "
                 "the above is in effect, so treat it as unknown rather than "
-                "assuming this unit is multitimbral.")
+                "assuming this unit is multitimbral."
+            )
         return out
 
     def action_close(self) -> None:
@@ -371,9 +398,16 @@ class P2kedApp(App):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, device, *, catalog=None, channel: int = 0,
-                 favorites=None, installed=None,
-                 config_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        device,
+        *,
+        catalog=None,
+        channel: int = 0,
+        favorites=None,
+        installed=None,
+        config_path: Optional[str] = None,
+    ) -> None:
         super().__init__()
         self.device = device
         self.catalog = catalog if catalog is not None else cat.empty()
@@ -407,8 +441,9 @@ class P2kedApp(App):
 
     def _rom_id_of(self, bank_id: str) -> int:
         entry = roms.bank(bank_id)
-        return (roms.USER_ROM_ID
-                if getattr(entry, "rom", None) is roms.USER else entry.msb)
+        return (
+            roms.USER_ROM_ID if getattr(entry, "rom", None) is roms.USER else entry.msb
+        )
 
     def _visible_banks(self) -> List[str]:
         """Bank ids to list: by default only ROMs the unit actually has.
@@ -429,8 +464,8 @@ class P2kedApp(App):
         """Every ROM in the table, or only the ones fitted."""
         if not self.installed:
             self.notify_status(
-                "the unit was not asked which ROMs are fitted, so all are "
-                "shown")
+                "the unit was not asked which ROMs are fitted, so all are shown"
+            )
             return
         self._all_roms = not self._all_roms
         self._bank_ids = self._visible_banks()
@@ -439,8 +474,10 @@ class P2kedApp(App):
         self._fill_banks()
         self._fill_presets(self._current_bank)
         self.notify_status(
-            f"showing all {len(self._bank_ids)} banks" if self._all_roms
-            else f"showing the {len(self._bank_ids)} banks this unit has")
+            f"showing all {len(self._bank_ids)} banks"
+            if self._all_roms
+            else f"showing the {len(self._bank_ids)} banks this unit has"
+        )
 
     def _fill_banks(self) -> None:
         table = self.query_one("#bank-table", DataTable)
@@ -450,12 +487,16 @@ class P2kedApp(App):
             for bank_id in self._bank_ids:
                 entry = roms.bank(bank_id)
                 marked = len(self._favorite_keys(bank_id))
-                table.add_row(entry.label, str(entry.msb), str(entry.lsb),
-                              str(entry.count),
-                              # blank rather than "0": a column of zeroes is
-                              # noise, and the eye wants the few that differ
-                              str(marked) if marked else "",
-                              key=bank_id)
+                table.add_row(
+                    entry.label,
+                    str(entry.msb),
+                    str(entry.lsb),
+                    str(entry.count),
+                    # blank rather than "0": a column of zeroes is
+                    # noise, and the eye wants the few that differ
+                    str(marked) if marked else "",
+                    key=bank_id,
+                )
         finally:
             self._filling = False
 
@@ -471,8 +512,13 @@ class P2kedApp(App):
     def on_mount(self) -> None:
         self.title = "p2ked"
         banks = self.query_one("#bank-table", DataTable)
-        for label, key in (("bank", "bank"), ("MSB", "msb"), ("LSB", "lsb"),
-                           ("n", "n"), ("♥", "fav")):
+        for label, key in (
+            ("bank", "bank"),
+            ("MSB", "msb"),
+            ("LSB", "lsb"),
+            ("n", "n"),
+            ("♥", "fav"),
+        ):
             banks.add_column(label, key=key)
         self._fill_banks()
 
@@ -481,16 +527,22 @@ class P2kedApp(App):
         # character glued to the name: a name that starts with a marker
         # cannot be read straight down, and cannot be sorted or searched
         # without the marker getting in the way.
-        for label, key in (("♥", "fav"), ("#", "pc"), ("name", "name"),
-                           ("PC", "pcn"), ("LSB", "lsb"), ("MSB", "msb"),
-                           ("ROM#", "rom")):
+        for label, key in (
+            ("♥", "fav"),
+            ("#", "pc"),
+            ("name", "name"),
+            ("PC", "pcn"),
+            ("LSB", "lsb"),
+            ("MSB", "msb"),
+            ("ROM#", "rom"),
+        ):
             presets.add_column(label, key=key)
         self._fill_presets(self._current_bank)
         banks.focus()
         self.notify_status(
             f"{len(self.catalog)} names from the catalog"
-            if self.catalog else
-            "no name catalog -- numbers only. Build one with "
+            if self.catalog
+            else "no name catalog -- numbers only. Build one with "
             "tools/extract_catalog.py, or press r to read them off the unit."
         )
 
@@ -508,8 +560,9 @@ class P2kedApp(App):
         return head.strip() if sep and len(head) <= 4 else ""
 
     def categories(self, bank_id: str) -> List[str]:
-        seen = {self.category_of(bank_id, e.program_change)
-                for e in roms.presets(bank_id)}
+        seen = {
+            self.category_of(bank_id, e.program_change) for e in roms.presets(bank_id)
+        }
         return sorted(c for c in seen if c)
 
     def _favorite_keys(self, bank_id: str) -> set:
@@ -534,8 +587,7 @@ class P2kedApp(App):
             numbers = wanted.get(bank_id)
             if not numbers:
                 continue
-            out.extend(e for e in roms.presets(bank_id)
-                       if e.program_change in numbers)
+            out.extend(e for e in roms.presets(bank_id) if e.program_change in numbers)
         return out
 
     def _visible(self, bank_id: str) -> List[roms.Preset]:
@@ -546,12 +598,13 @@ class P2kedApp(App):
             entries = roms.presets(bank_id)
             if self.view_mode == VIEW_BANK_FAVOURITES:
                 marked = self._favorite_keys(bank_id)
-                entries = [e for e in entries
-                           if e.program_change in marked]
+                entries = [e for e in entries if e.program_change in marked]
         if self._categories:
-            entries = [e for e in entries
-                       if self.category_of(e.bank_id, e.program_change)
-                       in self._categories]
+            entries = [
+                e
+                for e in entries
+                if self.category_of(e.bank_id, e.program_change) in self._categories
+            ]
         return entries
 
     def _is_user_bank(self, bank_id: str) -> bool:
@@ -600,32 +653,38 @@ class P2kedApp(App):
         column = table.columns.get("pc")
         if column is not None:
             from rich.text import Text
+
             column.label = Text(
-                "bank / #" if self.view_mode == VIEW_ALL_FAVOURITES else "#")
+                "bank / #" if self.view_mode == VIEW_ALL_FAVOURITES else "#"
+            )
         self._filling = True
         try:
             table.clear()
             for entry in self._current:
-                name = self.catalog.display_name(entry.bank_id,
-                                                 entry.program_change)
+                name = self.catalog.display_name(entry.bank_id, entry.program_change)
                 if self.catalog.differs(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b] [dim]*[/dim]"
-                elif self.catalog.is_live(entry.bank_id,
-                                          entry.program_change):
+                elif self.catalog.is_live(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b]"
                 else:
                     shown = name
                 across = self.view_mode == VIEW_ALL_FAVOURITES
-                fav_here = (every_bank.get(entry.bank_id, set()) if across
-                            else marked)
-                star = ("[b]♥[/b]" if entry.program_change in fav_here else "")
-                number = (f"{roms.bank(entry.bank_id).label} "
-                          f"{entry.program_change:03d}" if across
-                          else f"{entry.program_change:03d}")
+                fav_here = every_bank.get(entry.bank_id, set()) if across else marked
+                star = "[b]♥[/b]" if entry.program_change in fav_here else ""
+                number = (
+                    f"{roms.bank(entry.bank_id).label} {entry.program_change:03d}"
+                    if across
+                    else f"{entry.program_change:03d}"
+                )
                 table.add_row(
-                    star, number, shown,
-                    str(entry.program_change), str(entry.lsb), str(entry.msb),
-                    str(entry.number), key=entry.key,
+                    star,
+                    number,
+                    shown,
+                    str(entry.program_change),
+                    str(entry.lsb),
+                    str(entry.msb),
+                    str(entry.number),
+                    key=entry.key,
                 )
         finally:
             self._filling = False
@@ -639,7 +698,8 @@ class P2kedApp(App):
         if self.favorites is None:
             self.notify_status(
                 "no favourites database: pass --favorites, or let it use the "
-                "default path")
+                "default path"
+            )
             return
         entry = self._cursor_entry()
         if entry is None:
@@ -649,10 +709,8 @@ class P2kedApp(App):
         # row so that a rating, tags, a note and the original date survive
         # being toggled off and on. Doing it here as a delete followed by a
         # fresh add destroyed all four, and `f` is one keystroke.
-        now = self.favorites.toggle(entry.bank_id, entry.program_change,
-                                    name=name)
-        self.notify_status(
-            f"{'favourited' if now else 'unfavourited'} {name}")
+        now = self.favorites.toggle(entry.bank_id, entry.program_change, name=name)
+        self.notify_status(f"{'favourited' if now else 'unfavourited'} {name}")
         self._refill_bank_count(entry.bank_id)
         self._refill_keeping_place()
 
@@ -669,7 +727,6 @@ class P2kedApp(App):
             table.update_cell(bank_id, "fav", str(marked) if marked else "")
         except Exception:
             pass
-
 
     def _favourite_under_cursor(self):
         """The favourite row for the slot under the cursor, if there is one.
@@ -690,8 +747,7 @@ class P2kedApp(App):
         if where is None:
             return
         if existing is None:
-            self.notify_status("not a favourite yet -- press f first",
-                               refused=True)
+            self.notify_status("not a favourite yet -- press f first", refused=True)
             return
 
         def apply(value):
@@ -701,16 +757,14 @@ class P2kedApp(App):
             self._refill_keeping_place()
             self.notify_status("tags set")
 
-        self.push_screen(PromptScreen("Tags (comma separated):",
-                                  existing.tags), apply)
+        self.push_screen(PromptScreen("Tags (comma separated):", existing.tags), apply)
 
     def action_edit_note(self) -> None:
         where, existing = self._favourite_under_cursor()
         if where is None:
             return
         if existing is None:
-            self.notify_status("not a favourite yet -- press f first",
-                               refused=True)
+            self.notify_status("not a favourite yet -- press f first", refused=True)
             return
 
         def apply(value):
@@ -741,21 +795,22 @@ class P2kedApp(App):
         if self.view_mode == VIEW_ALL:
             self.notify_status(VIEW_LABELS[self.view_mode])
         elif not shown:
-            where = ("this bank" if self.view_mode == VIEW_BANK_FAVOURITES
-                     else "any bank")
+            where = (
+                "this bank" if self.view_mode == VIEW_BANK_FAVOURITES else "any bank"
+            )
             self.notify_status(
-                f"{VIEW_LABELS[self.view_mode]} - nothing favourited in "
-                f"{where} yet")
+                f"{VIEW_LABELS[self.view_mode]} - nothing favourited in {where} yet"
+            )
         else:
-            self.notify_status(
-                f"{VIEW_LABELS[self.view_mode]} - {shown}")
+            self.notify_status(f"{VIEW_LABELS[self.view_mode]} - {shown}")
 
     def action_pick_categories(self) -> None:
         """Filter by the ``bas:`` style prefix."""
         available = self.categories(self._current_bank)
         if not available:
             self.notify_status(
-                "no categories here: the catalog has no names for this bank")
+                "no categories here: the catalog has no names for this bank"
+            )
             return
         current = ", ".join(sorted(self._categories))
 
@@ -765,20 +820,24 @@ class P2kedApp(App):
             wanted = {t.strip() for t in text.split(",") if t.strip()}
             unknown = wanted - set(available)
             if unknown:
-                self.notify_status(
-                    f"not in this bank: {', '.join(sorted(unknown))}")
+                self.notify_status(f"not in this bank: {', '.join(sorted(unknown))}")
                 return
             self._categories = wanted
             self._refill_keeping_place()
             self.notify_status(
-                f"categories: {', '.join(sorted(wanted))}" if wanted
-                else "every category")
+                f"categories: {', '.join(sorted(wanted))}"
+                if wanted
+                else "every category"
+            )
 
         self.push_screen(
             PromptScreen(
                 f"categories, comma separated (blank for all). "
-                f"This bank has: {', '.join(available)}", current),
-            chosen)
+                f"This bank has: {', '.join(available)}",
+                current,
+            ),
+            chosen,
+        )
 
     def _cursor_entry(self):
         table = self.query_one("#preset-table", DataTable)
@@ -801,7 +860,8 @@ class P2kedApp(App):
         entry = self._current[row]
         name = self.catalog.display_name(entry.bank_id, entry.program_change)
         why = self.catalog.disagreement(
-            entry.bank_id, entry.program_change, entry.rom.writable)
+            entry.bank_id, entry.program_change, entry.rom.writable
+        )
         note = f"  [dim]* {why}[/dim]" if why else ""
         self.query_one("#detail", Static).update(
             f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}"
@@ -873,13 +933,13 @@ class P2kedApp(App):
             with self._lock:
                 self.device.select(entry, channel=self.channel)
         except Exception as exc:
-            self.call_from_thread(
-                self.notify_status, f"select: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"select: {exc}", refused=True)
             return
         self.call_from_thread(
             self.notify_status,
             f"selected {entry} on MIDI channel {self.channel + 1} "
-            f"(PC {entry.program_change}, LSB {entry.lsb}, MSB {entry.msb})")
+            f"(PC {entry.program_change}, LSB {entry.lsb}, MSB {entry.msb})",
+        )
 
     def action_read_names(self) -> None:
         """Read this bank's names off the unit. Makes no sound."""
@@ -897,17 +957,16 @@ class P2kedApp(App):
     def _read_worker(self, bank_id: str) -> None:
         """**MIDI only** -- the catalog is updated on the main thread."""
         try:
+
             def progress(done: int, total: int) -> None:
                 self.call_from_thread(
-                    self.notify_status,
-                    f"reading {bank_id}: {done}/{total} (silent)")
+                    self.notify_status, f"reading {bank_id}: {done}/{total} (silent)"
+                )
 
             with self._lock:
-                names = self.device.read_bank_names(
-                    bank_id, on_progress=progress)
+                names = self.device.read_bank_names(bank_id, on_progress=progress)
         except Exception as exc:
-            self.call_from_thread(
-                self.notify_status, f"read: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"read: {exc}", refused=True)
             return
         finally:
             self._busy = False
@@ -916,8 +975,7 @@ class P2kedApp(App):
     def _adopt_names(self, bank_id: str, names: Dict[int, str]) -> None:
         for program_change, name in names.items():
             self.catalog.set_live_name(bank_id, program_change, name)
-        differing = sum(1 for pc in names
-                        if self.catalog.differs(bank_id, pc))
+        differing = sum(1 for pc in names if self.catalog.differs(bank_id, pc))
         # A favourite made before any names were known carries a blank
         # label, and shows as one in the favourites view and in `name`
         # ordering. This is the read that supplies the real name, so it is
@@ -926,12 +984,14 @@ class P2kedApp(App):
         # touch it.
         if self.favorites is not None:
             self.favorites.refresh_names(
-                lambda bank, number: self.catalog.live_name(bank, number))
+                lambda bank, number: self.catalog.live_name(bank, number)
+            )
         if bank_id == self._current_bank:
             self._fill_presets(bank_id)
         self.notify_status(
             f"read {len(names)} names from {bank_id}"
-            + (f"; {differing} differ from the catalog" if differing else ""))
+            + (f"; {differing} differ from the catalog" if differing else "")
+        )
 
     def action_channel_down(self) -> None:
         """Previous MIDI channel. Sends nothing by itself."""
@@ -980,8 +1040,7 @@ class P2kedApp(App):
                     # screen says the mode is unknown rather than assuming.
                     mode = None
         except Exception as exc:
-            self.call_from_thread(
-                self.notify_status, f"channels: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"channels: {exc}", refused=True)
             return
         finally:
             self._busy = False
@@ -1010,10 +1069,14 @@ class P2kedApp(App):
                     f"{bank_id:<12} {program_change:03d}  "
                     f"{name + (' *' if differs else ''):<20} "
                     f"PC {entry.program_change:>3}  LSB {entry.lsb:>2}  "
-                    f"MSB {entry.msb:>3}")
+                    f"MSB {entry.msb:>3}"
+                )
             if marked:
-                lines += ["", f"* {marked} of these differ from the printed "
-                              f"catalog: the unit's name is shown."]
+                lines += [
+                    "",
+                    f"* {marked} of these differ from the printed "
+                    f"catalog: the unit's name is shown.",
+                ]
             if len(hits) > 400:
                 lines.append(f"... and {len(hits) - 400} more")
             self.push_screen(ReportScreen("Search", "\n".join(lines)))
@@ -1054,7 +1117,8 @@ class P2kedApp(App):
             self.notify_status(f"sending on MIDI channel {value}")
 
         self.push_screen(
-            PromptScreen("MIDI channel (1-16):", str(self.channel + 1)), done)
+            PromptScreen("MIDI channel (1-16):", str(self.channel + 1)), done
+        )
 
     def action_device_info(self) -> None:
         self._info_worker()
@@ -1067,16 +1131,17 @@ class P2kedApp(App):
                 fields = self.device.identify()
                 config = self.device.hardware_config()
         except Exception as exc:
-            self.call_from_thread(
-                self.notify_status, f"device: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"device: {exc}", refused=True)
             return
         self.call_from_thread(self._show_info, fields, config)
 
     def _show_info(self, fields, config) -> None:
         lines = [f"connection   {self.device.description}", ""]
         if fields:
-            lines.append(f"manufacturer {fields['manufacturer']:#04x}"
-                         + ("  (E-MU)" if fields["is_emu"] else ""))
+            lines.append(
+                f"manufacturer {fields['manufacturer']:#04x}"
+                + ("  (E-MU)" if fields["is_emu"] else "")
+            )
             lines.append(f"family       {fields['family']}")
             lines.append(f"device ID    {fields['device']}")
         lines.append("")
@@ -1086,15 +1151,17 @@ class P2kedApp(App):
             guess = roms.rom_for_simm_id(simm.simm_id)
             lines.append(
                 f"  id {simm.simm_id:<4} {simm.presets:>4} presets  "
-                + (guess.name if guess else "not in p2ked's table"))
+                + (guess.name if guess else "not in p2ked's table")
+            )
         lines.append("")
         lines.append("ROM names read the SIMM ID as that ROM's Bank Select")
         lines.append("MSB. Confirmed against hardware for three ROMs on")
         lines.append("2026-09-12, which is not all twenty.")
         lines.append("")
-        lines.append(f"catalog      {len(self.catalog)} names"
-                     + (f" from {self.catalog.source}"
-                        if self.catalog.source else ""))
+        lines.append(
+            f"catalog      {len(self.catalog)} names"
+            + (f" from {self.catalog.source}" if self.catalog.source else "")
+        )
         self.push_screen(ReportScreen("Device", "\n".join(lines)))
 
     def action_help(self) -> None:
@@ -1134,22 +1201,29 @@ Moving the cursor sends nothing at all.
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="p2ked", description="Browse an E-MU Proteus 2000's presets.")
+        prog="p2ked", description="Browse an E-MU Proteus 2000's presets."
+    )
     parser.add_argument("--port")
     parser.add_argument("--recv-port")
-    parser.add_argument("--demo", action="store_true",
-                        help="built-in demo device; opens no MIDI ports")
+    parser.add_argument(
+        "--demo", action="store_true", help="built-in demo device; opens no MIDI ports"
+    )
     parser.add_argument("--device-id", type=int, default=None)
     parser.add_argument("--channel", type=int, default=None)
     parser.add_argument("--catalog", default=None)
-    parser.add_argument("--config", default=None,
-                        help="settings cache (default: ./config.toml)")
-    parser.add_argument("--all-roms", action="store_true",
-                        help="list every ROM in the table, not just the "
-                             "ones this unit has")
-    parser.add_argument("--favorites", default=None,
-                        help="favourites database "
-                             "(default: the per-platform data directory)")
+    parser.add_argument(
+        "--config", default=None, help="settings cache (default: ./config.toml)"
+    )
+    parser.add_argument(
+        "--all-roms",
+        action="store_true",
+        help="list every ROM in the table, not just the ones this unit has",
+    )
+    parser.add_argument(
+        "--favorites",
+        default=None,
+        help="favourites database (default: the per-platform data directory)",
+    )
     return parser
 
 
@@ -1174,9 +1248,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             if args.port:
                 device = b.ProteusBridge.open(
-                    args.port, recv_port=args.recv_port,
-                    device_id=(args.device_id if args.device_id is not None
-                               else msg.BROADCAST_DEVICE))
+                    args.port,
+                    recv_port=args.recv_port,
+                    device_id=(
+                        args.device_id
+                        if args.device_id is not None
+                        else msg.BROADCAST_DEVICE
+                    ),
+                )
                 if args.device_id is None:
                     # Adopt the ID the unit reports. Broadcast is not a
                     # safe default: this Proteus ignores it, so every read
@@ -1185,8 +1264,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if learned is not None:
                         print(f"  device ID {learned}", file=sys.stderr)
                     else:
-                        print("  no identity reply; using broadcast",
-                              file=sys.stderr)
+                        print("  no identity reply; using broadcast", file=sys.stderr)
             else:
                 # The port that answered last time, before the sweep. The
                 # unit this was written for sits on a port whose name no
@@ -1201,19 +1279,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                         device = b.ProteusBridge.open(
                             remembered,
                             recv_port=cfg.load_last_recv_port(config_path),
-                            device_id=msg.BROADCAST_DEVICE)
+                            device_id=msg.BROADCAST_DEVICE,
+                        )
                         if device.learn_device_id(timeout=0.8) is None:
                             device.close()
                             device = None
                         else:
-                            print(f"  {remembered} (remembered)",
-                                  file=sys.stderr)
+                            print(f"  {remembered} (remembered)", file=sys.stderr)
                     except Exception:
                         device = None
                 if device is None:
                     device = b.ProteusBridge.autodetect(
-                        on_try=lambda n: print(f"  probing {n}...",
-                                               file=sys.stderr))
+                        on_try=lambda n: print(f"  probing {n}...", file=sys.stderr)
+                    )
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
@@ -1226,11 +1304,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             if getattr(device, "device_id", None) is not None:
                 cfg.save_device_id(int(device.device_id), config_path)
         except OSError:
-            pass          # a read-only directory must not stop the browser
+            pass  # a read-only directory must not stop the browser
     # The channel given on the command line wins; otherwise the one used
     # last time, so `c` does not have to be pressed again every run.
-    channel = ((args.channel - 1) if args.channel is not None
-               else (cfg.load_channel(config_path) or 0))
+    channel = (
+        (args.channel - 1)
+        if args.channel is not None
+        else (cfg.load_channel(config_path) or 0)
+    )
 
     catalog = cat.load(args.catalog)
     from p2k.favorites import Favorites
@@ -1253,15 +1334,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("  asking which ROMs are fitted...", file=sys.stderr)
             installed = device.installed_roms(timeout=0.6)
             have = sum(1 for present in installed.values() if present)
-            print(f"  {have} of {len(installed)} ROMs answered",
-                  file=sys.stderr)
+            print(f"  {have} of {len(installed)} ROMs answered", file=sys.stderr)
         except Exception as exc:
-            print(f"  could not ask ({exc}); showing every bank",
-                  file=sys.stderr)
+            print(f"  could not ask ({exc}); showing every bank", file=sys.stderr)
 
-    app = P2kedApp(device, catalog=catalog, favorites=store,
-                   installed=installed, config_path=config_path,
-                   channel=channel)
+    app = P2kedApp(
+        device,
+        catalog=catalog,
+        favorites=store,
+        installed=installed,
+        config_path=config_path,
+        channel=channel,
+    )
     try:
         app.run()
     finally:

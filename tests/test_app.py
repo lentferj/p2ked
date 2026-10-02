@@ -32,10 +32,12 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def app():
-    catalog = cat.Catalog([
-        cat.Entry("USER-0", 0, "Velvet Bell"),
-        cat.Entry("USER-0", 1, "Rusted Pad"),
-    ])
+    catalog = cat.Catalog(
+        [
+            cat.Entry("USER-0", 0, "Velvet Bell"),
+            cat.Entry("USER-0", 1, "Rusted Pad"),
+        ]
+    )
     return P2kedApp(DemoDevice(), catalog=catalog)
 
 
@@ -43,8 +45,7 @@ class TestStartup:
     async def test_it_starts_and_fills_both_panes(self, app):
         async with app.run_test() as pilot:
             await pilot.pause()
-            assert app.query_one("#bank-table").row_count == len(
-                roms.bank_ids())
+            assert app.query_one("#bank-table").row_count == len(roms.bank_ids())
             assert app.query_one("#preset-table").row_count == 128
 
 
@@ -131,7 +132,8 @@ class TestChannel:
             _entry, channel = app.device.selected_log[0]
             assert channel == 9, (
                 "the selection went out on the wrong channel; the test used "
-                "to assert only that something was sent")
+                "to assert only that something was sent"
+            )
 
 
 class TestChannelScreen:
@@ -175,10 +177,11 @@ class TestChannelScreen:
     async def test_both_reasons_for_silence_are_distinguished(self, app):
         async with app.run_test() as pilot:
             screen = await self._open(app, pilot)
-            reasons = {c.channel_display: c.silent_because
-                       for c in screen._dump.channels}
+            reasons = {
+                c.channel_display: c.silent_because for c in screen._dump.channels
+            }
             assert reasons[1] == "channel is disabled"
-            assert reasons[6] == "volume is 0"      # enabled, but silent
+            assert reasons[6] == "volume is 0"  # enabled, but silent
             assert reasons[9] is None
 
     async def test_it_says_which_channels_would_sound(self, app):

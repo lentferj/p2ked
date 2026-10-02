@@ -84,7 +84,9 @@ class TestImport:
     def test_parses_bank_number_and_flag(self, listing):
         rows = _tool().parse(listing)
         assert [(r[0], r[1]) for r in rows] == [
-            ("XLEAD2-1", 0), ("XLEAD2-1", 63), ("XLEAD2-1", 126),
+            ("XLEAD2-1", 0),
+            ("XLEAD2-1", 63),
+            ("XLEAD2-1", 126),
             ("COMPOSER-3", 16),
         ]
         assert rows[2][3] is True, "the faint mark should be flagged"
@@ -113,8 +115,9 @@ class TestImport:
             store.add("XLEAD2-1", 7, name="replaced away")
         _tool().main([listing, "--favorites", db, "--replace"])
         with Favorites(db) as store:
-            assert store.get("TECHNO-0", 42) is not None, \
+            assert store.get("TECHNO-0", 42) is not None, (
                 "a bank the listing never mentions must survive --replace"
+            )
             assert store.get("XLEAD2-1", 7) is None
 
     def test_a_pc_line_before_any_bank_is_refused(self, tmp_path):
@@ -130,6 +133,7 @@ class TestBrowserWiring:
     def _app(self, tmp_path, marks=()):
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
+
         store = Favorites(str(tmp_path / "f.db"))
         for bank, pc in marks:
             store.add(bank, pc, name=f"invented {pc}")
@@ -137,6 +141,7 @@ class TestBrowserWiring:
 
     def test_the_keys_exist(self, tmp_path):
         from p2ked.app import P2kedApp
+
         keys = {b.action: b.key for b in P2kedApp.BINDINGS}
         assert keys["toggle_favorite"] == "f"
         assert keys["cycle_favorites"] == "F"
@@ -150,22 +155,29 @@ class TestBrowserWiring:
 
     def test_favourites_only_hides_the_rest(self, tmp_path):
         from p2k import roms
+
         bank = roms.bank_ids()[0]
         every = roms.presets(bank)
-        app, store = self._app(tmp_path, marks=[(bank, every[2].program_change),
-                                                (bank, every[5].program_change)])
+        app, store = self._app(
+            tmp_path,
+            marks=[(bank, every[2].program_change), (bank, every[5].program_change)],
+        )
         try:
             assert len(app._visible(bank)) == len(every)
             from p2ked.app import VIEW_BANK_FAVOURITES
+
             app.view_mode = VIEW_BANK_FAVOURITES
             shown = app._visible(bank)
-            assert [e.program_change for e in shown] == \
-                [every[2].program_change, every[5].program_change]
+            assert [e.program_change for e in shown] == [
+                every[2].program_change,
+                every[5].program_change,
+            ]
         finally:
             store.close()
 
     def test_a_category_filter_keeps_bank_order(self, tmp_path):
         from p2k import roms
+
         bank = roms.bank_ids()[0]
         app, store = self._app(tmp_path)
         try:
@@ -195,13 +207,14 @@ class TestBankListing:
     def _app(self, tmp_path, installed=None):
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
+
         store = Favorites(str(tmp_path / "f.db"))
-        return P2kedApp(DemoDevice(), favorites=store,
-                        installed=installed), store
+        return P2kedApp(DemoDevice(), favorites=store, installed=installed), store
 
     def test_without_an_answer_every_bank_is_listed(self, tmp_path):
         """A list silently cut down by a failed query is worse than a long one."""
         from p2k import roms
+
         app, store = self._app(tmp_path, installed=None)
         try:
             assert app._visible_banks() == roms.bank_ids()
@@ -210,6 +223,7 @@ class TestBankListing:
 
     def test_only_the_fitted_roms_are_listed(self, tmp_path):
         from p2k import roms
+
         app, store = self._app(tmp_path, installed={4: True, 14: True})
         try:
             shown = app._visible_banks()
@@ -222,6 +236,7 @@ class TestBankListing:
 
     def test_the_toggle_shows_everything_again(self, tmp_path):
         from p2k import roms
+
         app, store = self._app(tmp_path, installed={4: True})
         try:
             assert len(app._visible_banks()) < len(roms.bank_ids())
@@ -233,6 +248,7 @@ class TestBankListing:
     def test_an_answer_with_nothing_fitted_still_lists_everything(self, tmp_path):
         """Better a useless list than an empty screen with no explanation."""
         from p2k import roms
+
         app, store = self._app(tmp_path, installed={4: False, 14: False})
         try:
             assert app._visible_banks() == roms.bank_ids()
@@ -254,6 +270,7 @@ class TestBankListing:
     def test_the_keys_are_all_in_the_legend(self):
         """A legend that omits a key teaches the user the key does not exist."""
         from p2ked.app import KEY_HINTS, P2kedApp
+
         legend = " ".join(KEY_HINTS)
         missing = []
         for binding in P2kedApp.BINDINGS:
@@ -276,6 +293,7 @@ class TestTheThreeWayCycle:
     def _app(self, tmp_path, marks=()):
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
+
         store = Favorites(str(tmp_path / "f.db"))
         for bank, pc in marks:
             store.add(bank, pc, name=f"invented {pc}")
@@ -283,11 +301,13 @@ class TestTheThreeWayCycle:
 
     def test_the_cycle_has_exactly_three_steps(self):
         from p2ked.app import VIEW_CYCLE, VIEW_ALL
+
         assert len(VIEW_CYCLE) == 3 and VIEW_CYCLE[0] == VIEW_ALL
 
     def test_all_favourites_spans_banks(self, tmp_path):
         from p2k import roms
         from p2ked.app import VIEW_ALL_FAVOURITES, VIEW_BANK_FAVOURITES
+
         a, b = roms.bank_ids()[0], roms.bank_ids()[1]
         app, store = self._app(tmp_path, marks=[(a, 3), (b, 9)])
         try:
@@ -303,9 +323,10 @@ class TestTheThreeWayCycle:
     def test_an_unknown_bank_in_the_store_is_skipped(self, tmp_path):
         from p2ked.app import VIEW_ALL_FAVOURITES
         from p2k import roms
-        app, store = self._app(tmp_path,
-                               marks=[(roms.bank_ids()[0], 1),
-                                      ("NOSUCH-9", 4)])
+
+        app, store = self._app(
+            tmp_path, marks=[(roms.bank_ids()[0], 1), ("NOSUCH-9", 4)]
+        )
         try:
             app.view_mode = VIEW_ALL_FAVOURITES
             shown = app._visible(roms.bank_ids()[0])
@@ -315,6 +336,7 @@ class TestTheThreeWayCycle:
 
     def test_every_view_is_reachable_and_returns_to_the_start(self, tmp_path):
         from p2ked.app import VIEW_CYCLE
+
         app, store = self._app(tmp_path)
         try:
             seen = []
@@ -341,13 +363,14 @@ class TestTheBankPaneFits:
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
         from p2k import catalog as cat
+
         store = Favorites(str(tmp_path / "f.db"))
-        return P2kedApp(DemoDevice(), catalog=cat.load(None),
-                        favorites=store), store
+        return P2kedApp(DemoDevice(), catalog=cat.load(None), favorites=store), store
 
     @pytest.mark.parametrize("size", [(200, 50), (160, 40), (120, 40)])
     async def test_nothing_is_clipped_at_usable_widths(self, tmp_path, size):
         from textual.widgets import DataTable
+
         app, store = self._app(tmp_path)
         try:
             async with app.run_test(size=size) as pilot:
@@ -355,32 +378,37 @@ class TestTheBankPaneFits:
                 table = app.query_one("#bank-table", DataTable)
                 assert table.virtual_size.width <= table.size.width, (
                     f"the bank pane is {table.size.width} wide but needs "
-                    f"{table.virtual_size.width}")
+                    f"{table.virtual_size.width}"
+                )
         finally:
             store.close()
 
     async def test_the_presets_still_get_the_rest(self, tmp_path):
         from textual.widgets import DataTable
+
         app, store = self._app(tmp_path)
         try:
             async with app.run_test(size=(200, 50)) as pilot:
                 await pilot.pause()
                 banks = app.query_one("#bank-table", DataTable)
                 presets = app.query_one("#preset-table", DataTable)
-                assert presets.size.width > banks.size.width, \
+                assert presets.size.width > banks.size.width, (
                     "the bank pane must not eat the window"
+                )
         finally:
             store.close()
 
     async def test_the_bank_pane_has_a_favourite_count(self, tmp_path):
         from textual.widgets import DataTable
         from p2k import roms
+
         bank = roms.bank_ids()[0]
         store = Favorites(str(tmp_path / "f.db"))
         store.add(bank, 3)
         store.add(bank, 9)
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
+
         app = P2kedApp(DemoDevice(), favorites=store)
         try:
             async with app.run_test(size=(200, 50)) as pilot:
@@ -404,12 +432,14 @@ class TestTheChannelIsRemembered:
 
     def test_saving_then_loading_round_trips(self, tmp_path):
         from p2k import config
+
         path = str(tmp_path / "config.toml")
         config.save_channel(9, path)
         assert config.load_channel(path) == 9
 
     def test_another_setting_does_not_drop_it(self, tmp_path):
         from p2k import config
+
         path = str(tmp_path / "config.toml")
         config.save_channel(5, path)
         config.save_last_port("some port", path)
@@ -418,11 +448,13 @@ class TestTheChannelIsRemembered:
 
     def test_a_missing_file_is_not_an_error(self, tmp_path):
         from p2k import config
+
         assert config.load_channel(str(tmp_path / "nope.toml")) is None
 
     def test_an_out_of_range_channel_is_ignored(self, tmp_path):
         """A hand-edited file must not put the app on channel 99."""
         from p2k import config
+
         path = str(tmp_path / "config.toml")
         path_obj = tmp_path / "config.toml"
         path_obj.write_text("channel = 99\n", encoding="utf-8")
@@ -430,6 +462,7 @@ class TestTheChannelIsRemembered:
 
     def test_an_unparsable_file_is_not_fatal(self, tmp_path):
         from p2k import config
+
         path_obj = tmp_path / "config.toml"
         path_obj.write_text("this is not toml = = =\n", encoding="utf-8")
         assert config.load_channel(str(path_obj)) is None
@@ -448,16 +481,22 @@ class TestEveryConstructorArgumentIsStored:
         import inspect
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
+
         store = Favorites(str(tmp_path / "f.db"))
         try:
-            app = P2kedApp(DemoDevice(), favorites=store,
-                           config_path=str(tmp_path / "config.toml"),
-                           channel=3, installed={4: True})
+            app = P2kedApp(
+                DemoDevice(),
+                favorites=store,
+                config_path=str(tmp_path / "config.toml"),
+                channel=3,
+                installed={4: True},
+            )
             for name in inspect.signature(P2kedApp.__init__).parameters:
                 if name in ("self", "device", "catalog"):
                     continue
-                assert (hasattr(app, name) or hasattr(app, f"_{name}")), \
+                assert hasattr(app, name) or hasattr(app, f"_{name}"), (
                     f"{name} is accepted but never stored"
+                )
         finally:
             store.close()
 
@@ -465,6 +504,7 @@ class TestEveryConstructorArgumentIsStored:
         from p2k import config
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
+
         path = str(tmp_path / "config.toml")
         store = Favorites(str(tmp_path / "f.db"))
         try:
@@ -486,11 +526,13 @@ class TestUserBanksReadThemselves:
     def _app(self, tmp_path):
         from p2ked.app import P2kedApp
         from p2ked.demo import DemoDevice
+
         store = Favorites(str(tmp_path / "f.db"))
         return P2kedApp(DemoDevice(), favorites=store), store
 
     def test_user_banks_are_recognised(self, tmp_path):
         from p2k import roms
+
         app, store = self._app(tmp_path)
         try:
             assert app._is_user_bank("USER-0")
@@ -529,7 +571,8 @@ class TestUserBanksReadThemselves:
         try:
             app._auto_read_user_names("USER-2")
             assert calls == []
-            assert "USER-2" not in app._auto_read, \
+            assert "USER-2" not in app._auto_read, (
                 "a skipped read must not count as done"
+            )
         finally:
             store.close()

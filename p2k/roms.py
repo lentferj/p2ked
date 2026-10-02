@@ -131,12 +131,12 @@ class Rom:
     the whole LSB.
     """
 
-    id: str                  #: Short key used everywhere: "XLEAD", "USER".
-    name: str                #: What E-MU calls it.
-    msb: int                 #: Bank Select MSB. Identifies the ROM.
-    lsbs: Tuple[int, ...]    #: Bank Select LSBs it answers on.
-    count: int               #: Presets it holds.
-    writable: bool = False   #: Only the user banks.
+    id: str  #: Short key used everywhere: "XLEAD", "USER".
+    name: str  #: What E-MU calls it.
+    msb: int  #: Bank Select MSB. Identifies the ROM.
+    lsbs: Tuple[int, ...]  #: Bank Select LSBs it answers on.
+    count: int  #: Presets it holds.
+    writable: bool = False  #: Only the user banks.
 
     @property
     def bank_count(self) -> int:
@@ -178,8 +178,8 @@ class Preset:
     """
 
     bank: Bank
-    number: int             #: Within the ROM, 0-based, as SysEx counts them.
-    program_change: int     #: Within the bank, 0-127.
+    number: int  #: Within the ROM, 0-based, as SysEx counts them.
+    program_change: int  #: Within the bank, 0-127.
 
     @property
     def rom(self) -> Rom:
@@ -205,10 +205,15 @@ class Preset:
         return f"{self.bank.label} {self.program_change:03d}"
 
 
-def _rom(id: str, name: str, msb: int, lsbs: Tuple[int, ...], count: int,
-         writable: bool = False) -> Rom:
-    return Rom(id=id, name=name, msb=msb, lsbs=lsbs, count=count,
-               writable=writable)
+def _rom(
+    id: str,
+    name: str,
+    msb: int,
+    lsbs: Tuple[int, ...],
+    count: int,
+    writable: bool = False,
+) -> Rom:
+    return Rom(id=id, name=name, msb=msb, lsbs=lsbs, count=count, writable=writable)
 
 
 #: The ROM table, transcribed from the Cakewalk instrument-definition files
@@ -262,7 +267,8 @@ def rom(rom_id: str) -> Rom:
         return _BY_ID[rom_id]
     except KeyError:
         raise LookupError(
-            f"no ROM {rom_id!r}; have {', '.join(sorted(_BY_ID))}") from None
+            f"no ROM {rom_id!r}; have {', '.join(sorted(_BY_ID))}"
+        ) from None
 
 
 def rom_ids() -> List[str]:
@@ -297,7 +303,7 @@ def rom_for_simm_id(simm_id: int) -> Optional[Rom]:
 def banks(rom_id: Optional[str] = None) -> List[Bank]:
     """Every bank, or every bank of one ROM."""
     out: List[Bank] = []
-    for entry in (ROMS if rom_id is None else (rom(rom_id),)):
+    for entry in ROMS if rom_id is None else (rom(rom_id),):
         remaining = entry.count
         for lsb in entry.lsbs:
             size = min(PRESETS_PER_BANK, remaining)
@@ -313,8 +319,7 @@ def bank(bank_id: str) -> Bank:
     try:
         return _BANKS[bank_id]
     except KeyError:
-        raise LookupError(
-            f"no bank {bank_id!r}; have {', '.join(_BANKS)}") from None
+        raise LookupError(f"no bank {bank_id!r}; have {', '.join(_BANKS)}") from None
 
 
 def bank_ids(rom_id: Optional[str] = None) -> List[str]:
@@ -346,7 +351,8 @@ def preset(bank_id: str, program_change: int) -> Preset:
     if not 0 <= program_change < entry.count:
         raise LookupError(
             f"{bank_id} holds {entry.count} presets; {program_change} is "
-            f"outside 0-{entry.count - 1}")
+            f"outside 0-{entry.count - 1}"
+        )
     return presets(bank_id)[program_change]
 
 

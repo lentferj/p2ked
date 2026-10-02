@@ -124,8 +124,7 @@ def data_dir() -> str:
     elif sys.platform == "darwin":
         home = os.path.expanduser("~")
         if home != "~":
-            return os.path.join(home, "Library", "Application Support",
-                                APP_NAME)
+            return os.path.join(home, "Library", "Application Support", APP_NAME)
 
     base = os.environ.get("XDG_DATA_HOME")
     # XDG: "If $XDG_DATA_HOME is either not set or empty, a default equal to
@@ -246,8 +245,7 @@ class Favorites:
     def __init__(self, path: Optional[str] = None) -> None:
         self.path = path or default_path()
         if self.path != ":memory:":
-            os.makedirs(os.path.dirname(os.path.abspath(self.path)),
-                        exist_ok=True)
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         # Shared across threads on purpose; see _LockedConnection.
         self._db = _LockedConnection(self.path)
         self._db.execute("PRAGMA journal_mode=WAL")
@@ -297,15 +295,16 @@ class Favorites:
             #
             # DEFAULT 1 is what makes the upgrade a no-op for existing rows:
             # everything already in the table is a live favourite.
-            have = {row["name"] for row in
-                    self._db.execute("PRAGMA table_info(favorites)")}
+            have = {
+                row["name"] for row in self._db.execute("PRAGMA table_info(favorites)")
+            }
             if "active" not in have:
                 self._db.execute(
-                    "ALTER TABLE favorites ADD COLUMN active INTEGER "
-                    "NOT NULL DEFAULT 1")
+                    "ALTER TABLE favorites ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
+                )
             self._db.execute(
-                "CREATE INDEX IF NOT EXISTS favorites_active "
-                "ON favorites (active)")
+                "CREATE INDEX IF NOT EXISTS favorites_active ON favorites (active)"
+            )
         self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._db.commit()
 
@@ -328,20 +327,19 @@ class Favorites:
     def __contains__(self, key) -> bool:
         bank_id, number = _split(key)
         row = self._db.execute(
-            "SELECT 1 FROM favorites WHERE bank_id = ? AND number = ? "
-            "AND active = 1",
+            "SELECT 1 FROM favorites WHERE bank_id = ? AND number = ? AND active = 1",
             (bank_id, number),
         ).fetchone()
         return row is not None
 
     def __len__(self) -> int:
         return self._db.execute(
-            "SELECT COUNT(*) FROM favorites WHERE active = 1").fetchone()[0]
+            "SELECT COUNT(*) FROM favorites WHERE active = 1"
+        ).fetchone()[0]
 
     def get(self, bank_id: str, number: int) -> Optional[Favorite]:
         row = self._db.execute(
-            "SELECT * FROM favorites WHERE bank_id = ? AND number = ? "
-            "AND active = 1",
+            "SELECT * FROM favorites WHERE bank_id = ? AND number = ? AND active = 1",
             (bank_id, int(number)),
         ).fetchone()
         return _to_favorite(row) if row is not None else None
@@ -368,14 +366,17 @@ class Favorites:
         return {
             f"{row['bank_id']}:{row['number']:03d}"
             for row in self._db.execute(
-                "SELECT bank_id, number FROM favorites WHERE active = 1")
+                "SELECT bank_id, number FROM favorites WHERE active = 1"
+            )
         }
 
     def keys_for_bank(self, bank_id: str) -> set:
         return {
-            row["number"] for row in self._db.execute(
-                "SELECT number FROM favorites WHERE bank_id = ? "
-                "AND active = 1", (bank_id,))
+            row["number"]
+            for row in self._db.execute(
+                "SELECT number FROM favorites WHERE bank_id = ? AND active = 1",
+                (bank_id,),
+            )
         }
 
     def all(self, *, order: str = "added") -> List[Favorite]:
@@ -396,9 +397,10 @@ class Favorites:
                 f"unknown order {order!r}; have {', '.join(sorted(clauses))}"
             )
         return [
-            _to_favorite(row) for row in self._db.execute(
-                f"SELECT * FROM favorites WHERE active = 1 "
-                f"ORDER BY {clauses[order]}")
+            _to_favorite(row)
+            for row in self._db.execute(
+                f"SELECT * FROM favorites WHERE active = 1 ORDER BY {clauses[order]}"
+            )
         ]
 
     def search(self, needle: str) -> List[Favorite]:
@@ -406,11 +408,11 @@ class Favorites:
         # % and _ are LIKE wildcards. Without escaping them a search for
         # "%" matches every favourite and one for "_" matches every name of
         # any length -- silently, as a result that looks like a real hit.
-        escaped = (needle.replace("\\", "\\\\")
-                         .replace("%", "\\%").replace("_", "\\_"))
+        escaped = needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{escaped}%"
         return [
-            _to_favorite(row) for row in self._db.execute(
+            _to_favorite(row)
+            for row in self._db.execute(
                 "SELECT * FROM favorites WHERE active = 1 AND ("
                 "name LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\') "
                 "ORDER BY bank_id, number",
@@ -428,7 +430,8 @@ class Favorites:
         """
         wanted = tag.strip().lower()
         return [
-            fav for fav in self.all(order="bank")
+            fav
+            for fav in self.all(order="bank")
             if wanted in {t.lower() for t in fav.tag_list}
         ]
 
@@ -442,8 +445,16 @@ class Favorites:
 
     # --- writing ------------------------------------------------------------
 
-    def add(self, bank_id: str, number: int, *, name: str = "",
-            rating: int = 0, tags: str = "", note: str = "") -> Favorite:
+    def add(
+        self,
+        bank_id: str,
+        number: int,
+        *,
+        name: str = "",
+        rating: int = 0,
+        tags: str = "",
+        note: str = "",
+    ) -> Favorite:
         """Favourite a slot, or update the one that is already there.
 
         An upsert that **preserves ``added``** on an existing row: re-adding
@@ -461,8 +472,7 @@ class Favorites:
             (bank_id, int(number), name, int(rating), tags, note, added),
         )
         self._db.commit()
-        return Favorite(bank_id, int(number), name, int(rating), tags, note,
-                        added)
+        return Favorite(bank_id, int(number), name, int(rating), tags, note, added)
 
     def remove(self, bank_id: str, number: int) -> bool:
         """Un-favourite a slot. ``True`` if it was one.
@@ -499,13 +509,13 @@ class Favorites:
     def dormant(self) -> List[Favorite]:
         """Slots un-favourited but still holding annotations."""
         return [
-            _to_favorite(row) for row in self._db.execute(
-                "SELECT * FROM favorites WHERE active = 0 "
-                "ORDER BY bank_id, number")
+            _to_favorite(row)
+            for row in self._db.execute(
+                "SELECT * FROM favorites WHERE active = 0 ORDER BY bank_id, number"
+            )
         ]
 
-    def toggle(self, bank_id: str, number: int, *, name: str = ""
-               ) -> bool:
+    def toggle(self, bank_id: str, number: int, *, name: str = "") -> bool:
         """Flip a slot's favourite state. ``True`` if it is now a favourite.
 
         Re-favouriting restores whatever the slot carried when it was last
@@ -520,23 +530,28 @@ class Favorites:
         if old is None:
             self.add(bank_id, number, name=name)
         else:
-            self.add(bank_id, number, name=old.name or name,
-                     rating=old.rating, tags=old.tags, note=old.note)
+            self.add(
+                bank_id,
+                number,
+                name=old.name or name,
+                rating=old.rating,
+                tags=old.tags,
+                note=old.note,
+            )
         return True
 
     def set_rating(self, bank_id: str, number: int, rating: int) -> None:
         if not 0 <= rating <= 5:
             raise ValueError(f"rating {rating} is outside 0-5")
-        self.add(bank_id, number, **_merge(self.get(bank_id, number),
-                                           rating=rating))
+        self.add(bank_id, number, **_merge(self.get(bank_id, number), rating=rating))
 
     def set_tags(self, bank_id: str, number: int, tags: str) -> None:
-        self.add(bank_id, number, **_merge(self.get(bank_id, number),
-                                           tags=_clean_tags(tags)))
+        self.add(
+            bank_id, number, **_merge(self.get(bank_id, number), tags=_clean_tags(tags))
+        )
 
     def set_note(self, bank_id: str, number: int, note: str) -> None:
-        self.add(bank_id, number, **_merge(self.get(bank_id, number),
-                                           note=note))
+        self.add(bank_id, number, **_merge(self.get(bank_id, number), note=note))
 
     def refresh_names(self, lookup) -> int:
         """Re-label favourites from a name source. Returns how many changed.
@@ -550,8 +565,8 @@ class Favorites:
             fresh = lookup(fav.bank_id, fav.number)
             if fresh and fresh != fav.name:
                 self._db.execute(
-                    "UPDATE favorites SET name = ? WHERE bank_id = ? "
-                    "AND number = ?", (fresh, fav.bank_id, fav.number),
+                    "UPDATE favorites SET name = ? WHERE bank_id = ? AND number = ?",
+                    (fresh, fav.bank_id, fav.number),
                 )
                 changed += 1
         if changed:
@@ -576,14 +591,19 @@ def _split(key) -> Tuple[str, int]:
     if not colon or not number.strip():
         raise ValueError(
             f"{key!r} names a bank but not a slot in it; a key is "
-            f"'BANK:NNN', as in 'XLEAD2-1:063'")
+            f"'BANK:NNN', as in 'XLEAD2-1:063'"
+        )
     return bank_id, int(number)
 
 
 def _to_favorite(row: sqlite3.Row) -> Favorite:
     return Favorite(
-        bank_id=row["bank_id"], number=row["number"], name=row["name"],
-        rating=row["rating"], tags=row["tags"], note=row["note"],
+        bank_id=row["bank_id"],
+        number=row["number"],
+        name=row["name"],
+        rating=row["rating"],
+        tags=row["tags"],
+        note=row["note"],
         added=row["added"],
     )
 

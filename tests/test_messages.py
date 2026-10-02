@@ -128,16 +128,32 @@ class TestFrames:
 
 class TestIdentity:
     def test_a_request_is_not_an_emu_message_at_all(self):
-        assert m.identity_request(0x7F) == bytes(
-            [0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7])
+        assert m.identity_request(0x7F) == bytes([0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7])
 
     def test_our_own_request_is_not_mistaken_for_a_reply(self):
         """The sub-ID differs, which is what defeats a MIDI-Thru loop."""
         assert m.identity_reply_fields(m.identity_request(0x7F)) is None
 
     def test_a_reply_is_decoded(self):
-        reply = bytes([0xF0, 0x7E, 0x05, 0x06, 0x02, 0x18, 0x0F, 0x00,
-                       0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0xF7])
+        reply = bytes(
+            [
+                0xF0,
+                0x7E,
+                0x05,
+                0x06,
+                0x02,
+                0x18,
+                0x0F,
+                0x00,
+                0x02,
+                0x00,
+                0x01,
+                0x00,
+                0x00,
+                0x00,
+                0xF7,
+            ]
+        )
         fields = m.identity_reply_fields(reply)
         assert fields["device"] == 5
         assert fields["is_emu"] is True
@@ -166,11 +182,14 @@ class TestNames:
         assert m.unpack14(packet.payload[3], packet.payload[4]) == 7
 
     def test_parsing_a_name_reply(self):
-        payload = [m.ObjectType.PRESET, *m.pack14(133), *m.pack14(7),
-                   *m.encode_name("Woven Bell")]
+        payload = [
+            m.ObjectType.PRESET,
+            *m.pack14(133),
+            *m.pack14(7),
+            *m.encode_name("Woven Bell"),
+        ]
         reply = m.parse_name(m.parse(m.frame(m.Command.GENERIC_NAME, payload)))
-        assert (reply.number, reply.rom_id, reply.name) == (
-            133, 7, "Woven Bell")
+        assert (reply.number, reply.rom_id, reply.name) == (133, 7, "Woven Bell")
 
     def test_a_short_name_message_is_refused(self):
         with pytest.raises(m.ProtocolError):
@@ -181,20 +200,17 @@ class TestConfiguration:
     """The message that tells p2ked what ROMs are fitted."""
 
     def _payload(self, user_presets, simms, *, per_simm=6, general=None):
-        general = general if general is not None else list(
-            m.pack14(user_presets))
+        general = general if general is not None else list(m.pack14(user_presets))
         payload = [len(general), *general, len(simms), per_simm]
         for simm_id, presets, instruments in simms:
-            chunk = [*m.pack14(simm_id), *m.pack14(presets),
-                     *m.pack14(instruments)]
+            chunk = [*m.pack14(simm_id), *m.pack14(presets), *m.pack14(instruments)]
             chunk += [0] * (per_simm - len(chunk))
             payload += chunk
         return payload
 
     def test_it_decodes(self):
         payload = self._payload(512, [(4, 1024, 256), (7, 512, 128)])
-        config = m.parse_config(
-            m.parse(m.frame(m.Command.CONFIGURATION, payload)))
+        config = m.parse_config(m.parse(m.frame(m.Command.CONFIGURATION, payload)))
         assert config.user_presets == 512
         assert len(config.simms) == 2
         assert config.simms[0].simm_id == 4
@@ -208,18 +224,15 @@ class TestConfiguration:
         wrong and still plausible.
         """
         payload = self._payload(
-            512, [(4, 1024, 256)],
-            general=[*m.pack14(512), 9, 9])        # two extra bytes
-        config = m.parse_config(
-            m.parse(m.frame(m.Command.CONFIGURATION, payload)))
+            512, [(4, 1024, 256)], general=[*m.pack14(512), 9, 9]
+        )  # two extra bytes
+        config = m.parse_config(m.parse(m.frame(m.Command.CONFIGURATION, payload)))
         assert config.user_presets == 512
         assert config.simms[0] == m.SimmInfo(4, 1024, 256)
 
     def test_a_longer_per_simm_block_is_obeyed_too(self):
-        payload = self._payload(512, [(4, 1024, 256), (7, 512, 128)],
-                                per_simm=8)
-        config = m.parse_config(
-            m.parse(m.frame(m.Command.CONFIGURATION, payload)))
+        payload = self._payload(512, [(4, 1024, 256), (7, 512, 128)], per_simm=8)
+        config = m.parse_config(m.parse(m.frame(m.Command.CONFIGURATION, payload)))
         assert [s.simm_id for s in config.simms] == [4, 7]
 
     def test_a_truncated_response_is_refused(self):
@@ -229,7 +242,8 @@ class TestConfiguration:
 
     def test_no_simms_is_a_valid_answer(self):
         config = m.parse_config(
-            m.parse(m.frame(m.Command.CONFIGURATION, self._payload(512, []))))
+            m.parse(m.frame(m.Command.CONFIGURATION, self._payload(512, [])))
+        )
         assert config.simms == ()
 
     def test_the_wrong_command_is_refused(self):
@@ -266,8 +280,7 @@ class TestSetupDumpLayout:
     #: channel block's structural search ambiguous.
     FILLER = {257: 120, 264: 2, 385: 2, 513: 1, 520: 1, 139: 8, 140: 8}
 
-    def _payload(self, *, counts=None, master=None, trailing=True,
-                 channels=32):
+    def _payload(self, *, counts=None, master=None, trailing=True, channels=32):
         counts = counts or tuple(len(ids) for _l, ids in m.MASTER_BLOCKS)
         values = dict(self.FILLER)
         values.update(master or {})
@@ -285,10 +298,17 @@ class TestSetupDumpLayout:
             # makes a shifted window fit just as well, and the parser
             # rightly refuses an ambiguous dump; a real one is not that
             # flat either.
-            fields = {"preset": channel * 7, "volume": 127, "pan": 64,
-                      "mix_output": 1, "arp": 0, "enable": 1,
-                      "bank_map": 0, "receive_program_change": 1,
-                      "rom_id": 0}
+            fields = {
+                "preset": channel * 7,
+                "volume": 127,
+                "pan": 64,
+                "mix_output": 1,
+                "arp": 0,
+                "enable": 1,
+                "bank_map": 0,
+                "receive_program_change": 1,
+                "rom_id": 0,
+            }
             for field, _low, _high in m.CHANNEL_PARAMETERS:
                 data.extend(m.pack14_signed(fields[field]))
         if trailing:
@@ -367,10 +387,10 @@ class TestSetupDumpLayout:
         blocks that are still fine.
         """
         counts = list(len(ids) for _l, ids in m.MASTER_BLOCKS)
-        counts[1] += 1                       # master MIDI grew by one
+        counts[1] += 1  # master MIDI grew by one
         dump = self._parse(counts=counts)
-        assert 385 not in dump.master        # the block that grew
-        assert 257 in dump.master            # the ones that did not
+        assert 385 not in dump.master  # the block that grew
+        assert 257 in dump.master  # the ones that did not
         assert 513 in dump.master
         assert len(dump.undecoded) == 1
         assert "master MIDI" in dump.undecoded[0]
@@ -386,8 +406,7 @@ class TestSetupDumpLayout:
         # stays where the search finds it and only the arithmetic breaks.
         data = self._payload()
         data[0:2] = m.pack14(len(m.MASTER_BLOCKS[0][1]) - 1)
-        dump = m.parse_setup_dump(m.parse(
-            m.frame(m.Command.SETUP_DUMP, data)))
+        dump = m.parse_setup_dump(m.parse(m.frame(m.Command.SETUP_DUMP, data)))
         assert dump.master == {}
         assert dump.undecoded and "not decoded" in dump.undecoded[0]
 
@@ -423,5 +442,4 @@ class TestSetupDumpLayout:
         dump = self._parse(trailing=False)
         assert dump.trailing == ()
         assert dump.undecoded == ()
-        assert len(dump.master) == sum(
-            len(ids) for _label, ids in m.MASTER_BLOCKS)
+        assert len(dump.master) == sum(len(ids) for _label, ids in m.MASTER_BLOCKS)
