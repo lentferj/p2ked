@@ -9,3 +9,11 @@ config.toml
 *.egg-info/
 .pytest_cache/
 CLAUDE.md
+
+# Quality-check tooling output (see "Development checks" in README.md).
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

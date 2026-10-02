@@ -1,0 +1,75 @@
+# p2ked pre-commit hooks.
+#
+# Install once:  make install-hooks   (or `pre-commit install`)
+# Run everything: make pre-commit-run  (or `pre-commit run --all-files`)
+#
+# Revisions are pinned to exact releases, and deliberately the same
+# releases requirements-dev.txt pins, so a hook and the Makefile cannot
+# drift apart and report different findings on the same commit.
+#
+# shellcheck and shfmt are intentionally absent: this repository contains
+# no shell scripts (no *.sh, and no file with a bash/sh shebang), so
+# neither hook would have anything to inspect. If a shell script is added,
+# add them at the revisions below.
+#
+#   https://github.com/koalaman/shellcheck   -- rev v0.11.0
+#   https://github.com/scop/pre-commit-shfmt  -- rev v3.12.0-2
+
+minimum_pre_commit_version: "3.0.0"
+default_language_version:
+  python: python3.11
+
+repos:
+  # --- lint ---------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      # Lint only. Rules and their baselines are in pyproject.toml
+      # ([tool.ruff.lint]); nothing is configured here, so `pre-commit`
+      # and `make lint` cannot disagree.
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+
+      # The formatter is enabled. It was held back while the tree was
+      # unformatted, because 17 of 19 files would have been rewritten by
+      # the first commit after `pre-commit install` -- a mass change
+      # smuggled into an unrelated commit. The reformat has since been
+      # applied as its own commit (`make format`), so the hook now only
+      # ever touches code you are already editing.
+      - id: ruff-format
+
+  # --- type check ----------------------------------------------------------
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.4.0
+    hooks:
+      - id: mypy
+        # Pinned to the same mypy as requirements-dev.txt. The project's
+        # own third-party dependencies are deliberately NOT installed here:
+        # [tool.mypy] sets ignore_missing_imports, so textual and rtmidi
+        # being absent from the hook's isolated environment is fine, and
+        # building python-rtmidi on every hook run would be slow.
+        additional_dependencies: ["mypy==2.4.0"]
+
+  # --- secrets -------------------------------------------------------------
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        # Regenerate the baseline deliberately, never implicitly:
+        #     make secrets-update
+        # A hook that rewrote the baseline would make every new finding
+        # self-approving.
+
+  # --- shell ---------------------------------------------------------------
+  # No shell scripts in this repository. Uncomment when one is added.
+  #
+  # - repo: https://github.com/koalaman/shellcheck
+  #   rev: v0.11.0
+  #   hooks:
+  #     - id: shellcheck
+  #
+  # - repo: https://github.com/scop/pre-commit-shfmt
+  #   rev: v3.12.0-2
+  #   hooks:
+  #     - id: shfmt

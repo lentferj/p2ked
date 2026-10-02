@@ -1,0 +1,103 @@
+# p2ked development dependencies -- fully pinned.
+#
+# This file is the lockfile for a pip-based project: everything the
+# quality-check pipeline needs, resolved together on Python 3.11 and pinned
+# to exact versions so `make check` runs the same tools on every machine
+# and on every run. Regenerate with the recipe in README.md, section
+# "Development checks".
+#
+# It also doubles as the input to `pip-audit` (`make audit`). Auditing this
+# file rather than the ambient interpreter is deliberate: it covers the
+# dependencies p2ked actually declares and ships, and it does not report
+# on whatever pip and setuptools the host happens to ship, which are not
+# p2ked's to fix.
+#
+# Install with:
+#     python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+
+# --- runtime dependencies (p2k, p2ked) ---------------------------------
+# Kept in step with [project] dependencies in pyproject.toml. deptry
+# checks that the two agree.
+textual==8.2.8
+python-rtmidi==1.5.8
+# Imported directly by p2ked/app.py (`from rich.text import Text`), so
+# declared rather than relied on through textual. See [project]
+# dependencies for the same note.
+rich==15.0.0
+
+# --- lint and format ---------------------------------------------------
+ruff==0.16.10
+
+# --- type checking ------------------------------------------------------
+mypy==2.4.0
+
+# --- tests and coverage -------------------------------------------------
+pytest==9.1.1
+pytest-cov==7.1.0
+coverage==7.16.2
+# Required by the suite and previously undeclared: pyproject.toml sets
+# `asyncio_mode = "auto"` under [tool.pytest.ini_options], which is a
+# pytest-asyncio setting, and tests/test_app.py is marked
+# `@pytest.mark.asyncio`. Without this the async tests are collected and
+# then reported as "async def functions are not natively supported" --
+# which only surfaces on a machine that does not happen to have
+# pytest-asyncio installed system-wide.
+pytest-asyncio==1.4.0
+
+# --- audit and static analysis ------------------------------------------
+pip-audit==2.10.1
+vulture==2.16
+deptry==0.25.1
+detect-secrets==1.5.0
+
+# --- pre-commit ---------------------------------------------------------
+pre-commit==4.6.2
+
+# --- pinned transitives -------------------------------------------------
+# Listed explicitly rather than left to the resolver so that a
+# compromised or newly-published transitive cannot change what runs
+# between two clones of this repository. `pip install -r` accepts this
+# file as-is; the pins that matter are the ones above.
+ast_serialize==0.12.0
+boolean.py==5.0
+CacheControl==0.14.4
+certifi==2026.7.22
+cfgv==3.5.0
+charset-normalizer==3.5.2
+click==8.5.0
+cyclonedx-python-lib==11.12.0
+defusedxml==0.7.1
+distlib==0.4.3
+filelock==4.0.9
+identify==2.6.20
+idna==3.20
+iniconfig==2.3.0
+librt==0.16.0
+license-expression==30.4.4
+linkify-it-py==2.2.0
+markdown-it-py==4.2.0
+mdit-py-plugins==0.6.1
+mdurl==0.1.2
+msgpack==1.2.3
+mypy_extensions==1.1.0
+nodeenv==1.11.0
+packageurl-python==0.17.6
+packaging==26.3
+pathspec==1.1.1
+pip_api==0.0.35
+pip-requirements-parser==32.0.1
+platformdirs==4.12.2
+pluggy==1.6.0
+Pygments==2.21.0
+pyparsing==3.3.3
+py-serializable==2.1.0
+python-discovery==1.6.1
+PyYAML==6.0.3
+requests==2.34.2
+requirements-parser==0.13.1
+sortedcontainers==2.4.0
+tomli==2.4.1
+tomli_w==1.2.0
+typing_extensions==4.16.0
+urllib3==2.8.0
+virtualenv==21.14.5

@@ -9,7 +9,31 @@ description = "Terminal browser for the E-MU Proteus 2000 family"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-2.0-or-later" }
-dependencies = ["textual>=0.40", "python-rtmidi>=1.5"]
+dependencies = [
+    "textual>=0.40",
+    "python-rtmidi>=1.5",
+    # Imported directly by p2ked/app.py (`from rich.text import Text`), so
+    # declared rather than relied on transitively through textual. deptry
+    # reports DEP003 without this.
+    "rich>=14.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff==0.16.10",
+    "mypy==2.4.0",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    # The suite is async (tests/test_app.py) and pyproject.toml sets
+    # pytest-asyncio's `asyncio_mode`. Was undeclared and silently
+    # satisfied from the host; pin it.
+    "pytest-asyncio==1.4.0",
+    "pip-audit==2.10.1",
+    "vulture==2.16",
+    "deptry==0.25.1",
+    "detect-secrets==1.5.0",
+    "pre-commit==4.6.2",
+]
 
 [project.scripts]
 p2ked = "p2ked.app:main"
@@ -18,5 +42,319 @@ p2kcli = "p2ked.cli:main"
 [tool.setuptools]
 packages = ["p2k", "p2ked"]
 
+[tool.setuptools.package-data]
+# The generated name catalog is gitignored and not distributed. See
+# p2k/catalog.py and tools/extract_catalog.py.
+p2k = ["data/catalog.json"]
+
+# --- ruff: lint and format ----------------------------------------------
+# Replaces flake8, isort, black and pyupgrade. `make lint` runs the rules
+# below; `make format` applies the formatter.
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+# Generated locally from the user's own instrument-definition files, and
+# gitignored. Not ours to lint.
+extend-exclude = ["p2k/data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "S", "SIM", "UP", "C4", "PL", "RUF", "C901"]
+
+ignore = [
+    # --- baselined, project-wide ---------------------------------------
+    # The five rules below account for 400 of the 499 pre-existing
+    # findings. Each is a deliberate house style rather than an oversight,
+    # so they are ignored globally with a reason instead of being
+    # suppressed in 14 per-file entries.
+    #
+    # UP006/UP035/UP045 (231 findings): `typing.Dict`, `typing.List`,
+    # `typing.Optional` rather than PEP 585/604 spellings. Every module
+    # already carries `from __future__ import annotations`, so the
+    # annotations are strings at runtime either way; rewriting them would
+    # be a 231-line diff for no behaviour change. Revisit if the project
+    # ever moves to 3.12+ as a floor and drops the import.
+    "UP006", "UP035", "UP045",
+    # PLR2004 (93): magic-value-comparison. p2ked is full of transcribed
+    # protocol constants -- 0x7F, 244, 0x3FFF, channel indices -- and
+    # CLAUDE.md is explicit that these numbers must stay literal and
+    # visible rather than be replaced by named constants that hide which
+    # number came from which document. Naming them would defeat the point.
+    "PLR2004",
+    # PLC0415 (76): import-outside-top-level. Deliberate. p2k/bridge.py
+    # imports rtmidi at module scope but every *optional* import is
+    # function-local so that p2kcli's offline subcommands and the test
+    # suite work on a host with no MIDI backend at all -- which is the
+    # whole point of `_OFFLINE` in p2ked/cli.py.
+    "PLC0415",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert; that is what they are for. Also allowed: fixtures read
+# private attributes to reach the state a user action would produce, which
+# is the only way to test a Textual app's internals.
+"tests/*" = [
+    "S101",     # assert
+    "SLF001",
+    "PLC0415",  # local imports keep test bodies readable
+    "PLR2004",
+]
+
+# --- per-file baselines -------------------------------------------------
+# Every entry below is a pre-existing finding, recorded rather than fixed.
+# Nothing here was mass-fixed. The rule names are the ones that fired
+# before this pipeline existed; a new finding in one of these files is
+# still reported, because the ignore is per-rule and not per-file.
+#
+# Severity note: `p2ked/cli.py` carries F821, which is a REAL BUG and not
+# a style matter -- see the "Development checks" section of README.md and
+# TODO.md item 40. It is ignored here only so that `make check` passes on
+# the current tree; it is not papered over.
+"p2k/bridge.py" = [
+    "F401",    # unused `Sequence` import
+    "RUF022",  # __all__ not alphabetical
+    "RUF100",  # stale `# noqa: E402` on the rtmidi import
+    "S110",    # try/except/pass in close() and install_clean_exit()
+    "SIM105",  # contextlib.suppress would read worse than try/except
+    "UP037",   # quoted annotations in __all__-style signatures
+]
+"p2k/catalog.py" = [
+    "I001",    # import order
+    "RUF022",  # __all__ not alphabetical
+]
+"p2k/config.py" = [
+    "I001",    # import order
+    "PLW0603", # module-level `_warned`; a lock would be worse for once-per-run
+    "RUF022",  # __all__ not alphabetical
+    "UP031",   # "%04X" printf formatting in _toml_string
+]
+"p2k/favorites.py" = [
+    "E501",    # one 97-char line: the SQL LIKE/ESCAPE clause
+    "F401",    # unused `Iterable`/`Sequence` imports
+    "PLR0913", # Favorites.add takes every column; that is the upsert
+    "RUF022",  # __all__ not alphabetical
+    "RUF023",  # __slots__ not sorted
+    "S608",    # f-string ORDER BY; `order` is validated against a fixed set
+    "UP037",   # quoted annotations
+]
+"p2k/messages.py" = [
+    "B905",    # zip() without strict=; lengths are equal by construction
+    "C901",    # parse_setup_dump, _parse_master_blocks
+    "PLR0913", # parse_config/parse_setup_dump take the whole payload
+    "PLW1641", # __eq__ without __hash__: these are value objects, unhashable
+    "RUF005",  # list concatenation in the block tables
+    "RUF012",  # mutable class defaults on the Command/Parameter tables
+    "RUF022",  # __all__ not alphabetical
+    "RUF023",  # __slots__ not sorted
+    "UP037",   # quoted annotations
+]
+"p2k/roms.py" = [
+    "PLR0913", # Rom/Bank/Preset dataclasses carry their fields
+    "PLR0917", # same, positionally constructed by `_rom()`
+    "RUF022",  # __all__ not alphabetical
+]
+"p2ked/app.py" = [
+    "B904",    # `raise SystemExit` in main() without `from`
+    "C901",    # _fill_presets, _show_info, main
+    "PLR0912", # _show_detail, _fill_presets
+    "PLR0913", # P2kedApp.__init__ takes injected collaborators
+    "PLR0915", # _show_info, _adopt_names
+    "PLW0108", # lambdas passed to notify helpers
+    "RUF012",  # mutable class defaults (KEY_HINTS, VIEW_LABELS)
+    "RUF022",  # __all__ not alphabetical
+    "S110",    # try/except/pass around _remember_channel
+    "SIM105",  # contextlib.suppress would hide the comment
+    "SIM118",  # `"key" in dict.keys()`
+]
+"p2ked/cli.py" = [
+    # F821 was baselined here for TODO 40 (an undefined `differs` in
+    # `_cmd_find`). That is fixed, so the ignore is gone: any future
+    # undefined name in this file is reported.
+    "I001",    # import order
+    "RUF022",  # __all__ not alphabetical
+]
+"p2ked/demo.py" = [
+    "PLR0911", # _setup_reply, _name_reply, select
+    "RUF005",  # list concatenation building the setup payload
+    "RUF012",  # mutable class default: MASTER_VALUES
+    "RUF022",  # __all__ not alphabetical
+]
+"tools/extract_catalog.py" = [
+    "PLW2901", # loop variable reused for the outer count
+    "RUF100",  # stale `# noqa: E402`
+]
+"tools/import_favourites.py" = [
+    "C901",    # parse
+    "PLR0912", # parse
+    "RUF100",  # stale `# noqa: E402`
+]
+"tests/test_app.py" = ["I001"]
+"tests/test_audit_fixes.py" = [
+    "B015",    # a deliberate "this should not happen" comparison
+    "F401",    # `inspect` imported inside two tests
+    "I001",
+]
+"tests/test_favorites.py" = [
+    "I001",
+    "PLW0108", # lambdas handed to the store under test
+    "RUF012",  # the LISTING fixture is a mutable module-level str
+]
+"tests/test_legend.py" = [
+    "SIM115",  # `open()` in the AST reader; closed by GC, never kept open
+]
+"tests/test_messages.py" = [
+    "B905",
+    "C400",    # generator where a comprehension reads better
+    "RUF005",
+    "RUF012",  # the FILLER dict fixture
+]
+
+# --- mypy ----------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+files = ["p2k", "p2ked", "tools"]
+show_error_codes = true
+warn_unused_configs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+strict_equality = true
+
+# python-rtmidi ships no py.typed marker and no stubs. Nothing here needs
+# them: `p2k/bridge.py` only passes clients through to rtmidi's own API.
+ignore_missing_imports = true
+
+# --- mypy: modules that are clean, checked strictly ---------------------
+# p2k/roms.py and p2k/catalog.py pass every check below with nothing
+# suppressed. They are the bar for new modules: list a new module here
+# with the same flags rather than loosening the rest.
+#
+# The flags are spelled out rather than using the `strict` shorthand,
+# because mypy 2.4 applies that shorthand to the whole run and turns
+# disallow_untyped_defs on everywhere -- which is a different, much
+# noisier check than this section asks for.
+[[tool.mypy.overrides]]
+module = ["p2k.roms", "p2k.catalog"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_any_generics = true
+disallow_untyped_decorators = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_reexport = true
+
+# --- mypy: baselined pre-existing errors, by error code -----------------
+# The 36 pre-existing findings, silenced per error code per module so
+# that every *other* check stays live in those files. A module is not
+# blanket-ignored, so a new error of an unlisted code is still reported.
+# Pay these down by deleting the code from the list as it is fixed.
+[[tool.mypy.overrides]]
+module = ["p2ked.app"]
+# `device` is DemoDevice-or-ProteusBridge and mypy has no way to say so;
+# the rest are unannotated locals.
+disable_error_code = ["arg-type", "assignment", "attr-defined",
+                      "call-overload", "return-value", "union-attr",
+                      "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = ["p2ked.cli"]
+# `misc`, `name-defined` and `dict-item` were baselined for TODO 40
+# (`differs` undefined, and a 4-tuple unpacked as 3). That is fixed.
+# What remains is the deliberate `"ports": None` placeholder in
+# _COMMANDS, filled in below because it needs the MIDI import.
+disable_error_code = ["dict-item"]
+
+[[tool.mypy.overrides]]
+module = ["p2ked.demo"]
+# `m.parse()` is Optional by signature; the demo only ever passes a frame
+# it just built, so the None branch is unreachable in practice.
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = ["p2k.messages"]
+# ChannelState(**fields) is built from a tuple-keyed table; mypy cannot
+# see that the keys match the constructor's parameters.
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["p2k.favorites"]
+disable_error_code = ["var-annotated"]
+
+[[tool.mypy.overrides]]
+# tools/ has no __init__.py, so mypy names these scripts by their bare
+# module name rather than as tools.something.
+module = ["extract_catalog"]
+disable_error_code = ["assignment", "union-attr"]
+
+# --- pytest and coverage -------------------------------------------------
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["p2k", "p2ked", "p2ked.egg-info"]
+branch = true
+# The demo device is the stand-in every test runs against, so it is
+# measured like anything else rather than excluded.
+omit = ["*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# Adopted 2026-10-02, once there was a number to look at. The suite reports
+# 69.60% with branch coverage on; the gate sits just below it so ordinary
+# fluctuation does not turn `make check` red, while losing a module's
+# worth of tests still does.
+#
+# Two figures are low for a reason no synthetic test can fix, and neither
+# is a reason to lower the bar:
+#   p2k/bridge.py  24% -- the transport. Exercised against a real unit on
+#                        2026-10-02 (docs/RESOLUTION_NOTES.md §11) and by no
+#                        automated test, because it needs a cable.
+#   p2ked/app.py   57% -- the Textual front end. Its tests drive the
+#                        behaviour that matters; what is left is layout and
+#                        event plumbing that would want a snapshot to pin.
+fail_under = 68
+precision = 2
+# TODO: raise as the gaps close. 80 is reachable without hardware, by
+# finishing the CLI and the favourites store.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "pragma: no cover",
+]
+
+# --- deptry ---------------------------------------------------------------
+# Reports dependencies that are declared but unimported (DEP002), imported
+# but undeclared (DEP003), missing (DEP001) and left transitive (DEP003).
+[tool.deptry]
+known_first_party = ["p2k", "p2ked"]
+# tests/ and tools/ are excluded: they are not part of the installed
+# package, so an import there is not a packaging obligation. The .venv and
+# build artefacts are excluded because deptry walks the tree given to it.
+exclude = ["tests", "tools", "\\.venv", "\\.git", "\\.pytest_cache",
+           "p2ked\\.egg-info", "p2k/data"]
+
+[tool.deptry.per_rule_ignores]
+# Every entry here is a command-line tool: it is run by the Makefile or by
+# a pre-commit hook and is never imported by any module, which is exactly
+# what DEP002 ("declared but not imported") reports. They are real
+# dependencies and are pinned in requirements-dev.txt; the rule is asking a
+# question that does not apply to them.
+#
+# pytest-cov additionally loads as a pytest plugin rather than being
+# invoked directly (`pytest --cov=p2k,p2ked`).
+DEP002 = [
+    "deptry",
+    "detect-secrets",
+    "mypy",
+    "pip-audit",
+    "pre-commit",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+    "vulture",
+]
