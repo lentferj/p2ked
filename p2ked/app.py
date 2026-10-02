@@ -106,10 +106,16 @@ def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
     the legend wraps instead of truncating -- a footer that silently drops
     its last few keys teaches the user those keys do not exist.
     """
+    # Clamped rather than trusted: a width of 0 or less would make every
+    # candidate "too wide" and never break, so the legend came out as one
+    # very long line -- the degenerate version of exactly the truncation
+    # this function exists to avoid. One column per block is the most
+    # wrapping that can be asked for.
+    width = max(width, 1)
     lines, current = [], ""
     for block in blocks:
         candidate = block if not current else current + sep + block
-        if width and len(candidate) > width and current:
+        if len(candidate) > width and current:
             lines.append(current)
             current = block
         else:
@@ -429,6 +435,20 @@ class P2kedApp(App):
         self._bank_ids: List[str] = self._visible_banks()
         self._current_bank = self._bank_ids[0]
         self._current: List[roms.Preset] = []
+        #: True while a worker owns the wire. **Set synchronously on the
+        #: main thread**, before the worker is spawned, and cleared in the
+        #: worker's ``finally``.
+        #:
+        #: It has to be set before ``@work(thread=True)`` returns, because
+        #: that call returns immediately: a worker that set the flag on its
+        #: own thread would do it too late, and two quick keypresses would
+        #: both read False and both start. Set synchronously, the first
+        #: press completes the assignment before the second is dispatched,
+        #: because the two run on one thread.
+        #:
+        #: Not a lock -- ``self._lock`` is that -- but a refusal, so the
+        #: second press says so instead of queueing behind a 2.5 s bank
+        #: read the user cannot see.
         self._busy = False
         self._filling = False
         #: Which of the three views `F` is on.
@@ -629,11 +649,7 @@ class P2kedApp(App):
         if bank_id in self._auto_read or not self._is_user_bank(bank_id):
             return
         self._auto_read.add(bank_id)
-        # Set on the main thread, not in the worker. A
-        # @work(thread=True) method returns at once and would set the
-        # flag on its own thread, so two quick presses both passed the
-        # check above before either worker ran -- two of whatever the
-        # worker does, from one intent.
+        self._busy = True  # main thread, before the spawn; see _busy
         self._read_worker(bank_id)
 
     def _fill_presets(self, bank_id: str) -> None:
@@ -924,6 +940,7 @@ class P2kedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
+        self._busy = True
         self._select_worker(entry)
 
     @work(thread=True)
@@ -935,6 +952,8 @@ class P2kedApp(App):
         except Exception as exc:
             self.call_from_thread(self.notify_status, f"select: {exc}", refused=True)
             return
+        finally:
+            self._busy = False
         self.call_from_thread(
             self.notify_status,
             f"selected {entry} on MIDI channel {self.channel + 1} "
@@ -946,11 +965,7 @@ class P2kedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
-        # Set on the main thread, not in the worker. A
-        # @work(thread=True) method returns at once and would set the
-        # flag on its own thread, so two quick presses both passed the
-        # check above before either worker ran -- two of whatever the
-        # worker does, from one intent.
+        self._busy = True  # main thread, before the spawn; see _busy
         self._read_worker(self._current_bank)
 
     @work(thread=True)
@@ -967,10 +982,13 @@ class P2kedApp(App):
                 names = self.device.read_bank_names(bank_id, on_progress=progress)
         except Exception as exc:
             self.call_from_thread(self.notify_status, f"read: {exc}", refused=True)
-            return
+        else:
+            # Handed off *before* the flag is cleared below, so the next
+            # operation cannot start while this bank's names are still
+            # making their way onto the main thread.
+            self.call_from_thread(self._adopt_names, bank_id, names)
         finally:
             self._busy = False
-        self.call_from_thread(self._adopt_names, bank_id, names)
 
     def _adopt_names(self, bank_id: str, names: Dict[int, str]) -> None:
         for program_change, name in names.items():
@@ -1020,11 +1038,7 @@ class P2kedApp(App):
         if self._busy:
             self.notify_status("busy", refused=True)
             return
-        # Set on the main thread, not in the worker. A
-        # @work(thread=True) method returns at once and would set the
-        # flag on its own thread, so two quick presses both passed the
-        # check above before either worker ran -- two of whatever the
-        # worker does, from one intent.
+        self._busy = True  # main thread, before the spawn; see _busy
         self._channels_worker()
 
     @work(thread=True)
@@ -1041,10 +1055,10 @@ class P2kedApp(App):
                     mode = None
         except Exception as exc:
             self.call_from_thread(self.notify_status, f"channels: {exc}", refused=True)
-            return
+        else:
+            self.call_from_thread(self._show_channels, dump, mode)
         finally:
             self._busy = False
-        self.call_from_thread(self._show_channels, dump, mode)
 
     def _show_channels(self, dump, mode) -> None:
         self.push_screen(ChannelScreen(dump, self.catalog, mode))
@@ -1121,6 +1135,11 @@ class P2kedApp(App):
         )
 
     def action_device_info(self) -> None:
+        """Who the unit is and which ROMs are fitted. Silent."""
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._busy = True
         self._info_worker()
 
     @work(thread=True)
@@ -1132,8 +1151,10 @@ class P2kedApp(App):
                 config = self.device.hardware_config()
         except Exception as exc:
             self.call_from_thread(self.notify_status, f"device: {exc}", refused=True)
-            return
-        self.call_from_thread(self._show_info, fields, config)
+        else:
+            self.call_from_thread(self._show_info, fields, config)
+        finally:
+            self._busy = False
 
     def _show_info(self, fields, config) -> None:
         lines = [f"connection   {self.device.description}", ""]
@@ -1328,6 +1349,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # MIDI, so it does not belong on a Textual worker or in on_mount; doing
     # it here keeps the rule that workers do MIDI and the main thread does
     # the rest. A failure is not fatal -- every bank is shown instead.
+    #
     installed = None
     if not args.all_roms and hasattr(device, "installed_roms"):
         try:

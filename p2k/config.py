@@ -38,10 +38,12 @@ import os
 import sys
 from typing import Optional, Tuple
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-    tomllib = None
+# tomllib is not imported defensively. It entered the standard library in
+# 3.11 and pyproject.toml declares requires-python = ">=3.11", so a
+# try/except ModuleNotFoundError around it could never fall through -- it
+# was a branch that read as if this module worked without TOML, and did
+# not.
+import tomllib
 
 __all__ = [
     "DEFAULT_PATH",
@@ -61,7 +63,7 @@ _warned = False
 
 
 def _read(path: str) -> Tuple[dict, str]:
-    if not os.path.exists(path) or tomllib is None:
+    if not os.path.exists(path):
         return {}, "ok"
     try:
         with open(path, "rb") as handle:

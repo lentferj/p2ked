@@ -302,6 +302,67 @@ class TestSearchWildcardsAreLiteral:
             assert [f.number for f in store.search("_")] == [2]
 
 
+class TestSilenceIsAnExceptionInBothDevices:
+    """TODO 14 and 22. One return type, on purpose.
+
+    The demo device returned ``Optional[str]`` where the bridge returns
+    ``str`` and raises ``TimeoutError``. Not a crash -- nothing outside
+    each class calls ``preset_name`` directly -- but the divergence is one
+    refactor away from being one, and the demo is meant to be a second
+    implementation of the same contract rather than a near-miss.
+    """
+
+    def test_the_bridge_raises_rather_than_returning_none(self):
+        import inspect
+
+        from p2k.bridge import ProteusBridge
+
+        # A device that never answers: silence, not a name that is None.
+        class Dead:
+            def __init__(self):
+                self._in = self
+                self._out = self
+
+            def ignore_types(self, **kwargs):
+                pass
+
+            def get_message(self):
+                return None
+
+            def send_message(self, message):
+                pass
+
+            def close_port(self):
+                pass
+
+            def delete(self):
+                pass
+
+        bridge = ProteusBridge(Dead(), Dead(), device_id=1, timeout=0.01)
+        with pytest.raises(TimeoutError):
+            bridge.preset_name(0, 4)
+
+    def test_the_demo_matches_the_bridge(self):
+        import inspect
+
+        from p2k.bridge import ProteusBridge
+        from p2ked.demo import DemoDevice
+
+        demo = inspect.signature(DemoDevice.preset_name).return_annotation
+        bridge = inspect.signature(ProteusBridge.preset_name).return_annotation
+        assert demo == bridge == "str", (demo, bridge)
+
+    def test_the_demo_raises_on_silence(self):
+        with pytest.raises(TimeoutError):
+            DemoDevice().preset_name(0, 99)  # MSB 99 is not fitted
+
+    def test_a_bank_read_still_returns_every_name(self):
+        """The demo now skips absent slots the way the bridge does."""
+        names = DemoDevice().read_bank_names("USER-0")
+        assert len(names) == 128
+        assert all(isinstance(name, str) and name for name in names.values())
+
+
 class TestOneBadCatalogRowDoesNotCostTheOthers:
     """The convention here is "degrade, don't crash"; this path did not."""
 

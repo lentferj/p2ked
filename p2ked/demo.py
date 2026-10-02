@@ -321,18 +321,55 @@ class DemoDevice:
             return None
         found = self._locate(number, rom_id)
         if found is None:
-            return None  # silence, as an unknown object would get
+            # Two kinds of nothing, and the unit tells them apart.
+            #
+            # An object it does not have -- an object type it does not
+            # speak, or a ROM ID that is in nobody's table -- gets
+            # **silence**, which is what every other mistake on this cable
+            # looks like too. That is the case `installed_roms` has to
+            # step around.
+            #
+            # A preset that does not exist, in a ROM it does know, gets
+            # the name `(not installed)`. Confirmed against a Proteus 2000
+            # on 2026-09-12, and re-confirmed on 2026-10-02: X-Lead v2,
+            # Techno Synth and Beat Garden all answer it one past their
+            # last preset. Because it is an answer rather than silence,
+            # presence becomes a positive test instead of a timeout.
+            #
+            # The fake used to return silence for both, which quietly made
+            # every absent ROM look like a timeout and left the
+            # configuration answer and the name-probe answer unable to
+            # agree on anything.
+            if not self._rom_is_known(rom_id):
+                return None
+            return self._name_frame(object_type, number, rom_id, roms.NOT_INSTALLED)
         bank_id, program_change = found
-        payload = [
-            object_type,
-            *m.pack14(number),
-            *m.pack14(rom_id),
-            *m.encode_name(demo_name(bank_id, program_change)),
-        ]
-        return m.frame(m.Command.GENERIC_NAME, payload, device=self.device_id)
+        return self._name_frame(
+            object_type, number, rom_id, demo_name(bank_id, program_change)
+        )
+
+    def _name_frame(
+        self, object_type: int, number: int, rom_id: int, name: str
+    ) -> bytes:
+        return m.frame(
+            m.Command.GENERIC_NAME,
+            [object_type, *m.pack14(number), *m.pack14(rom_id), *m.encode_name(name)],
+            device=self.device_id,
+        )
+
+    def _rom_is_known(self, rom_id: int) -> bool:
+        """Whether the table claims this ROM ID at all, fitted or not."""
+        if rom_id == roms.USER_ROM_ID:
+            return True
+        return roms.rom_for_simm_id(rom_id) is not None
 
     def _locate(self, number: int, rom_id: int) -> Optional[Tuple[str, int]]:
-        """ROM-relative preset number to ``(bank id, program change)``."""
+        """ROM-relative preset number to ``(bank id, program change)``.
+
+        ``None`` for a preset the fake does not have -- an unfitted ROM,
+        or a number past the end of a fitted one. Which of those it was is
+        not decided here; `_name_reply` decides what to say about it.
+        """
         entry = (
             roms.USER if rom_id == roms.USER_ROM_ID else roms.rom_for_simm_id(rom_id)
         )
@@ -370,12 +407,24 @@ class DemoDevice:
 
     def preset_name(
         self, number: int, rom_id: int, *, timeout: Optional[float] = None
-    ) -> Optional[str]:
+    ) -> str:
+        """One preset's name. Read-only, and **makes no sound**.
+
+        Same contract as :meth:`p2k.bridge.ProteusBridge.preset_name`:
+        silence is a :class:`TimeoutError`, never a ``None``. The two were
+        written to different signatures once, and the difference is exactly
+        where a ``None`` would reach a caller written against the bridge's
+        -- so the demo raises, like the real thing, and the divergence is
+        gone rather than documented.
+        """
         reply = self.handle(
             m.name_request(m.ObjectType.PRESET, number, rom_id, device=self.device_id)
         )
         if reply is None:
-            return None
+            raise TimeoutError(
+                "the demo device does not answer for that object; a real "
+                "unit would have gone silent, which is what this means"
+            )
         return m.parse_name(m.parse(reply)).name
 
     def read_bank_names(
@@ -385,14 +434,22 @@ class DemoDevice:
         on_progress: Optional[Callable[[int, int], None]] = None,
         timeout: Optional[float] = None,
     ) -> Dict[int, str]:
-        """Every name in a bank. **Makes no sound** -- see p2k.bridge."""
+        """Every name in a bank. **Makes no sound** -- see p2k.bridge.
+
+        Deliberately the same loop as the bridge's, absent slots included,
+        so a test exercises the code path the real thing runs.
+        """
         bank = roms.bank(bank_id)
         rom_id = roms.USER_ROM_ID if bank.rom is roms.USER else bank.rom.msb
         out: Dict[int, str] = {}
         entries = roms.presets(bank_id)
         for index, entry in enumerate(entries, start=1):
-            name = self.preset_name(entry.number, rom_id)
-            if name is not None:
+            try:
+                name = self.preset_name(entry.number, rom_id, timeout=timeout)
+            except TimeoutError:
+                # One missing name is not a reason to lose the other 127.
+                name = None
+            if name is not None and not roms.is_absent(name):
                 out[entry.program_change] = name
             if on_progress is not None:
                 on_progress(index, len(entries))

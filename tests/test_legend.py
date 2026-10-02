@@ -48,6 +48,19 @@ class TestLegend:
     def test_a_wide_window_uses_one_line(self):
         assert "\n" not in wrap_blocks(KEY_HINTS, 500)
 
+    def test_a_degenerate_width_wraps_one_block_per_line(self):
+        """A width of zero must not switch wrapping off.
+
+        The guard used to be ``if width and ...``, so a non-positive width
+        made the test false on every candidate and the legend came out as
+        one very long line -- the exact failure this function exists to
+        prevent, reached by a different route. The only caller clamps, so
+        nothing ever passed 0; a function that silently degrades on an
+        argument its own docstring does not mention is the thing here.
+        """
+        for width in (0, -1, -100):
+            assert wrap_blocks(("a hint", "b hint"), width) == "a hint\nb hint", width
+
     def test_the_legend_method_is_not_named_render(self):
         """``Widget._render`` is Textual's own.
 

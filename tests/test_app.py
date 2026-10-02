@@ -119,6 +119,126 @@ class TestReadingNamesIsSilent:
             assert app.catalog.differs("USER-0", 0)
 
 
+class TestOneOperationAtATime:
+    """The `_busy` flag: one thing on the wire, and a refusal rather than a
+    queue.
+
+    It is the only thing stopping two concurrent workers, and it used to be
+    dead code -- checked in four places, set in none of them, so every
+    check read `False` forever and the flag it was written to guard never
+    happened. A bank read is about two and a half seconds, so a second
+    press during one is a real wait, not a theoretical one.
+    """
+
+    @pytest.fixture
+    def wired(self):
+        """An app whose workers are counted instead of run.
+
+        Spawning is the question, not traffic: a worker can sit in the
+        pool before its first line, so "did it send anything" cannot tell
+        a refused operation from a slow one.
+        """
+        app = P2kedApp(DemoDevice(), catalog=cat.empty())
+        spawned = []
+
+        app._read_worker = lambda bank: spawned.append(("read", bank))
+        app._channels_worker = lambda: spawned.append(("channels",))
+        app._info_worker = lambda: spawned.append(("info",))
+        app._select_worker = lambda entry: spawned.append(("select",))
+        return app, spawned
+
+    async def test_nothing_starts_while_the_wire_is_busy(self, wired):
+        app, spawned = wired
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            spawned.clear()
+            app._busy = True
+            app.action_read_names()
+            app.action_channels()
+            app.action_device_info()
+            app.query_one("#preset-table").focus()
+            app.action_select_preset()
+            assert spawned == [], f"refused operations still started: {spawned}"
+
+    async def test_the_flag_is_taken_before_the_worker_is_spawned(self, wired):
+        """The race the flag exists for.
+
+        ``@work(thread=True)`` returns immediately, so a worker that set
+        the flag on its own thread would set it too late and two presses
+        in one tick would both pass. Set synchronously here, the first
+        press finishes the assignment before the second is dispatched.
+        """
+        app, spawned = wired
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = False
+            spawned.clear()
+            for _ in range(5):
+                app.action_read_names()
+            assert len(spawned) == 1, spawned
+            assert app._busy is True
+
+    async def test_a_finished_read_releases_the_wire(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = False
+            app.action_read_names()
+            for _ in range(200):
+                await pilot.pause()
+                if not app._busy:
+                    break
+            assert app._busy is False, "a successful read never released it"
+
+    async def test_a_failed_operation_releases_the_wire(self):
+        """A worker that raises must not strand the flag.
+
+        Otherwise one bad cable leaves the browser permanently refusing
+        every operation, and the only symptom is a status bar that keeps
+        saying "busy".
+        """
+
+        class Broken(DemoDevice):
+            def read_bank_names(self, *args, **kwargs):
+                raise TimeoutError("no reply")
+
+        app = P2kedApp(Broken(), catalog=cat.empty())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = False
+            app.action_read_names()
+            for _ in range(200):
+                await pilot.pause()
+                if not app._busy:
+                    break
+            assert app._busy is False, "a failed read stranded the flag"
+
+    async def test_device_info_releases_the_wire(self, app):
+        """`i` clears it too, which it did not: it had no `_busy` handling
+        at all, so once the flag started working, pressing `i` would lock
+        the browser for good."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._busy = False
+            app.action_device_info()
+            for _ in range(200):
+                await pilot.pause()
+                if not app._busy:
+                    break
+            assert app._busy is False, "the info screen stranded the flag"
+
+    async def test_a_selection_releases_the_wire(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#preset-table").focus()
+            app._busy = False
+            app.action_select_preset()
+            for _ in range(200):
+                await pilot.pause()
+                if not app._busy:
+                    break
+            assert app._busy is False, "a selection stranded the flag"
+
+
 class TestChannel:
     async def test_selection_goes_out_on_the_chosen_channel(self, app):
         async with app.run_test() as pilot:
