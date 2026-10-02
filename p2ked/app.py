@@ -1350,15 +1350,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     # it here keeps the rule that workers do MIDI and the main thread does
     # the rest. A failure is not fatal -- every bank is shown instead.
     #
+    # One Configuration request, not one name request per ROM. Measured on
+    # 2026-10-02 against a Proteus 2000: 16.5 ms against 370.7 ms, and the
+    # worst case collapses from twenty 0.6 s timeouts -- twelve seconds of
+    # silence before the first paint -- to one. `installed_roms` is still
+    # used when a device does not offer the cheap way, and stays as the
+    # independent cross-check it was written to be. See TODO.md item 34.
     installed = None
-    if not args.all_roms and hasattr(device, "installed_roms"):
-        try:
-            print("  asking which ROMs are fitted...", file=sys.stderr)
-            installed = device.installed_roms(timeout=0.6)
-            have = sum(1 for present in installed.values() if present)
-            print(f"  {have} of {len(installed)} ROMs answered", file=sys.stderr)
-        except Exception as exc:
-            print(f"  could not ask ({exc}); showing every bank", file=sys.stderr)
+    if not args.all_roms:
+        ask = getattr(device, "roms_from_config", None)
+        if ask is None:
+            ask = getattr(device, "installed_roms", None)
+        if ask is not None:
+            try:
+                print("  asking which ROMs are fitted...", file=sys.stderr)
+                installed = ask()
+                have = sum(1 for present in installed.values() if present)
+                print(f"  {have} of {len(installed)} ROMs fitted", file=sys.stderr)
+            except Exception as exc:
+                installed = None
+                print(f"  could not ask ({exc}); showing every bank", file=sys.stderr)
 
     app = P2kedApp(
         device,

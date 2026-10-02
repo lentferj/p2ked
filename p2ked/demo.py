@@ -405,6 +405,25 @@ class DemoDevice:
         reply = self.handle(m.config_request(device=self.device_id))
         return m.parse_config(m.parse(reply))
 
+    def roms_from_config(self, *, timeout: Optional[float] = None) -> Dict[int, bool]:
+        """Which ROM IDs the fake has, from one request.
+
+        Same contract as :meth:`p2k.bridge.ProteusBridge.roms_from_config`,
+        and the same reason it exists: startup asks one question and the
+        configuration response already answers it, so there is no reason to
+        spend twenty name requests on it.
+
+        Present so demo mode takes the same startup path as a real unit --
+        the bank pane filters to the fitted ROMs in both, rather than demo
+        quietly exercising a branch that hardware never takes.
+        """
+        return {
+            (roms.USER_ROM_ID if entry is roms.USER else entry.msb): (
+                entry is roms.USER or entry.id in self.simms
+            )
+            for entry in roms.ROMS
+        }
+
     def preset_name(
         self, number: int, rom_id: int, *, timeout: Optional[float] = None
     ) -> str:

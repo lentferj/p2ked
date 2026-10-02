@@ -575,6 +575,42 @@ class ProteusBridge:
             out[rom_id] = not roms.is_absent(name)
         return out
 
+    def roms_from_config(self, *, timeout: Optional[float] = None) -> Dict[int, bool]:
+        """Which ROM IDs this unit has, from **one** request. Silent.
+
+        The same answer :meth:`installed_roms` gives, at a fraction of the
+        cost, because the Configuration response already lists every fitted
+        SIMM's ID. Measured against a Proteus 2000 on 2026-10-02: **16.5 ms
+        against 370.7 ms**, 23x, and the two agree once user memory is
+        accounted for.
+
+        :meth:`installed_roms` is kept because it is genuinely independent
+        -- it asks the question the name reader will actually ask, rather
+        than believing the configuration block -- and one command's worth of
+        agreement between two readings is worth more than the 350 ms. This
+        is the one for startup, where the question is only "which banks to
+        list" and there is no session yet to cross-check against.
+
+        **User memory is not a SIMM.** The Configuration response reports
+        its size as ``user_presets``, separately from ``simms``, so
+        ``hardware_config().simms`` on its own would say the unit has no
+        user banks and the bank pane would start on a ROM. It gets an entry
+        here explicitly, as ``True``: user memory is always present.
+
+        Returns the same shape as :meth:`installed_roms` -- every ROM in
+        the table, present or not -- so a caller cannot tell from the type
+        which method produced it.
+        """
+        config = self.hardware_config(timeout=timeout)
+        fitted = {simm.simm_id for simm in config.simms}
+        out: Dict[int, bool] = {}
+        for entry in roms.ROMS:
+            if entry is roms.USER:
+                out[roms.USER_ROM_ID] = True  # always there; not a SIMM
+                continue
+            out[entry.msb] = entry.msb in fitted
+        return out
+
     def select(self, entry: roms.Preset, *, channel: int = 0) -> None:
         """Select a preset. **This changes what the unit is playing.**
 

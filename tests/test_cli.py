@@ -274,3 +274,85 @@ class TestTheRomTableIsWhatTheCliClaims:
         for entry in roms.ROMS:
             assert entry.id in out, entry.id
             assert entry.name in out, entry.name
+
+
+class TestAskingWhichRomsAreFitted:
+    """`roms_from_config`, the cheap answer to the startup question.
+
+    One Configuration request instead of one name request per ROM. TODO.md
+    item 34; measured at 16.5 ms against 370.7 ms on a Proteus 2000 on
+    2026-10-02, with the two agreeing exactly.
+
+    Checked here against the demo device, and -- for the part that matters
+    -- against `installed_roms`, so the two answers are asserted to be the
+    same rather than merely each plausible.
+    """
+
+    def test_it_covers_every_rom_in_the_table(self):
+        from p2ked.demo import DemoDevice
+
+        installed = DemoDevice().roms_from_config()
+        assert set(installed) == {
+            roms.USER_ROM_ID if e is roms.USER else e.msb for e in roms.ROMS
+        }
+
+    def test_only_the_fitted_roms_are_present(self):
+        from p2ked.demo import DEMO_SIMMS, DemoDevice
+
+        installed = DemoDevice().roms_from_config()
+        present = {rom_id for rom_id, yes in installed.items() if yes}
+        expected = {roms.USER_ROM_ID} | {roms.rom(rom_id).msb for rom_id in DEMO_SIMMS}
+        assert present == expected
+
+    def test_user_memory_is_present_and_is_not_a_simm(self):
+        """The trap: user memory is reported as a size, not as a SIMM.
+
+        A configuration response alone lists no user banks, so a bank pane
+        built straight from `config.simms` would start on a ROM and never
+        show USER-0 at all.
+        """
+        from p2ked.demo import DemoDevice
+
+        device = DemoDevice()
+        assert roms.USER_ROM_ID not in {
+            s.simm_id for s in device.hardware_config().simms
+        }
+        assert device.roms_from_config()[roms.USER_ROM_ID] is True
+
+    def test_the_config_answer_equals_the_name_probe_answer(self):
+        """Two independent paths to the same question, asserted equal.
+
+        `roms_from_config` reads the Configuration response; the probe reads
+        a Generic Name reply per ROM and recognises the absent sentinel --
+        the logic `ProteusBridge.installed_roms` uses, and which the demo
+        device does not expose as a method, so it is spelled out here over
+        the demo's own protocol.
+
+        This is the check that matters: one Configuration response and
+        twenty name replies are two readings of the same fact, and they are
+        compared against a real unit every time this is re-run (TODO 34).
+        """
+        from p2k import roms as table
+        from p2ked.demo import DemoDevice
+
+        device = DemoDevice()
+        by_config = device.roms_from_config()
+
+        by_probe = {}
+        for entry in table.ROMS:
+            rom_id = table.USER_ROM_ID if entry is table.USER else entry.msb
+            try:
+                name = device.preset_name(0, rom_id)
+            except TimeoutError:
+                continue  # unknown, not absent
+            by_probe[rom_id] = not table.is_absent(name)
+
+        assert by_config == by_probe
+        assert by_config[table.USER_ROM_ID] is True
+
+    def test_an_absent_rom_is_false_not_missing(self):
+        from p2ked.demo import DemoDevice
+
+        installed = DemoDevice().roms_from_config()
+        # PROTOZOA is not in DEMO_SIMMS.
+        assert installed[roms.rom("PROTOZOA").msb] is False
