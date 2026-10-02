@@ -164,6 +164,124 @@ names under bank 1's numbers and loses bank 2 entirely. The section's own
 label wins, the correction is reported on stderr, and `p2k/roms.py` carries
 the third bank the index would have hidden.
 
+## Development checks
+
+Static analysis, type checking, tests and dependency audits, all runnable
+from the Makefile. Nothing here is AI-generated and nothing here writes to
+a Proteus.
+
+```sh
+make install          # create .venv, install pinned dev dependencies
+make install-hooks    # pre-commit install
+make check            # everything below; fails on the first error
+```
+
+`make help` lists every target.
+
+| target | what it runs |
+|---|---|
+| `make lint` | `ruff check` — E, F, I, B, S, SIM, UP, C4, PL, RUF, C901 |
+| `make format` | `ruff format` (rewrites files in place) |
+| `make format-check` | `ruff format --check --diff` |
+| `make typecheck` | `mypy` |
+| `make test` | `pytest -q` (fast, no coverage) |
+| `make coverage` | `pytest` with a term-missing report, enforcing `fail_under` |
+| `make audit` | `pip-audit`, `vulture`, `deptry`, `detect-secrets` |
+| `make check` | lint → format-check → typecheck → coverage → audit |
+
+### Before pushing
+
+`make check` is the gate. It is also what a CI job would run, and what
+`pre-commit run --all-files` covers between commits. If the two ever
+disagree, `make check` is the answer — the Makefile is the source of
+truth and every tool reads its configuration from `pyproject.toml`.
+
+### Versions
+
+`requirements-dev.txt` is the lockfile: every tool and every transitive
+dependency, pinned to an exact version, so a check means the same thing on
+every machine. To regenerate it after adding a tool:
+
+```sh
+python3 -m venv /tmp/p2k-lock && /tmp/p2k-lock/bin/pip install -U pip
+/tmp/p2k-lock/bin/pip install -r requirements-dev.txt
+/tmp/p2k-lock/bin/pip freeze | sort
+```
+
+### What is suppressed, and why
+
+`make check` passes on the tree as it stands. That is not the same as the
+tree being clean, and the difference is worth being explicit about.
+
+`pyproject.toml` holds every rule, every baseline and the reason for each.
+Nothing in the source was rewritten to satisfy a linter.
+
+- **~400 of 499 pre-existing ruff findings** are five rules ignored
+  project-wide: `UP006`/`UP035`/`UP045` (`typing.Dict` rather than PEP 585
+  spellings), `PLR2004` (magic values — the protocol constants must stay
+  literal, per CLAUDE.md) and `PLC0415` (function-local imports, which is
+  what lets the offline CLI work without a MIDI backend).
+- **The remaining ~99** are per-file, per-rule ignores, each with a comment
+  naming the finding. They are per *rule*, not per file, so a new finding
+  of an unlisted rule in one of those files is still reported.
+- **mypy** silences 36 pre-existing errors by error code per module, so
+  every other check stays live there. `p2k/roms.py` and `p2k/catalog.py`
+  pass with none of the below enabled and are checked strictly — that is
+  the bar for new modules.
+- **One ruff F821 and one mypy `name-defined` were a real bug, not a style
+  finding.** `p2kcli find` raised on every non-empty search. Both are fixed
+  and **their baselines are removed**, so an undefined name in that file is
+  reported again. It survived because `p2ked/cli.py` had no test at all;
+  `tests/test_cli.py` now drives every command through `main()`.
+- **Coverage is gated** at `fail_under = 68`. The suite reports **69.60%**
+  with branch coverage on; the gate sits just below so ordinary fluctuation
+  does not turn `make check` red. Two figures are low for a reason no
+  synthetic test can fix, and neither is a reason to lower the bar:
+  `p2k/bridge.py` **24%** (the transport needs a cable — it was exercised
+  against a real unit instead, see RESOLUTION_NOTES §11) and `p2ked/app.py`
+  **57%** (layout and event plumbing that would want a snapshot to pin).
+
+### The formatter
+
+`ruff format` is enabled, in `make check` and as a pre-commit hook. It was
+held back while the tree was unformatted, because 17 of 19 files would have
+been rewritten by the first commit after `pre-commit install` — a mass change
+smuggled into an unrelated commit. The reformat was applied as its own commit
+instead, so the hook now only ever touches code you are already editing.
+
+`make format` applies it; `make format-check` verifies it. Both are in
+`make check`.
+
+### Checking against the instrument
+
+`make check` is entirely synthetic — it opens no MIDI port, and every test
+runs against `DemoDevice`. Two tools are the exception, because they need a
+unit and so cannot be part of an automated gate:
+
+```sh
+python3 tools/measure_send_gap.py --port "U6MIDI Pro:U6MIDI Pro MIDI 1 40:0"
+python3 tools/measure_send_gap.py --demo     # synthetic; proves nothing
+```
+
+`measure_send_gap.py` reads names and compares each read against a reference,
+which is how `bridge.SEND_GAP` was measured rather than guessed — see
+RESOLUTION_NOTES §11. It never selects anything and never writes.
+
+### Shell scripts
+
+There are none — no `*.sh`, and no file with a bash or sh shebang — so
+`shellcheck` and `shfmt` are not wired in. `.pre-commit-config.yaml`
+carries both, commented out with the revisions to use, for whenever the
+first script arrives.
+
+### What these checks cannot tell you
+
+A green `make check` says the encoder and the decoder agree, that the
+ranges are enforced, that a signed value survives a round trip, and that
+the cursor still never sends MIDI. It does not say the protocol is right.
+That remains what DISCLAIMER.md is for, and no amount of static analysis
+changes it.
+
 ## Licence
 
 GPL-2.0-or-later. See [LICENSE](LICENSE) for the project's copyright notice

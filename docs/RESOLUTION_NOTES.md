@@ -549,3 +549,132 @@ value, by two independent readings of every master parameter.
 - **Writing.** Nothing was written. Whether the unit accepts a Setup Dump
   back, and what it does with the two undocumented trailing blocks, is
   untested and out of scope: p2ked reads.
+
+---
+
+## §11 — Timing, preset extents, and the startup sweep
+
+**2026-10-02, third hardware session.** Same Proteus 2000 as §7 and §10:
+device ID 0, behind a U6MIDI Pro, four SIMMs. Nothing was selected, nothing
+wrote to the unit, and nothing sounded — every exchange below is a read.
+
+Three open items were aimed at this session (TODO 4, TODO 5, TODO 34), and a
+fourth question turned up that nobody had asked.
+
+### The unit's answer to a name request is ~18 ms, and that is the whole cost
+
+`bridge.SEND_GAP` had been a guess since the first commit. Measured, over a
+128-preset bank, on this unit and this cable:
+
+| gap after each send | per preset | notes |
+|---|---:|---|
+| 10.00 ms (the default) | 18.72 ms | 3/3 clean |
+| 0.00 ms | 18.94 ms | 3/3 clean |
+
+And the round trip on its own, with no gap and no drain: **17.91 ms**.
+
+So the gap is entirely hidden inside the unit's response time. Removing it
+outright changes nothing — 18.94 ms against 18.72 ms, which is noise. The
+cost of a name sweep is the instrument taking eighteen milliseconds to think,
+and no sender-side constant can improve that.
+
+**`SEND_GAP` stays at 10 ms.** Two reasons, and the second is the one that
+matters:
+
+1. It is not a performance lever. Cutting it to zero buys nothing
+   measurable, so there is no performance argument for changing it.
+2. The sweep found **no failures at any gap down to 0.05 ms** — 3/3 clean at
+   every step. The unit tolerates a far faster rate than p2ked sends at.
+   That is evidence the current value is *conservative*, not evidence it is
+   needed. Lowering it would trade a margin nobody has measured the need
+   for, for nothing.
+
+`tools/measure_send_gap.py` is the tool that produced this, and it is the
+answer to "re-derive it rather than trust this note". It compares each read
+against a reference read, not merely counting successes, because the failure
+a too-small gap causes is a reply belonging to the *previous* request — every
+name shifted by one preset — which a success count cannot see.
+
+One unit, one firmware, one interface. The sibling projects' 10 ms default is
+untouched here, and nothing above generalises to another unit.
+
+### The preset counts in `roms.py` are right for all four fitted ROMs
+
+TODO 5 said the table's counts come from the instrument-definition files,
+which describe banks rather than populated presets. The unit reports its own,
+per SIMM:
+
+| SIMM | p2ked `count` | unit reports | agree |
+|---|---:|---:|---|
+| 4 Composer | 1024 | 1024 | yes |
+| 14 X-Lead v2 | 640 | 640 | yes |
+| 65 Techno Synth | 512 | 512 | yes |
+| 67 Beat Garden | 512 | 512 | yes |
+
+User memory: 512, against 512 in the table.
+
+So the concern behind TODO 5 — that `banks * 128` might overstate a ROM —
+**does not apply to any ROM this unit has.** What remains of the item is
+generalisation to the other fifteen rows, which this session cannot reach.
+
+### The absent-preset sentinel is not returned by every ROM
+
+Expected, on the strength of §7: X-Lead v2 answers preset 639 and says
+`(not installed)` at 640. Confirmed, and so were two more:
+
+| ROM | last preset | one past the end |
+|---|---|---|
+| X-Lead v2 | #639 `bts:Magic Air` | `(not installed)` |
+| Techno Synth | #511 `   :TemplateV2.0` | `(not installed)` |
+| Beat Garden | #511 `   :TemplateV1.0` | `(not installed)` |
+| **Composer** | #1022 `brs:SforzadoEnsb` | **`   :default`** |
+
+Composer does not. It answers `(not installed)` for nothing: past #1022 it
+returns `   :default` indefinitely, checked through #1032.
+
+That is worth recording because `(not installed)` is load-bearing in two
+places — `read_bank_names` drops absent slots by it, and `installed_roms`
+turns "is this ROM fitted?" from a timeout into an answer. Both work here, but
+only because p2ked never asks about a slot its own table says does not exist.
+**The sentinel is a courtesy, not a guarantee.** Anyone who extends a ROM's
+range at runtime must not assume the unit will say so.
+
+Not investigated further: whether the Composer ROM really holds more than
+1024 presets, or whether the unit simply clamps within-bank requests to empty
+slots. §7 already records that the published patch list for other ROMs is
+sometimes wrong about extent, so 1024 from the instrument-definition file is
+not beyond suspicion — but a guess here would be a guess, and nothing in
+p2ked depends on the answer.
+
+### The startup sweep was asking twenty questions where one would do
+
+TODO 34: `p2ked` asked the unit which ROMs it had by sending one name request
+per ROM at startup — twenty requests, up to 12 s of silence before the first
+paint if the unit went quiet.
+
+The Configuration response already lists every fitted SIMM. Timed, on this
+unit:
+
+| method | requests | wall clock |
+|---|---:|---:|
+| `installed_roms` | 20 | 370.7 ms |
+| `roms_from_config` (new) | 1 | **16.5 ms** |
+
+23x, and the two agree exactly — identical dicts, verified. `installed_roms`
+is kept, because it asks the question the name reader will actually ask rather
+than believing the configuration block, and two independent readings of the
+same fact are worth more than 350 ms. The cheap one is for startup, where
+there is no second reading yet to compare against.
+
+The trap worth naming: **user memory is not a SIMM.** The Configuration
+response reports it as `user_presets`, separately, so `config.simms` alone
+says the unit has no user banks — and a bank pane built from it would start
+on a ROM and never show USER-0 at all. `roms_from_config` adds that entry
+itself.
+
+### What this session did not settle
+
+- The other fifteen ROM rows. Unreachable without the boards.
+- Whether a different unit, firmware or interface has the same 18 ms answer,
+  or returns the sentinel everywhere.
+- Writing. Still nothing was written, still out of scope.

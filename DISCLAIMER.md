@@ -38,6 +38,18 @@ over a DIN cable behind a U6MIDI Pro interface):
 - **That a SIMM ID is the ROM's Bank Select MSB** -- p2ked's one guess, now
   confirmed for three ROMs. See below.
 
+Verified again on **2026-10-02** against the same unit, adding:
+
+- **Timing.** A Generic Name Request takes ~18 ms to answer, which is what
+  a name sweep costs. `SEND_GAP` is hidden inside it, and no gap down to
+  0.05 ms produced a single wrong or missing name. See below and
+  RESOLUTION_NOTES §11.
+- **Preset extents.** All four fitted ROMs' preset counts match `roms.py`
+  exactly, as does user memory.
+- **That `roms_from_config` and `installed_roms` agree.** Two independent
+  readings of which ROMs are fitted -- one Configuration request against
+  twenty name probes -- return identical answers, 16.5 ms against 370.7 ms.
+
 **Not verified.** Everything else, including:
 
 - **Parameter edit**, and the whole preset-dump family. The encoders exist
@@ -46,9 +58,13 @@ over a DIN cable behind a U6MIDI Pro interface):
   edit is the half that writes, and stays untested on purpose.)
 - **The checksum rule.** Still ambiguous, still worked around by sending
   `7Fh`. No checksummed message has been captured from a unit.
-- **`SEND_GAP`.** Still a guess. It has not failed at 10 ms across a few
-  thousand name requests, which is evidence it is not too *short* and none
-  at all that it is near right.
+- **`SEND_GAP`.** **Measured 2026-10-02**, and deliberately left at 10 ms.
+  The unit takes ~18 ms to answer a name request, and the gap is hidden
+  inside that: setting it to zero changes nothing measurable. No failures
+  at any gap down to 0.05 ms, so 10 ms is conservative rather than
+  necessary — kept because there is no measured reason to spend the
+  margin. One unit, one firmware, one interface; see RESOLUTION_NOTES §11
+  and `tools/measure_send_gap.py`.
 - **Every ROM but the four fitted here.** The table's other fifteen rows are
   transcribed, not confirmed.
 
@@ -88,15 +104,22 @@ are a different claim from "this works".
   p2ked implements the plain XOR reading and sends `7Fh` — "ignore
   checksum", which the specification explicitly permits — rather than guess
   on the messages that carry the field.
-- **`SEND_GAP`.** A guess, not a measurement. E-MU gives no inter-message
-  timing at all. A name sweep of a 1024-preset ROM spends a thousand of
-  these.
-- **Preset counts per ROM.** Taken from the instrument-definition files,
-  which describe *banks*, not populated presets. For the four ROMs fitted
-  here the unit's own counts agree; for the rest they are unconfirmed. A
-  unit answers a request past the end of a ROM with the name
-  `(not installed)` rather than ignoring it, so p2ked can now tell an
-  absent preset from a dead cable — see `p2k.roms.is_absent`.
+- **`SEND_GAP`.** RESOLVED 2026-10-02. E-MU gives no inter-message timing at
+  all, and it turns out not to matter: the unit's ~18 ms response time
+  dominates, so the gap is neither a bottleneck nor a risk at any value
+  tried. Left at 10 ms, measured, and re-derivable with
+  `tools/measure_send_gap.py`.
+- **Preset counts per ROM.** RESOLVED for the four fitted, 2026-10-02: the
+  unit's own per-SIMM counts match `roms.py` exactly for all of them and for
+  user memory. The other fifteen rows still come from the
+  instrument-definition files, which describe *banks*, not populated
+  presets.
+- **`(not installed)` is not universal.** Three of the four fitted ROMs
+  answer a request past their last preset with that name; **Composer does
+  not** — it returns `   :default` indefinitely (measured 2026-10-02).
+  p2ked is unaffected, because it only ever asks about slots its own table
+  says exist, but the sentinel is a courtesy and not a guarantee. See
+  TODO.md item 41.
 - **Everything else.** The list above is what is known to be uncertain, not
   the extent of the uncertainty.
 

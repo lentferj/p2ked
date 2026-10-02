@@ -66,42 +66,80 @@ permitted) on messages that carry the field rather than guess.
 Resolved by capturing a checksummed message *from* a unit and testing both
 readings against it.
 
-## 4. `SEND_GAP` is a guess
+## 4. `SEND_GAP` is a guess — MEASURED 2026-10-02, and deliberately left alone
 
-**Status:** open, blocked on hardware.
+**Status:** answered, and the answer is "do not change it".
 
-E-MU gives no inter-message timing at all; the only guidance is to keep a
-message under 244 data bytes. `SEND_GAP` is the sibling projects'
-conservative default. A name sweep of a 1024-preset ROM spends a thousand
-of them, so this is worth measuring early.
+Measured on a Proteus 2000 over a 128-preset bank:
 
-## 5. Preset counts are bank counts
+    gap 10.00 ms (the default)   18.72 ms per preset   3/3 clean
+    gap  0.00 ms                 18.94 ms per preset   3/3 clean
+    round trip, no gap, no drain 17.91 ms
 
-**Status:** open, and now fixable. A unit answers past the end of a ROM with
-the name `(not installed)` rather than going silent, so the real extent of
-every fitted ROM can be found by asking — silently, and without a timeout.
-`roms.is_absent` recognises it and `read_bank_names` drops those rows; using
-it to *correct* the table at runtime is the remaining work.
+**The gap is entirely hidden inside the unit's response time.** Removing it
+outright changes nothing measurable — 18.94 against 18.72 is noise — so
+there is no performance argument for lowering it. A sweep costs what the
+instrument costs to think, and no sender-side constant improves that.
 
-The instrument-definition files describe *banks*, not populated presets, so
-`roms.ROMS` gives every ROM `banks * 128`. A ROM whose last bank is partly
-empty will show rows that name nothing. Deliberate: an over-long bank shows
-empty rows, a short one hides presets, and a hidden preset is not
-discoverable by the person looking for it.
+The sweep also found **no failures at any gap down to 0.05 ms**. That says
+the current value is conservative, not that it is needed: there is no
+measured reason to spend the margin, so the margin stays.
 
-A unit's Configuration response reports the real per-SIMM preset count and
-could correct this at runtime.
+`SEND_GAP` remains 10 ms, the sibling projects' default, untouched.
+`tools/measure_send_gap.py` re-derives all of it against any unit, comparing
+each read with a reference read rather than counting successes — the failure
+a too-small gap causes is a reply belonging to the *previous* request, which
+a success count cannot see.
 
-## 5b. ROM 14 has no name
+One unit, one firmware, one interface; none of this generalises. See
+RESOLUTION_NOTES §11.
 
-**Status:** open, needs the front panel.
+## 5. Preset counts are bank counts — PARTLY RESOLVED 2026-10-02
 
-A unit reported SIMM ID 14 with 640 presets, and it answers name requests
-for all 640. No instrument-definition file to hand covers MSB 14, so p2ked
-has the numbers but not the ROM's own name, and System Exclusive has no
-object type to ask for one. It is in the table as "ROM 14 (unidentified)".
+**Status:** the worry does not apply to any ROM the unit has. The
+generalisation to the other fifteen rows is still open, and cannot be
+reached without the boards.
 
-The unit's own display knows. Whoever has the unit can say.
+The table gives every ROM `banks * 128`, from instrument-definition files
+that describe banks rather than populated presets. A ROM whose last bank is
+partly empty will therefore show rows that name nothing. Deliberate: an
+over-long bank shows empty rows, a short one hides presets, and a hidden
+preset is not discoverable by the person looking for it.
+
+The unit reports its own per-SIMM count. On 2026-10-02, all four fitted ROMs
+and user memory agreed with `roms.py` exactly:
+
+| SIMM | p2ked `count` | unit reports |
+|---|---:|---:|
+| 4 Composer | 1024 | 1024 |
+| 14 X-Lead v2 | 640 | 640 |
+| 65 Techno Synth | 512 | 512 |
+| 67 Beat Garden | 512 | 512 |
+| user memory | 512 | 512 |
+
+**What remains:** the fifteen ROMs not fitted here, and the last-bank-partly-
+empty case, which none of the four happens to exhibit. Correcting the table
+at runtime from the Configuration response is still not done, and is still
+not obviously worth it now that the counts agree where they can be checked.
+
+See RESOLUTION_NOTES §11.
+
+## 5b. ROM 14 has no name — DONE 2026-09-21
+
+**Status:** done. This entry was stale; it was not reopened, just not
+closed when the work happened.
+
+The ROM is named **X-Lead v2**, with its real extent -- five banks, 640
+presets -- in `p2k/roms.py`:
+
+    _rom("XLEAD2", "X-Lead v2", 14, (0, 1, 2, 3, 4), 640),
+
+Identified from E-MU's own X-Lead v2 patch list: 640 presets in five banks,
+and every preset sampled off the unit (0, 5, 100, 200, 400, 638, 639)
+matching that list character for character. `tools/extract_catalog.py`
+now reads those OpenDocument lists, so its 640 names are catalogued too --
+they were unobtainable from any instrument-definition file, which do not
+cover MSB 14 at all. See RESOLUTION_NOTES §7.
 
 ## 6. Only presets are browsable
 
@@ -233,6 +271,18 @@ So the useful fix is not a file lock, which would make a worker doing this
 shape, so that the first worker to touch config fails the suite instead of
 the disk.
 
+**Status since 2026-10-02: still open, and the reason has shifted.** Item
+37 made the `_busy` flag live, which is what a config-writing worker would
+have had to contend with, and the natural place to write a channel is
+already the main thread (`_step_channel`, `action_pick_channel`). So there
+is no path to the race today and slightly less temptation for one.
+
+The AST check is still the right fix and is still worth doing, and it is
+still cheap: `_workers()` in `tests/test_legend.py` already yields every
+decorated function, so the check is one more loop over an existing list,
+and the guard-that-the-guard-has-something-to-check pattern is already
+written twice in that file.
+
 **Blocked on:** nothing.
 
 ## 12. `catalog.search` dropped the disagreement it knows about — FIXED
@@ -265,58 +315,73 @@ marker the browser does.
 finding states the opposite. Every bridge method that sends a request
 drains first; there is no exception to align.
 
-## 14. `DemoDevice.preset_name` and the bridge's differ in return type
+## 14. `DemoDevice.preset_name` and the bridge's differ in return type — FIXED
 
-**Status:** open, cosmetic; see item 22, which checked the hazard and found
-none. **Verified** -- `p2ked/demo.py:306` returns
-`Optional[str]`, `p2k/bridge.py:359` returns `str` and raises
-`TimeoutError` for silence.
+**Status:** **fixed 2026-10-02**, together with item 22, which is the same
+finding with the hazard checked. `DemoDevice.preset_name` returns `str` and
+raises `TimeoutError` for silence, exactly as
+`ProteusBridge.preset_name` does. Both annotations are now `str`, and a
+test asserts the two signatures match rather than trusting a comment.
 
-The demo is deliberately not a mock of the bridge; it is a second
-implementation that never opens a port. Still, the two are used
-interchangeably by the app, and the difference is exactly where a `None`
-would reach code written against the bridge's signature.
+`DemoDevice.read_bank_names` was brought into line with the bridge's at the
+same time: it catches `TimeoutError` per slot and drops absent names, so
+the demo exercises the loop the real thing runs rather than a simpler one
+that happens to pass.
 
-**Blocked on:** nothing. Either match the bridge and raise, or say in
-`demo.py` why it does not.
-
-## 15. The `tomllib` fallback in `config.py` cannot execute
-
-**Status:** open, harmless. **Verified** -- `pyproject.toml:10` declares
-`requires-python = ">=3.11"` and `tomllib` entered the standard library in
-3.11, so the `except ModuleNotFoundError` branch at `p2k/config.py:42-44`
-is unreachable and `tomllib is None` is never true.
-
-Note there are guards downstream that test `tomllib is None` (`_read`
-returns early on it). Removing the fallback means removing those too, or
-they become the dead code instead.
+The demo remains a second implementation rather than a mock, which is the
+point of it -- but it is a second implementation of the *same contract*.
 
 **Blocked on:** nothing.
 
-## 16. A tool reads a file without closing it
+## 15. The `tomllib` fallback in `config.py` cannot execute — FIXED
 
-**Status:** open, real in **one** of the three places cited.
+**Status:** **fixed 2026-10-02.** Removed.
 
-`tools/import_favourites.py:56` iterates `enumerate(open(path,
-encoding="utf-8"), 1)`, which holds the file open for the whole loop with
-no name to close it by. That one is real.
+`pyproject.toml:10` declares `requires-python = ">=3.11"` and `tomllib`
+entered the standard library in 3.11, so the `except ModuleNotFoundError`
+branch was unreachable and `tomllib is None` never true. `import tomllib`
+is now unconditional, and the `or tomllib is None` guard in `_read` went
+with it rather than becoming the dead code instead.
 
-The other two the review names are already correct: `tools/extract_catalog.py`
-lines 100 and 126 both use `with open(...) as handle`, as does line 337.
+A comment is left in place saying why, because "a fallback that looks like
+it degrades but cannot" is the sort of thing the next reader re-adds.
+
+**Blocked on:** nothing.
+
+## 16. A tool reads a file without closing it — FIXED
+
+**Status:** **fixed.** This entry was stale: the code had already been
+fixed and the entry never closed.
+
+`tools/import_favourites.py` reads through a `with` block:
+
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.readlines()
+
+The other two the review named were already correct when it was written:
+`tools/extract_catalog.py` uses `with open(...) as handle` in all three
+places.
 
 **Blocked on:** nothing; one line.
 
-## 17. `wrap_blocks` does not guard against `width <= 0`
+## 17. `wrap_blocks` did not guard against `width <= 0` — FIXED
 
-**Status:** open, safe. **Verified** -- `p2ked/app.py:87`, no guard; the
-only caller clamps with `max(self.size.width - 2, 20)`.
+**Status:** **fixed 2026-10-02.** `width = max(width, 1)`, and the
+`if width and ...` test became `if ...`, since it is now always true.
 
-Worth noting what the function is for, per its own docstring: the legend
-wraps rather than truncating, because a footer that silently drops its
-last few keys teaches the user those keys do not exist. A width of 0 would
-be the degenerate version of exactly that failure.
+Worth recording what the guard was for, per the function's own docstring:
+the legend wraps rather than truncates, because a footer that silently
+drops its last few keys teaches the user those keys do not exist. A width
+of 0 was the degenerate version of exactly that failure — every candidate
+looks too wide, the break is never taken, and the legend comes out as one
+very long line: the same outcome, reached by the other route.
 
-**Blocked on:** nothing. `width = max(width, 1)`.
+The only caller clamps with `max(self.size.width - 2, 20)`, so nothing ever
+passed 0 and no user could have seen this. It is fixed because a function
+that silently degrades on an argument its own docstring does not mention
+is worth less than one that cannot.
+
+**Blocked on:** nothing.
 
 ## 18. `roms.presets` recomputes its base offset on every call
 
@@ -391,24 +456,21 @@ until this week.
 
 **Blocked on:** wanting it.
 
-## 22. `DemoDevice.preset_name` silence behaviour differs from bridge
+## 22. `DemoDevice.preset_name` silence behaviour differs from bridge — FIXED
 
-**Status:** open, cosmetic. **The hazard it claims does not exist.**
+**Status:** **fixed 2026-10-02.** See item 14.
 
-The return types do differ, as item 14 says: `Optional[str]` against `str`.
+The hazard it claimed did not exist: `preset_name` has three callers and
+each is inside the class that defines it, so nothing a caller could
+mistake the return for ever saw a `None`. The inconsistency was real and
+the fix is still worth having -- the demo now raises `TimeoutError` and
+both annotations read `str`, so the divergence is gone rather than
+explained away.
 
-But "the app calls both interchangeably" is not so. Checked every call
-site: `preset_name` has three callers, and each is inside the class that
-defines it -- `bridge.py:430`, `bridge.py:507` and `demo.py:323`. The app
-never calls it at all; it calls `read_bank_names`, and the demo's own
-version already skips `None`. There is no path by which a `None` reaches
-code written against the bridge's signature.
-
-So: a consistency wart worth tidying, not a crash waiting to happen. Fixing
-it is still the right call, and option (a) -- make the demo raise -- is
-still the better one.
-
-**Blocked on:** nothing.
+Worth noting what the fix is *not*: the demo was not made to wrap the
+bridge, and the bridge was not relaxed to suit the demo. Silence is
+`TimeoutError` in both, because that is what silence is on a MIDI cable,
+and the demo's job is to be the same contract over a fake transport.
 
 ## 23. `catalog.search` return type should include `differs` flag — FIXED
 
@@ -576,21 +638,40 @@ loop, redrawn on every toggle. `Favorites.keys()` exists for exactly this,
 says so in its docstring, and was never called. One query now builds a
 bank-to-numbers map before the loop.
 
-## 34. Worst-case startup stall: ~12 s of silence against a half-answering unit
+## 34. Worst-case startup stall: ~12 s of silence against a half-answering unit — FIXED
 
-**Status:** open, bounded, **not acted on** -- and partly mitigated by
-item 27.
+**Status:** **fixed 2026-10-02.** The sweep is gone.
 
-The sweep of 20 ROMs at 0.6 s still runs before the first paint, so a unit
-that answers identity and then goes quiet still costs up to 12 s with no
-per-ROM progress. What item 27 changes is the *other* stall in front of it:
-the port sweep is now skipped when a remembered port answers.
+p2ked asked which ROMs the unit had by sending **one name request per ROM**,
+twenty of them, at 0.6 s each — up to 12 s of silence before the first paint
+against a unit that answers identity and then goes quiet.
 
-Shortening the per-ROM timeout wants the same hardware session that
-measures `SEND_GAP` (item 4). Guessing it shorter without measuring is how
-a ROM that is fitted stops being listed.
+The Configuration response already lists every fitted SIMM. Measured on
+2026-10-02:
 
-**Blocked on:** a measurement.
+| method | requests | wall clock |
+|---|---:|---:|
+| `installed_roms` | 20 | 370.7 ms |
+| `roms_from_config` (new) | 1 | **16.5 ms** |
+
+23x, and the two were verified to return *identical dicts* on the unit, not
+merely the same idea.
+
+`installed_roms` is kept. It asks the question the name reader will actually
+ask rather than believing the configuration block, and two independent
+readings of one fact are worth more than 350 ms. The cheap one is for
+startup, where there is no second reading yet to compare against.
+
+**The trap, recorded because it is easy to get wrong:** user memory is not a
+SIMM. The Configuration response reports it as `user_presets`, separately, so
+`config.simms` on its own says the unit has no user banks — and a bank pane
+built straight from it would start on a ROM and never show USER-0 at all.
+`roms_from_config` adds that entry itself.
+
+`DemoDevice` grew the same method, so demo mode takes the same startup path
+as hardware and the bank pane filters to the fitted ROMs in both.
+
+See RESOLUTION_NOTES §11.
 
 ## 35. App-level Enter could select a preset from an unfocused pane — FIXED
 
@@ -624,3 +705,171 @@ decoding it once would serve rxved, kwsed, p2ked, x5ded and nanosyned
 alike. Worth doing as shared work rather than five times over.
 
 **Blocked on:** nothing but the decoding. Nothing here depends on it.
+
+---
+
+*Items 37 onward came from a full review of the current code on 2026-10-02,
+reading every module rather than a diff. Item 37 is the only one that was
+ever a live defect; it is here because the mechanism behind it is the sort
+of thing this file exists to stop repeating.*
+
+## 37. The `_busy` flag was checked in four places and set in none — FIXED
+
+**Status:** **fixed 2026-10-02.** Real, and it had been dead since the
+worker code was written.
+
+`P2kedApp._busy` guarded four operations — `r`, `m`, `i` and the Enter
+selection — and the auto-read path consulted it. Nothing ever set it to
+`True`. It was initialised `False`, tested four times, and cleared in the
+`finally` of two workers, so every check read `False` and the guard
+described in the comments never fired.
+
+The tell was that the comments were already there, describing the line that
+was missing. Three of them read, in full:
+
+> Set on the main thread, not in the worker. A `@work(thread=True)` method
+> returns at once and would set the flag on its own thread, so two quick
+> presses both passed the check above before either worker ran -- two of
+> whatever the worker does, from one intent.
+
+That is the race, correctly diagnosed, sitting immediately above a line
+that was never written. **Three copies of the same comment and not one
+assignment** is worth recording: the diagnosis was done three times and
+each time stopped before the fix.
+
+Two further holes would have appeared the moment the flag started working,
+and both are the same shape — a worker that reads `_busy` but is not
+itself counted:
+
+- `_info_worker` had no `_busy` handling at all. With the flag live,
+  pressing `i` would claim it and never release it, and the browser would
+  refuse every operation thereafter with a status bar saying "busy".
+- `_select_worker` cleared nothing. The same, one keystroke away, and the
+  most audible of the three since a selection makes a sound.
+
+All four workers now clear it in `finally`, all four callers set it on the
+main thread before spawning, and the per-slot hand-off moved into an
+`else` clause so the next operation cannot start while a bank's names are
+still crossing to the main thread. Six tests pin it: that nothing starts
+while busy, that five presses in one tick spawn exactly one worker, and
+that a success, a failure, the info screen and a selection each release
+the wire.
+
+The flag's contract is now documented at its definition rather than
+implied by three comments: **set synchronously on the main thread**, and
+the reason is not obvious. `@work(thread=True)` returns immediately, so a
+worker setting the flag on its own thread would set it too late and the
+race the comments describe would still exist — just with the flag
+populated and useless.
+
+Note what was *not* done: no lock, and no queue. `self._lock` is the lock
+and serialises the traffic; `_busy` is a refusal, so the second press says
+so instead of silently waiting 2.5 s behind a bank read the user cannot
+see. A queue would have been the friendlier behaviour and the wrong one —
+the refusal is the whole point, and it is what the status bar is for.
+
+**Blocked on:** nothing.
+
+## 38. `wrap_blocks` treated a zero width as "no wrapping" — see item 17
+
+**Status:** **fixed 2026-10-02.** Tracked with item 17 rather than
+duplicated; the degenerate width made every candidate look too wide, so
+the break was never taken and the legend became one long line.
+
+## 39. `DemoDevice.preset_name` returned `Optional[str]` — see item 14
+
+**Status:** **fixed 2026-10-02.** Tracked with item 14; the demo now
+raises `TimeoutError` for silence, as the bridge does, and its
+`read_bank_names` uses the same per-slot loop.
+
+## 40. `p2kcli find` raised on every non-empty search — FIXED
+
+**Status:** **fixed 2026-10-02.** Found by ruff's F821 and mypy's
+`name-defined` when the quality-check pipeline was set up.
+
+Two faults in `p2ked/cli.py` `_cmd_find`:
+
+1. **`differs` was used and never bound.** Line 103 read
+   `name + (" *" if differs else "")`; the loop unpacked three names and
+   none of them was `differs`.
+2. **The unpack itself was wrong.** `Catalog.search()` returns
+   `(bank_id, program_change, name, differs)` — four items, since items 12
+   and 23 — and the loop unpacked three. So the function raised
+   `ValueError` before reaching line 103 at all, which is why the undefined
+   name never surfaced as a `NameError` at runtime.
+
+**Reproduced before fixing**, exactly as reported by the tools:
+
+    $ python -m p2ked.cli find bell
+    error: too many values to unpack (expected 3)
+
+The fix is the fourth name. Both rules have been removed from the
+`pyproject.toml` baselines, so an undefined name in that file is reported
+again from now on.
+
+**Why no test caught it:** `p2ked/cli.py` had **0% coverage** — no test
+touched the file. That was the finding underneath this one. `tests/test_cli.py`
+now exists and drives every command through `main()`, so the argument parser,
+the dispatch table and the offline/device split are all under test;
+`p2ked/cli.py` is at 78%.
+
+## 41. `(not installed)` is not returned by every ROM — OPEN, noted not fixed
+
+**Status:** open, and nothing in p2ked depends on it. Recorded 2026-10-02
+because it contradicts something RESOLUTION_NOTES §7 established from one
+sentinel, and a single observation generalised into a rule is exactly the
+kind of thing this file exists to stop.
+
+`(not installed)` is load-bearing twice. `read_bank_names` drops absent slots
+by it, and `installed_roms` turns "is this ROM fitted?" from a timeout into
+an answer. §7 found it on X-Lead v2 and reasoned from there that a unit
+answers a request for a preset it does not have.
+
+**Three of the four fitted ROMs agree. Composer does not.** Measured on
+2026-10-02:
+
+| ROM | last named preset | one past the end |
+|---|---|---|
+| X-Lead v2 | #639 `bts:Magic Air` | `(not installed)` |
+| Techno Synth | #511 `   :TemplateV2.0` | `(not installed)` |
+| Beat Garden | #511 `   :TemplateV1.0` | `(not installed)` |
+| **Composer** | #1022 `brs:SforzadoEnsb` | **`   :default`** |
+
+Past #1022 the Composer ROM answers `   :default` indefinitely, checked
+through #1032. It returns the sentinel for nothing.
+
+**Why nothing is broken.** p2ked only ever asks about slots its own table
+says exist, and `roms_from_config` asks the Configuration response rather
+than probing names. Both work. The finding is a **constraint on future
+work**, not a defect: anything that extends a ROM's range at runtime — which
+is what item 5 still contemplates — must not assume the unit will say so.
+
+**Not investigated, on purpose.** Whether Composer really holds more than
+1024 presets, or whether the unit clamps within-bank requests to empty slots.
+§7 records that the published patch lists are sometimes wrong about extent,
+so 1024 is not beyond suspicion — but a guess would be a guess, and nothing
+depends on it. See RESOLUTION_NOTES §11.
+
+**Blocked on:** a person who wants Composer's real extent. It takes the front
+panel, or an off-unit dump.
+
+## 42. `pytest-asyncio` was never a declared dependency — FIXED
+
+**Status:** **fixed 2026-10-02.** Found while setting up the check pipeline.
+
+`pyproject.toml` sets `asyncio_mode = "auto"` under
+`[tool.pytest.ini_options]` — a **pytest-asyncio** setting — and
+`tests/test_app.py` is marked `@pytest.mark.asyncio`, but pytest-asyncio was
+in no dependency list anywhere. It worked only because the development
+machine happened to have it installed system-wide.
+
+A clean virtualenv exposed it at once: 34 tests failed with "async def
+functions are not natively supported". Now pinned in `requirements-dev.txt`
+and in the dev extras.
+
+**The generalisable lesson, and the reason it is here rather than only in
+the commit:** a test dependency that is *used* by configuration is as real a
+dependency as one imported by a module. `deptry` cannot find this one —
+it reports only imports — so the gap had to be closed by hand, and would
+have stayed open indefinitely on a machine whose system packages happened to
+match.
