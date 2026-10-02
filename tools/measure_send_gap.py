@@ -27,9 +27,17 @@ conservative 10 ms default was inherited. TODO.md item 4 wanted this
 measured, and a name sweep of a 1024-preset ROM spends a thousand of them,
 so it is worth knowing.
 
-**Read-only, and silent.** Every request here is a Generic Name Request,
-which this family answers without selecting anything -- the property the
-whole program is built around. Nothing is written, and nothing sounds.
+**Read-only, and nothing selectable.** Every request here is a Generic Name
+Request, which this family answers without selecting anything -- the
+property the whole program is built around. Nothing is written.
+
+"Read-only" is a statement about this tool's code and is checkable. "Silent"
+would not be: this was developed against a unit connected by MIDI only, with
+no audio path, so nobody could hear whether a read made a noise. What can be
+said, and is said in `tests/test_no_sound.py`, is that no read sends any
+Channel Voice message -- Note On/Off, Control Change, Program Change, Pitch
+Bend -- which is the only way this instrument makes a sound. Prefer that
+claim to the one nobody could check.
 
 What is measured
 ----------------

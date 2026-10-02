@@ -555,8 +555,19 @@ value, by two independent readings of every master parameter.
 ## §11 — Timing, preset extents, and the startup sweep
 
 **2026-10-02, third hardware session.** Same Proteus 2000 as §7 and §10:
-device ID 0, behind a U6MIDI Pro, four SIMMs. Nothing was selected, nothing
-wrote to the unit, and nothing sounded — every exchange below is a read.
+device ID 0, behind a U6MIDI Pro, four SIMMs.
+
+**No audio path.** The unit was connected by MIDI only, so nobody could hear
+whether a read made a noise. Nothing in this section claims silence was
+observed, because it was not observable. What *was* established is narrower
+and stronger in the ways that matter: every exchange below is a read, and
+**no Channel Voice message was sent at all** — 1027 messages during a full
+sweep, every one System Exclusive, zero Note On/Off, Control Change, Program
+Change or Pitch Bend. On a MIDI instrument that is the only route to sound,
+so the read path cannot have made it, and `tests/test_no_sound.py` now
+pins that mechanically rather than leaving it to an ear. Earlier wording in
+this section that said "nothing sounded" was not supportable and has been
+corrected.
 
 Three open items were aimed at this session (TODO 4, TODO 5, TODO 34), and a
 fourth question turned up that nobody had asked.
@@ -773,6 +784,49 @@ response reports it as `user_presets`, separately, so `config.simms` alone
 says the unit has no user banks — and a bank pane built from it would start
 on a ROM and never show USER-0 at all. `roms_from_config` adds that entry
 itself.
+
+### The read path emits no Channel Voice — counted, not heard
+
+The unit had no audio connection, so silence could not be observed. What can
+be observed is the *mechanism*: this instrument makes sound only by receiving
+Channel Voice messages, status bytes 0x80-0xEF — Note On/Off, Control Change,
+Program Change, Pitch Bend, and the two aftertouch forms.
+
+Every byte p2ked sent during a full sweep was recorded by wrapping the output
+port, and classified:
+
+```
+total messages sent   1027
+  SysEx               1027
+  everything else       0
+
+  0x0c GENERIC_NAME_REQUEST   1024
+  0x0a CONFIGURATION_REQUEST     1
+  0x1d SETUP_DUMP_REQUEST        1
+  (plus one Universal Identity Request, which is not an E-MU frame)
+```
+
+So the read path cannot have made the instrument sound — not "was probably
+quiet", but: there was no message through which it could have.
+
+The same sweep shows the rule structurally. `p2k/bridge.py` has five
+`send_message` call sites: four build System Exclusive, and the remaining
+three — the only non-SysEx sends in the project — are the Bank Select CCs
+and Program Change inside `select()`. So the audible operation is reachable
+from exactly one place, and `P2kedApp` reaches it only through Enter, or
+`p2kcli select`.
+
+`tests/test_no_sound.py` now pins both halves. It exercises every read
+method against a port that records sends and never replies — every read
+times out, which does not matter, because the send happens before the wait
+and is what is inspected. A second test class confirms a selection *does*
+emit the expected three Channel Voice messages, so the read tests cannot
+pass merely because nothing ever sends anything; both halves were verified
+to fail under a deliberate mutation.
+
+**What this does not establish:** that the unit made no noise. That needs it
+wired to an output and somebody listening. The claim being made is the
+narrower one, which is the one the evidence supports.
 
 ### What this session did not settle
 

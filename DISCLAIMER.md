@@ -154,6 +154,19 @@ sibling rxved has no such message and must select each patch in turn to
 learn its name — which is why that project has confirmation prompts around
 an operation p2ked performs silently and without asking.
 
+**The verification is by wire, not by ear.** The unit behind every
+observation in this file was connected by MIDI only, with no audio path, so
+silence was never observed and is not claimed to have been. What is claimed
+is narrower and testable: **no read emits any Channel Voice message** — Note
+On/Off, Control Change, Program Change, Pitch Bend — which on a MIDI
+instrument is the only route to sound. A full 1024-preset sweep sends 1027
+messages and every one is System Exclusive.
+`tests/test_no_sound.py` pins this mechanically, and also checks that
+`select()` is the only code in the project that emits Channel Voice at all,
+so the audible operation is reachable from exactly one place. Confirming
+the *audible* result would still need the unit wired to an output and
+somebody listening; that has not been done.
+
 ## AI assistance and human authorship
 
 p2ked was created by its **human author, Jan Lentfer

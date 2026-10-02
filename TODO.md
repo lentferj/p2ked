@@ -996,6 +996,49 @@ hypothesis about firmware behaviour and is not recorded as a fact.
 Answering it properly needs the front panel, or a unit with a different
 Composer ROM revision. See RESOLUTION_NOTES §11.
 
+## 43. Silence was claimed where only a wire could be checked — FIXED
+
+**Status:** **fixed 2026-10-02.** Found while reviewing what the third
+hardware session had actually established.
+
+That session wrote "nothing sounded", in this file, in
+`docs/RESOLUTION_NOTES.md` §11 and in `tools/measure_send_gap.py`. **The unit
+had no audio connection.** Nobody could hear whether a read made a noise, so
+the claim was not merely unverified — it was unfalsifiable, and it sat in a
+document whose entire purpose is separating what was verified from what was
+assumed. Worse, it was unfalsifiable *in the reassuring direction*, which is
+the kind of unfalsifiable claim that does real damage.
+
+The interesting part is what was available instead. This instrument makes
+sound by receiving **Channel Voice** messages, status bytes 0x80-0xEF: Note
+On/Off, Control Change, Program Change, Pitch Bend, and both aftertouch
+forms. System Exclusive that asks a question cannot do that. So the claim
+is not lost, it is replaced by one that is checkable:
+
+> No read emits any Channel Voice message. Which is the only route to sound.
+
+Measured during a full 1024-preset sweep: **1027 messages sent, 1027
+System Exclusive, 0 anything else.** And structurally, `p2k/bridge.py` has
+five `send_message` call sites; four build System Exclusive, and the three
+that do not are the Bank Select CCs and Program Change inside `select()`.
+
+`tests/test_no_sound.py` pins both, with the guard this project's tests
+usually carry: a second class asserts a selection *does* emit the expected
+three messages, so the read tests cannot pass merely because nothing ever
+sends anything. Both halves were checked against deliberate mutations — a
+`select()` that sends nothing, and a read method that sends a note — and
+each failed the test that should have caught it.
+
+**The lesson, and why it is item 43 rather than a line in a commit
+message:** "it was silent" and "it could not have been audible" are
+different claims, and on a project whose whole discipline is not writing
+down more than was shown, the difference is the whole subject. The first is
+a fact about a room; the second is a fact about a wire. Only one of them
+survives being checked twice by different people.
+
+**Still genuinely open:** whether the unit made no noise. That needs it
+wired to an output and somebody listening. Not attempted.
+
 ## 42. `pytest-asyncio` was never a declared dependency — FIXED
 
 **Status:** **fixed 2026-10-02.** Found while setting up the check pipeline.
