@@ -350,7 +350,9 @@ _OFFLINE.add("ports")
 
 def build_parser() -> argparse.ArgumentParser:
     parser = cli.make_parser(
-        prog="p2kcli", description="Browse an E-MU Proteus 2000's presets."
+        prog="p2kcli",
+        description="Browse an E-MU Proteus 2000's presets.",
+        distribution="p2ked",
     )
     # config=False and favorites=False: nothing in p2kcli *offers* either, and a
     # flag that is accepted and then ignored teaches the user that a flag can
