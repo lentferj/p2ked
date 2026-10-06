@@ -37,8 +37,8 @@ dev = [
 ]
 
 [project.scripts]
-p2ked = "p2ked.app:main"
-p2kcli = "p2ked.cli:main"
+p2ked = "p2ked.entry:app"
+p2kcli = "p2ked.entry:cli"
 
 [tool.setuptools]
 packages = ["p2k", "p2ked"]
