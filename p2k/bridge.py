@@ -63,8 +63,10 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import rtmidi  # noqa: E402
 
+from p2k import config as cfg
 from p2k import messages as m
 from p2k import roms
+from vinsynlib import midi
 
 __all__ = [
     "SEND_GAP",
@@ -117,16 +119,30 @@ _HINTS = (
 )
 
 
-class MidiUnavailable(RuntimeError):
+class MidiUnavailable(midi.MidiUnavailable):
     """No MIDI backend on this host at all."""
 
 
-class DeviceError(RuntimeError):
-    """The device answered, but not with what was asked for."""
+class DeviceError(midi.DeviceError):
+    """The device answered, but not with what was asked for.
+
+    The library's class, so a probe that finds nothing is recognised by
+    :func:`vinsynlib.midi.open_remembered_or_swept` and the sweep it falls
+    back to happens -- with an announcement, rather than as a launch that
+    quietly takes the slow path. It was a RuntimeError before and is one
+    still, so every ``except`` clause that caught it does so unchanged.
+    """
 
 
-class DeviceNotFound(RuntimeError):
-    """Nothing answered an Identity Request on any port tried."""
+class DeviceNotFound(midi.DeviceNotFound):
+    """Nothing answered an Identity Request on any port tried.
+
+    The library's class as well, and for the same reason: it is the error
+    the sweep raises, and it is what the sweep's own caller needs to see
+    rather than the stale remembered port's. It was a plain RuntimeError
+    before and was never a :class:`DeviceError`; it still is not, so an
+    ``except DeviceError`` that does not catch it now does not.
+    """
 
 
 # --- ports -------------------------------------------------------------------
@@ -330,6 +346,95 @@ class ProteusBridge:
             if fields is not None:
                 return fields
         return None
+
+    @classmethod
+    def connect(
+        cls,
+        *,
+        config_path: str = cfg.DEFAULT_PATH,
+        remembered: Optional[Tuple[str, str]] = None,
+        scan: bool = False,
+        on_try: Optional[Callable[[str], None]] = None,
+    ) -> "ProteusBridge":
+        """Open the unit, sweeping every port only when that is necessary.
+
+        **The normal path is one Identity Request, to the port remembered in
+        ``config_path``.** That is not only an optimisation, and this unit
+        makes it clearer than most: a Proteus 2000 sits on a DIN cable behind
+        whatever interface the user happens to have, so the sweep never finds
+        it by name and always costs one probe per bidirectional port on the
+        machine. On a studio box with thirty of them that is seconds, thirty
+        lines, and a ping to every piece of hardware on the chain once per
+        launch -- and once the answer is known there is nothing left to learn
+        by asking again.
+
+        So: use the remembered port if there is one, sweep if there is not,
+        and sweep on request. ``scan=True`` is what ``--scan`` reaches,
+        which is what is needed after the unit moves to another port -- USB
+        re-enumeration renumbers ALSA clients out from under a saved name.
+
+        A remembered port that does not answer falls back to the sweep, but
+        **it says so first**. The guess is gone, and the announcement is
+        what keeps the fallback from looking like the fast path having
+        worked -- which is how a slow launch quietly becomes the normal one.
+        What the sweep then finds is written back, so the launch after this
+        one is fast again.
+
+        The device ID is not remembered separately and does not need to be:
+        the probe broadcasts, and adopts whatever the reply reports, exactly
+        as :meth:`autodetect` does. Broadcast is not a safe long-term
+        default -- this unit ignores it -- which is why the ID is learned
+        rather than assumed, on both paths.
+
+        The policy itself is :func:`vinsynlib.midi.open_remembered_or_swept`,
+        written and tested once for the whole family; this is the Proteus's
+        half of it, which is what an Identity Request on a named port means
+        and where the answer is filed.
+
+        ``remembered`` defaults to what ``config_path`` holds. It is a
+        parameter so a caller can pass a pair it has already read, and so a
+        test can say what the file says without writing one.
+        """
+        remembered = (
+            remembered if remembered is not None else cfg.load_port_pair(config_path)
+        )
+
+        def probe(send: str, recv: str) -> "ProteusBridge":
+            """One round trip to the named port. Raises if nothing answers."""
+            try:
+                bridge = cls.open(
+                    send,
+                    recv_port=recv,
+                    device_id=m.BROADCAST_DEVICE,
+                    timeout=AUTODETECT_TIMEOUT,
+                )
+            except Exception as exc:
+                raise DeviceError(str(exc)) from exc
+            if bridge.learn_device_id(timeout=AUTODETECT_TIMEOUT) is None:
+                bridge.close()
+                raise DeviceError(f"nothing identifying itself answered on {send!r}")
+            # The discovery timeout is short on purpose -- a port that is
+            # not the instrument should cost as little as possible -- but it
+            # must not become the session's. Every later request that does
+            # not name its own would run at the probe's timeout rather than
+            # the working one.
+            bridge.timeout = DEFAULT_TIMEOUT
+            return bridge
+
+        def remember(bridge: "ProteusBridge") -> None:
+            if bridge.port and bridge.recv_port:
+                cfg.save_ports(bridge.port, bridge.recv_port, config_path)
+
+        return midi.open_remembered_or_swept(
+            probe=probe,
+            sweep=lambda try_hook: cls.autodetect(
+                timeout=AUTODETECT_TIMEOUT, on_try=try_hook
+            ),
+            remembered=remembered,
+            scan=scan,
+            remember=remember,
+            on_try=on_try,
+        )
 
     @classmethod
     def autodetect(

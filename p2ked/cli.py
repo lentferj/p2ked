@@ -352,12 +352,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = cli.make_parser(
         prog="p2kcli", description="Browse an E-MU Proteus 2000's presets."
     )
-    # config=False and favorites=False: nothing in p2kcli reads either, and a
+    # config=False and favorites=False: nothing in p2kcli *offers* either, and a
     # flag that is accepted and then ignored teaches the user that a flag can
-    # lie -- worse than no flag (docs/UX-SPEC.md section 2).
+    # lie -- worse than no flag (docs/UX-SPEC.md section 2). The settings
+    # file is still read and written, at the browser's default -- see
+    # _build_device.
     cli.add_common_arguments(
         parser,
         port=True,
+        scan=True,
         recv_port=True,
         channel=True,
         device_id=True,
@@ -406,6 +409,7 @@ def _build_device(args):
 
         return DemoDevice()
     from p2k import bridge as b
+    from p2k import config as cfg
     from p2k import messages as msg
 
     b.install_clean_exit()
@@ -422,8 +426,14 @@ def _build_device(args):
             # so identity answers and every read then times out.
             device.learn_device_id(timeout=0.8)
         return device
-    return b.ProteusBridge.autodetect(
-        on_try=lambda name: print(f"  probing {name}...", file=sys.stderr)
+    # No --config flag on this parser, so the settings file is the browser's
+    # default: ./config.toml, gitignored, safe to delete. One Identity Request
+    # to the remembered port; the sweep only when there is nothing
+    # remembered, when the remembered port no longer answers, or on --scan.
+    return b.ProteusBridge.connect(
+        config_path=cfg.DEFAULT_PATH,
+        scan=args.scan,
+        on_try=lambda name: print(f"  probing {name}...", file=sys.stderr),
     )
 
 

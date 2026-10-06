@@ -1194,14 +1194,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = vincli.make_parser(
         prog="p2ked", description="Browse an E-MU Proteus 2000's presets."
     )
-    # scan=False: this unit is on a DIN cable behind an interface whose name
-    # says nothing about E-MU, so re-probing finds nothing a name hint could
-    # not. device_channel=False and exclusive_channel=False: a Proteus 2000
-    # has no base channel of its own to set; --channel is the one a preset
-    # change is sent on, which is what this tool sends on.
+    # --scan is asked for here too, and for the same reason p2kcli has it:
+    # this unit is on a DIN cable behind an interface whose name says
+    # nothing about E-MU, which is an argument that a sweep is a poor
+    # *default*, not that the escape hatch should not exist. device_channel
+    # =False and exclusive_channel=False: a Proteus 2000 has no base channel
+    # of its own to set; --channel is the one a preset change is sent on,
+    # which is what this tool sends on.
     vincli.add_common_arguments(
         parser,
         port=True,
+        scan=True,
         recv_port=True,
         device_id=True,
         catalog=True,
@@ -1254,41 +1257,31 @@ def main(argv: Optional[List[str]] = None) -> int:
                     else:
                         print("  no identity reply; using broadcast", file=sys.stderr)
             else:
-                # The port that answered last time, before the sweep. The
-                # unit this was written for sits on a port whose name no
-                # hint matches, so without this the user passes --port on
-                # every launch or waits through 20 probes. A remembered
-                # port that has gone (different hub, different order) is
-                # not an error; it falls through to the sweep.
-                device = None
-                remembered = cfg.load_last_port(config_path)
-                if remembered:
-                    try:
-                        device = b.ProteusBridge.open(
-                            remembered,
-                            recv_port=cfg.load_last_recv_port(config_path),
-                            device_id=msg.BROADCAST_DEVICE,
-                        )
-                        if device.learn_device_id(timeout=0.8) is None:
-                            device.close()
-                            device = None
-                        else:
-                            print(f"  {remembered} (remembered)", file=sys.stderr)
-                    except Exception:
-                        device = None
-                if device is None:
-                    device = b.ProteusBridge.autodetect(
-                        on_try=lambda n: print(f"  probing {n}...", file=sys.stderr)
-                    )
+                # One Identity Request to the remembered port; the sweep
+                # only when there is nothing remembered, when the
+                # remembered port no longer answers, or on --scan. The unit
+                # this was written for sits on a port whose name no hint
+                # matches, so without a remembered port the user passes
+                # --port on every launch or waits through 20 probes.
+                device = b.ProteusBridge.connect(
+                    config_path=config_path,
+                    scan=args.scan,
+                    on_try=lambda n: print(f"  probing {n}...", file=sys.stderr),
+                )
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
-        # Remember what worked, so the next run skips the sweep.
+        # Remember what worked, so the next run skips the sweep. `connect` writes
+        # the port pair itself, and only after a sweep -- the file is that
+        # path's input, and a fast launch must not rewrite it. A port the
+        # user named on this command line is worth remembering too, and
+        # nothing else writes it.
         try:
-            if getattr(device, "port", None):
-                cfg.save_last_port(device.port, config_path)
-            if getattr(device, "recv_port", None):
-                cfg.save_last_recv_port(device.recv_port, config_path)
+            if args.port:
+                port = getattr(device, "port", None)
+                recv = getattr(device, "recv_port", None)
+                if port and recv:
+                    cfg.save_ports(port, recv, config_path)
             if getattr(device, "device_id", None) is not None:
                 cfg.save_device_id(int(device.device_id), config_path)
         except OSError:

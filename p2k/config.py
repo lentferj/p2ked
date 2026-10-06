@@ -42,6 +42,8 @@ sites already used.
 
 from __future__ import annotations
 
+from typing import Optional, Tuple
+
 from vinsynlib.config import DEFAULT_PATH, Settings
 
 __all__ = [
@@ -50,10 +52,12 @@ __all__ = [
     "load_device_id",
     "load_last_port",
     "load_last_recv_port",
+    "load_port_pair",
     "save_channel",
     "save_device_id",
     "save_last_port",
     "save_last_recv_port",
+    "save_ports",
 ]
 
 _settings = Settings("p2ked", DEFAULT_PATH)
@@ -69,3 +73,24 @@ load_last_recv_port = _settings.load_recv_port
 save_last_recv_port = _settings.save_recv_port
 load_device_id = _settings.load_device_id
 save_device_id = _settings.save_device_id
+#: Both ports at once, in one write. What the connection policy saves after a
+#: sweep: a half-written pair is a pair where the second half is lost.
+save_ports = _settings.save_ports
+
+
+def load_port_pair(path: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    """The remembered port pair, or None.
+
+    :meth:`vinsynlib.config.Settings.load_ports` answers only when *both*
+    keys are present, because for most of the family a half-remembered pair
+    is not a pair. Here it would be wrong in the other direction: the browser
+    has always written ``recv_port`` only when it differed from ``port``, so
+    every config written before the remembered-port path existed would read as
+    nothing remembered and the next launch would sweep every port again --
+    the exact thing the pair is for. One remembered output port is a
+    complete pair unless the file says otherwise.
+    """
+    send = _settings.load_port(path)
+    if not send:
+        return None
+    return (send, _settings.load_recv_port(path) or send)

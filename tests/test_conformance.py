@@ -32,12 +32,15 @@ EXTRAS = ("m channels", "C category", "a all ROMs")
 
 def test_flags_match_the_family() -> None:
     # A tuple rather than a set: check_flags takes a Sequence, and mypy is
-    # right that a set is not one. --scan is not required: this unit is on a
-    # DIN cable behind an interface whose name says nothing about E-MU.
+    # right that a set is not one. --scan IS required: this unit is on a DIN
+    # cable behind an interface whose name says nothing about E-MU, which is
+    # an argument that the sweep is a poor *default* -- not that the escape
+    # hatch should not exist. The port remembered last time is the default.
     assert not conformance.check_flags(
         build_parser(),
         required=(
             "port",
+            "scan",
             "recv-port",
             "demo",
             "channel",
