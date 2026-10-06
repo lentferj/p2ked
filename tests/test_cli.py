@@ -244,7 +244,11 @@ class TestDeviceCommandsAgainstTheDemo:
         # as a constant and wants it on the left of `==`, which is the Yoda
         # style the rule exists to discourage. Sorted lists also give a
         # readable diff when it fails.
-        documented = ["find", "list", "ports", "resolve", "roms"]
+        #
+        # Both spellings of the bank table are here because both dispatch:
+        # `banks` is now canonical and `roms` is the alias it kept, so a
+        # command line written against last year's p2kcli still opens no port.
+        documented = ["banks", "find", "list", "ports", "resolve", "roms"]
         assert sorted(cli._OFFLINE) == documented
 
 

@@ -30,6 +30,7 @@ from p2k import favorites as fav
 from p2k.favorites import Favorites
 from p2ked.app import P2kedApp
 from p2ked.demo import DemoDevice
+from vinsynlib.favorites import split_key
 
 
 @pytest.fixture
@@ -202,19 +203,35 @@ class TestSearchSaysWhenTheUnitDisagrees:
         assert c.search("saved over") == [("lead", 6, "Saved Over", True)]
 
 
-class TestSplitRefusesABareBankId:
-    """Item 30. Its docstring is the contract; int('') is not a message."""
+class TestSplitAcceptsEitherForm:
+    """Item 30, and its behaviour has since moved.
 
-    def test_it_names_the_problem(self):
-        with pytest.raises(ValueError, match="names a bank but not a slot"):
-            fav._split("XLEAD2-1")
+    p2ked's `_split` raised a named ValueError for a bare bank id, on the
+    reasoning that `int("")` says nothing about the mistake. The shared
+    implementation, ``vinsynlib.favorites.split_key``, is lenient: it
+    partitions and lets int() speak. **Leniency is now the family rule** --
+    seven copies disagreed on this once and the family's answer is the simple
+    one, because the key always comes from the program's own code and a
+    named exception here was a message nobody ever saw in anger.
+
+    The named form is still reachable and still checked, so the two are
+    recorded as behaviour rather than as an accident: `int("")` is still a
+    ValueError, it is just not this function's own.
+    """
 
     def test_the_forms_it_documents_still_work(self):
-        assert fav._split(("XLEAD2-1", 63)) == ("XLEAD2-1", 63)
-        assert fav._split("XLEAD2-1:063") == ("XLEAD2-1", 63)
+        assert split_key(("XLEAD2-1", 63)) == ("XLEAD2-1", 63)
+        assert split_key("XLEAD2-1:063") == ("XLEAD2-1", 63)
 
-    def test_membership_inherits_the_message(self, store):
-        with pytest.raises(ValueError, match="names a bank but not a slot"):
+    def test_a_bare_bank_id_no_number_still_raises(self):
+        # Not the named message p2ked used to write, and not on purpose: this
+        # is int("") and nothing more. What matters is that it is refused,
+        # because a key with no number in it is not a slot.
+        with pytest.raises(ValueError):
+            split_key("XLEAD2-1")
+
+    def test_membership_inherits_the_refusal(self, store):
+        with pytest.raises(ValueError):
             "XLEAD2-1" in store
 
 

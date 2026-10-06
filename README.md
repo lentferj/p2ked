@@ -78,7 +78,7 @@ is the first of those. Browsing Multisetups is not built yet.
 **No E-MU document to hand maps one to the other.** p2ked assumed they were
 the same number, and a unit confirmed it on 2026-09-12: three fitted ROMs
 each named the presets p2ked's catalog holds for the ROM at that MSB,
-character for character. Three of twenty, so `p2kcli config` still states
+character for character. Three of twenty, so `p2kcli hardware` still states
 what was checked. The one ROM ID that is also *documented* is `0`, meaning
 user memory.
 
@@ -130,16 +130,25 @@ open next to a running sequencer.
 ### Command line
 
 ```sh
-p2kcli roms                     # the ROM table (no unit needed)
+p2kcli banks                    # the bank table (no unit needed)
 p2kcli list XLEAD-1             # one bank's presets (no unit needed)
 p2kcli find "bell"              # search names (no unit needed)
 p2kcli resolve 7 1 5            # what does this MSB/LSB/PC select?
 p2kcli ports                    # MIDI ports on this host
-p2kcli --demo config            # which ROMs are fitted
-p2kcli --demo channels          # every MIDI channel (silent)
-p2kcli --demo names XLEAD-1     # read a bank's names (silent)
-p2kcli select XLEAD-1 5         # select a preset ON THE UNIT
+p2kcli --demo hardware         # what the unit reports about itself
+p2kcli --demo channels         # every MIDI channel (silent)
+p2kcli --demo names XLEAD-1    # read a bank's names (silent)
+p2kcli select XLEAD-1 5        # select a preset ON THE UNIT
 ```
+
+Two commands are named differently from last year's p2kcli, with the old
+spelling still accepted, because they collided with something:
+
+- `roms` is now `banks`. The family calls that table banks everywhere else
+  and p2ked's own browser already did; the CLI was the odd one out.
+- `config` is now `hardware`. `config` meant *which ROMs are fitted* while
+  the `--config` flag beside it meant *the settings file* — one program, one
+  word, two meanings, in one line of help output.
 
 ## Preset names are not included
 
@@ -188,6 +197,13 @@ make check            # everything below; fails on the first error
 | `make coverage` | `pytest` with a term-missing report, enforcing `fail_under` |
 | `make audit` | `pip-audit`, `vulture`, `deptry`, `detect-secrets` |
 | `make check` | lint → format-check → typecheck → coverage → audit |
+
+`pip-audit` filters `vinsynlib` out of the runtime dependency list it audits.
+It is a sibling checkout rather than a package on an index, so `pip` cannot
+resolve it and the audit would fail resolving rather than audit anything;
+it is this family's own source, reviewed in this repository, and it carries
+no third-party dependency of its own at this layer. The pinned toolchain is
+audited in full.
 
 ### Before pushing
 

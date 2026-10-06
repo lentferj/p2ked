@@ -105,7 +105,21 @@ audit: audit-vulns audit-deadcode audit-deps audit-secrets ## All static audits
 
 .PHONY: audit-vulns
 audit-vulns: ## pip-audit against the pinned dependency set
-	$(PIP_AUDIT) --requirement requirements-dev.txt --progress-spinner off
+# vinsynlib is filtered out of the runtime dependency list: it is a sibling
+# checkout rather than a package on an index (see [tool.uv.sources] in
+# pyproject.toml), so pip cannot resolve it and pip-audit would fail
+# resolving rather than audit anything. It is this project's own source,
+# reviewed in this repository, and it carries no third-party dependency of
+# its own at this layer -- so there is nothing here for an index to say is
+# vulnerable. The pinned toolchain below is audited in full.
+	@$(P) -c "import pathlib, tomllib; \
+	    data = tomllib.load(open('pyproject.toml', 'rb')); \
+	    pathlib.Path('.audit-runtime-req.txt').write_text(\
+	        ''.join(r + chr(10) for r in data['project']['dependencies'] \
+	        if not r.startswith('vinsynlib')))"
+	@$(PIP_AUDIT) --progress-spinner=off -r .audit-runtime-req.txt; \
+	    status=$$?; rm -f .audit-runtime-req.txt; exit $$status
+	$(PIP_AUDIT) --progress-spinner off --requirement requirements-dev.txt
 
 .PHONY: audit-deadcode
 audit-deadcode: ## vulture -- dead code, min-confidence 80

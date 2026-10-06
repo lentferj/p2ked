@@ -29,6 +29,7 @@ import argparse
 import sys
 from typing import Callable, Dict, List, Optional
 
+from vinsynlib import cli, midi
 from p2k import catalog as cat
 from p2k import roms
 
@@ -168,8 +169,13 @@ def _cmd_status(device, _args) -> None:
     print(f"device ID      {fields['device']}")
 
 
-def _cmd_config(device, _args) -> None:
-    """What ROMs are fitted. Read-only, makes no sound."""
+def _cmd_hardware(device, _args) -> None:
+    """What ROMs are fitted. Read-only, makes no sound.
+
+    Named ``hardware``, with ``config`` kept as an alias: ``config`` next to
+    the ``--config`` flag meant two different things in one screen, one of
+    them the settings file and the other the hardware in the unit.
+    """
     config = device.hardware_config()
     print(f"user presets   {config.user_presets}")
     print(f"SIMMs fitted   {len(config.simms)}")
@@ -289,42 +295,53 @@ def _cmd_select(device, args) -> None:
 
 
 _COMMANDS: Dict[str, Callable] = {
+    # `banks` is the family's name for the table and `roms` still works, as
+    # an alias on the subparser and as a key here. p2ked's own browser has
+    # always called them banks; the CLI was the odd one out.
+    "banks": _cmd_roms,
     "roms": _cmd_roms,
     "list": _cmd_list,
     "find": _cmd_find,
     "resolve": _cmd_resolve,
     "ports": None,  # filled in below; needs the MIDI import
     "status": _cmd_status,
-    "config": _cmd_config,
+    # `hardware` with `config` still accepted, for the same reason: one word,
+    # two meanings, in one line of help output.
+    "hardware": _cmd_hardware,
+    "config": _cmd_hardware,
     "channels": _cmd_channels,
     "names": _cmd_names,
     "select": _cmd_select,
 }
 
-#: Commands that open no port at all.
-_OFFLINE = {"roms", "list", "find", "resolve"}
+#: Commands that open no port at all. Both spellings of `banks`, because both
+#: dispatch and neither may fall through to the device path.
+_OFFLINE = {"banks", "roms", "list", "find", "resolve"}
 
 
 def _cmd_ports(_device, _args) -> None:
-    from p2k.bridge import MidiUnavailable, likely_proteus_ports, list_ports
+    from p2k.bridge import likely_proteus_ports
 
     try:
-        ins, outs = list_ports()
-        likely = set(likely_proteus_ports())
-    except MidiUnavailable as exc:
+        ins, outs = midi.list_ports()
+        likely = sorted(likely_proteus_ports())
+    except midi.MidiUnavailable as exc:
         raise SystemExit(f"error: {exc}") from exc
-    both = set(ins) & set(outs)
-    for label, names in (("inputs", ins), ("outputs", outs)):
-        print(f"{label}:")
-        for name in names:
-            marks = []
-            if name in both:
-                marks.append("bidirectional")
-            if name in likely:
-                marks.append("looks like an E-MU")
-            print(f"  {name}" + (f"   [{', '.join(marks)}]" if marks else ""))
-        if not names:
-            print("  (none)")
+    # The rendering is the family's, so all nine listings look alike; only the
+    # "looks like an E-MU" mark and the trailing note are p2ked's.
+    print(
+        midi.render_ports(
+            ins,
+            outs,
+            likely=likely,
+            likely_label="looks like an E-MU",
+            note=(
+                "A name hint cannot decide anything. A Proteus on a DIN cable\n"
+                "is behind an interface whose name says nothing about E-MU;\n"
+                "`p2kcli status` asks every port and the identity reply decides."
+            ),
+        )
+    )
 
 
 _COMMANDS["ports"] = _cmd_ports
@@ -332,24 +349,30 @@ _OFFLINE.add("ports")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = cli.make_parser(
         prog="p2kcli", description="Browse an E-MU Proteus 2000's presets."
     )
-    parser.add_argument("--port", help="MIDI port name")
-    parser.add_argument("--recv-port")
-    parser.add_argument(
-        "--demo",
-        action="store_true",
-        help="use the built-in demo device; opens no ports",
+    # config=False and favorites=False: nothing in p2kcli reads either, and a
+    # flag that is accepted and then ignored teaches the user that a flag can
+    # lie -- worse than no flag (docs/UX-SPEC.md section 2).
+    cli.add_common_arguments(
+        parser,
+        port=True,
+        recv_port=True,
+        channel=True,
+        device_id=True,
+        catalog=True,
+        config=False,
+        favorites=False,
     )
-    parser.add_argument("--device-id", type=int, default=None)
-    parser.add_argument(
-        "--channel", type=int, default=None, help="MIDI channel 1-16 for select"
-    )
-    parser.add_argument("--catalog", default=None)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("roms", help="the ROM table (no unit needed)")
+    # Canonical name first, older spellings as aliases. `roms` was this CLI's
+    # own word for the bank table and the family's is `banks`; p2ked's own
+    # browser already said banks. `config` meant "which ROMs are fitted" while
+    # the --config flag beside it meant the settings file, so the command is
+    # `hardware` now and the old word still works.
+    sub.add_parser("banks", aliases=["roms"], help="the bank table (no unit needed)")
     sp = sub.add_parser("list", help="one bank's presets (no unit needed)")
     sp.add_argument("bank")
     sp = sub.add_parser("find", help="search names (no unit needed)")
@@ -360,7 +383,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("pc", type=int)
     sub.add_parser("ports", help="MIDI ports on this host")
     sub.add_parser("status", help="ask the unit who it is")
-    sub.add_parser("config", help="which ROMs are fitted")
+    sub.add_parser(
+        "hardware",
+        aliases=["config"],
+        help="what the unit reports about itself: which ROMs are fitted",
+    )
     sub.add_parser(
         "channels",
         help="every MIDI channel: what it plays, and why it might not (makes no sound)",
@@ -403,8 +430,8 @@ def _build_device(args):
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     handler = _COMMANDS[args.command]
-    if args.channel is not None and not 1 <= args.channel <= 16:
-        sys.exit("error: --channel is 1-16")
+    # --channel and --device-id, both checked and both named the family's way.
+    cli.validate_common(args)
 
     if args.command in _OFFLINE:
         try:

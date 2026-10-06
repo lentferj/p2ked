@@ -3,10 +3,8 @@
 #
 # This file is part of p2ked.
 #
-# The key-hint legend is ported from the sibling rxved project, which ports
-# it from s3ked, eosed and k2kremote:
-#   Copyright (C) 2026  rxved / s3ked / eosed / k2kremote contributors
-#                                                    - GPL-2.0-or-later
+# The legend itself is now vinsynlib's, which carries the copyright of every
+# sibling it was assembled from; see src/vinsynlib/ui/hints.py there.
 #
 # p2ked is free software: you can redistribute it and/or modify it under the
 # terms of the GNU General Public License as published by the Free Software
@@ -59,10 +57,19 @@ from textual.widgets import DataTable, Header, Input, Label, Static
 from p2k import catalog as cat
 from p2k import messages as params
 from p2k import roms
+from vinsynlib import cli as vincli
+from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
+from vinsynlib.ui.hints import KeyHints
+
+# The legend's wrapping and the widget that draws it are the family's; see
+# src/vinsynlib/keys.py and src/vinsynlib/ui/hints.py, which carry the
+# copyright of every sibling the shared version was assembled from. The
+# library's KeyHints takes the blocks as a constructor argument where the
+# local one read this module's KEY_HINTS global, so the construction site
+# below passes KEY_HINTS explicitly. The CSS selector is unchanged -- same
+# class name, so the stylesheet rule still matches.
 
 __all__ = ["P2kedApp", "main", "build_parser", "KEY_HINTS", "wrap_blocks"]
-
-_SEP = " · "
 
 #: What `F` steps through, in order. Named after rxved's, deliberately:
 #: the same key should mean the same three things across these projects.
@@ -76,12 +83,14 @@ VIEW_LABELS = {
     VIEW_ALL_FAVOURITES: "every favourite, all banks",
 }
 
+#: The legend. In the family's order, with this tool's own hints in the one
+#: place the shared legend leaves room for them -- after "n note", before
+#: "i device" -- so a reader's eye finds them in the same spot in all nine.
 KEY_HINTS = (
     "↑↓ move",
     "tab pane",
     "⏎ select on the unit",
     "r read names",
-    "m channels",
     "/ search",
     "[ ] channel",
     "c set channel",
@@ -89,58 +98,16 @@ KEY_HINTS = (
     "F favourites view",
     "t tags",
     "n note",
+    # `m` means channels in a browser everywhere in this family. Here that
+    # was already true: ChannelScreen shows what every MIDI channel plays.
+    "m channels",
+    # p2ked's own two.
     "C category",
     "a all ROMs",
     "i device",
     "? help",
     "q quit",
 )
-
-
-def wrap_blocks(blocks, width: int, sep: str = _SEP) -> str:
-    """Pack hints into lines no wider than ``width``.
-
-    Ported from rxved, which ports it from s3ked. Breaks happen only
-    *between* blocks, so a hint is never split mid-label; a block wider than
-    ``width`` takes its own line rather than being cut. The point is that
-    the legend wraps instead of truncating -- a footer that silently drops
-    its last few keys teaches the user those keys do not exist.
-    """
-    # Clamped rather than trusted: a width of 0 or less would make every
-    # candidate "too wide" and never break, so the legend came out as one
-    # very long line -- the degenerate version of exactly the truncation
-    # this function exists to avoid. One column per block is the most
-    # wrapping that can be asked for.
-    width = max(width, 1)
-    lines, current = [], ""
-    for block in blocks:
-        candidate = block if not current else current + sep + block
-        if len(candidate) > width and current:
-            lines.append(current)
-            current = block
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return "\n".join(lines)
-
-
-class KeyHints(Static):
-    """The legend, wrapped to the window rather than truncated."""
-
-    DEFAULT_CSS = "KeyHints { height: auto; background: $panel; padding: 0 1; }"
-
-    def on_mount(self) -> None:
-        self._render_hints()
-
-    def on_resize(self) -> None:
-        self._render_hints()
-
-    def _render_hints(self) -> None:
-        # NOT named _render: Widget._render is Textual's own, and shadowing
-        # it makes every layout pass ask a None for its height. The failure
-        # is an AttributeError deep in the framework, nowhere near here.
-        self.update(wrap_blocks(KEY_HINTS, max(self.size.width - 2, 20)))
 
 
 class ReportScreen(ModalScreen[None]):
@@ -382,10 +349,11 @@ class P2kedApp(App):
     """
 
     BINDINGS = [
-        # NOT a priority binding: a focused DataTable consumes Enter for its
-        # own row selection, and a priority Enter at App level fires over
-        # modal screens too. Enter arrives as RowSelected instead.
-        Binding("enter", "select_preset", "Select on the unit", show=False),
+        # Enter is NOT bound here, and the rest of the family agrees: a
+        # focused DataTable consumes Enter for its own row selection, so it
+        # arrives as RowSelected instead. Binding it at App level would mean
+        # taking Enter from the table and every other table key with it.
+        # Checked from the legend side in tests/test_conformance.py.
         Binding("r", "read_names", "Read names"),
         Binding("m", "channels", "Channels"),
         Binding("slash", "search", "Search"),
@@ -527,7 +495,9 @@ class P2kedApp(App):
             yield DataTable(id="preset-table", cursor_type="row")
         yield Static("", id="detail")
         yield Static("", id="status")
-        yield KeyHints()
+        # The library's widget takes the blocks; the local one read this
+        # module's KEY_HINTS global, which a library cannot do.
+        yield KeyHints(KEY_HINTS)
 
     def on_mount(self) -> None:
         self.title = "p2ked"
@@ -1221,37 +1191,34 @@ Moving the cursor sends nothing at all.
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = vincli.make_parser(
         prog="p2ked", description="Browse an E-MU Proteus 2000's presets."
     )
-    parser.add_argument("--port")
-    parser.add_argument("--recv-port")
-    parser.add_argument(
-        "--demo", action="store_true", help="built-in demo device; opens no MIDI ports"
-    )
-    parser.add_argument("--device-id", type=int, default=None)
-    parser.add_argument("--channel", type=int, default=None)
-    parser.add_argument("--catalog", default=None)
-    parser.add_argument(
-        "--config", default=None, help="settings cache (default: ./config.toml)"
+    # scan=False: this unit is on a DIN cable behind an interface whose name
+    # says nothing about E-MU, so re-probing finds nothing a name hint could
+    # not. device_channel=False and exclusive_channel=False: a Proteus 2000
+    # has no base channel of its own to set; --channel is the one a preset
+    # change is sent on, which is what this tool sends on.
+    vincli.add_common_arguments(
+        parser,
+        port=True,
+        recv_port=True,
+        device_id=True,
+        catalog=True,
+        config=True,
+        favorites=True,
     )
     parser.add_argument(
         "--all-roms",
         action="store_true",
         help="list every ROM in the table, not just the ones this unit has",
     )
-    parser.add_argument(
-        "--favorites",
-        default=None,
-        help="favourites database (default: the per-platform data directory)",
-    )
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.channel is not None and not 1 <= args.channel <= 16:
-        sys.exit("error: --channel is 1-16")
+    vincli.validate_common(args)
 
     from p2k import config as cfg
 

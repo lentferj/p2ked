@@ -16,6 +16,7 @@ dependencies = [
     # declared rather than relied on transitively through textual. deptry
     # reports DEP003 without this.
     "rich>=14.2",
+    "vinsynlib",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +42,14 @@ p2kcli = "p2ked.cli:main"
 
 [tool.setuptools]
 packages = ["p2k", "p2ked"]
+
+# vinsynlib is not on PyPI. It is the shared base of this family of
+# terminal instrument browsers and lives in a sibling checkout, so it is
+# installed from the working tree rather than from an index. Editable,
+# because a change to the library is a change here and should not need
+# a reinstall to see.
+[tool.uv.sources]
+vinsynlib = { path = "../vinsynlib", editable = true }
 
 [tool.setuptools.package-data]
 # The generated name catalog is gitignored and not distributed. See
@@ -90,6 +99,13 @@ ignore = [
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
+
+[tool.ruff.lint.isort]
+# vinsynlib is a sibling checkout rather than a published package, so ruff
+# cannot tell that it is ours and not third-party. Saying so keeps the
+# import block in one piece instead of splitting the family's code away from
+# this project's.
+known-first-party = ["p2k", "p2ked", "vinsynlib"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests assert; that is what they are for. Also allowed: fixtures read
