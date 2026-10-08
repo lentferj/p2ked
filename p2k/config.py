@@ -83,14 +83,21 @@ def load_port_pair(path: Optional[str] = None) -> Optional[Tuple[str, str]]:
 
     :meth:`vinsynlib.config.Settings.load_ports` answers only when *both*
     keys are present, because for most of the family a half-remembered pair
-    is not a pair. Here it would be wrong in the other direction: the browser
-    has always written ``recv_port`` only when it differed from ``port``, so
-    every config written before the remembered-port path existed would read as
-    nothing remembered and the next launch would sweep every port again --
+    is not a pair. Here it would be wrong in the other direction: a config
+    written before this unit remembered its input port has ``port`` only,
+    and reading that as half a pair would mean sweeping every port again --
     the exact thing the pair is for. One remembered output port is a
     complete pair unless the file says otherwise.
+
+    Read once, not twice: two separate ``load_*`` calls read (and could be
+    interleaved with a writer, pairing one run's output with the next run's
+    input). ``read`` returns nothing for a file that belongs to another
+    tool, so a shared directory reads as nothing remembered rather than as
+    somebody else's port.
     """
-    send = _settings.load_port(path)
-    if not send:
+    data = _settings.read(path)[0]
+    send = data.get("port")
+    if not isinstance(send, str) or not send:
         return None
-    return (send, _settings.load_recv_port(path) or send)
+    recv = data.get("recv_port")
+    return (send, recv if isinstance(recv, str) and recv else send)
