@@ -124,15 +124,17 @@ known-first-party = ["p2k", "p2ked", "vinsynlib"]
 # before this pipeline existed; a new finding in one of these files is
 # still reported, because the ignore is per-rule and not per-file.
 #
-# Severity note: `p2ked/cli.py` carries F821, which is a REAL BUG and not
-# a style matter -- see the "Development checks" section of README.md and
-# TODO.md item 40. It is ignored here only so that `make check` passes on
-# the current tree; it is not papered over.
+# p2k/config.py and p2k/favorites.py no longer have entries: both are thin
+# bindings of vinsynlib now, and the ignores that guarded the copies they
+# replaced guarded nothing. The old severity note about an F821 in
+# p2ked/cli.py is gone too -- that bug was fixed in TODO 40 -- so any
+# undefined name is reported again.
 "p2k/bridge.py" = [
-    "F401",    # unused `Sequence` import
+    "PLR0913", # connect() takes one keyword per step of the --scan policy
     "RUF022",  # __all__ not alphabetical
     "RUF100",  # stale `# noqa: E402` on the rtmidi import
     "S110",    # try/except/pass in close() and install_clean_exit()
+    "S112",    # a port that will not open is skipped, not logged and aborted
     "SIM105",  # contextlib.suppress would read worse than try/except
     "UP037",   # quoted annotations in __all__-style signatures
 ]

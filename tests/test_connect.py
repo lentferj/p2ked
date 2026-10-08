@@ -64,7 +64,7 @@ FOREIGN_REPLY = {"manufacturer": 0x42, "device": 0x00, "is_emu": False}
 class _FakeBridge:
     """Stands in for an opened bridge. Closes are counted, not needed."""
 
-    def __init__(self, port, recv, *, answers, device_id):
+    def __init__(self, port, recv, *, answers, device_id, timeout=None):
         self.port = port
         self.recv_port = recv
         #: What identify() returns: REPLY for a Proteus, None for a port that
@@ -72,7 +72,10 @@ class _FakeBridge:
         #: foreign reply are the same case to this code -- not the unit.
         self.answers = answers
         self.device_id = device_id
-        self.timeout = b.DEFAULT_TIMEOUT
+        #: The timeout the bridge was opened with, NOT the session default.
+        #: Keeping the two apart is what lets the timeout test fail when the
+        #: probe forgets to reset it.
+        self.timeout = b.DEFAULT_TIMEOUT if timeout is None else timeout
         self.closed = False
 
     def identify(self, *, timeout=None):
@@ -118,10 +121,10 @@ class _Rig:
             device_id=0,
             **rest,
         ):
-            # `rest` is `timeout=...`, a discovery timeout, deliberately
-            # dropped: the test that cares asserts on bridge.timeout after
-            # the call rather than on what went in. Asserting the shape of it
-            # is how a stub stops quietly accepting a call that changed.
+            # `rest` is `timeout=...`, the discovery timeout. It is passed
+            # through to the fake bridge rather than dropped: the test that
+            # cares asserts bridge.timeout changed from it, which can only
+            # fail if the stub actually received it.
             assert set(rest) <= {"timeout"}, f"unexpected kwargs: {rest}"
             rig.opened.append(port)
             made = _FakeBridge(
@@ -129,23 +132,34 @@ class _Rig:
                 recv_port or port,
                 answers=rig.answering.get(port),
                 device_id=device_id,
+                timeout=rest.get("timeout"),
             )
             rig.made.append(made)
             return made
 
-        def fake_autodetect(cls, *, timeout=b.AUTODETECT_TIMEOUT, on_try=None):
-            # Mirrors the real one's shape -- hinted ports first, and the
-            # `is_emu` flag decides rather than a name -- so both the
-            # ordering and the decision are exercised rather than stubbed
-            # away.
+        def fake_autodetect(
+            cls,
+            *,
+            timeout=b.AUTODETECT_TIMEOUT,
+            on_try=None,
+            exclude=(),
+            device_id=None,
+        ):
+            # Mirrors the real one's shape -- hinted ports first, the
+            # `is_emu` flag decides rather than a name, excluded ports are
+            # skipped -- so the ordering, the decision and the exclusion are
+            # exercised rather than stubbed away.
             rig.swept += 1
             for name in rig.ports:
+                if name in exclude:
+                    continue
                 if on_try is not None:
                     on_try(name)
                 rig.tried.append(name)
                 reply = rig.answering.get(name)
                 if reply and reply.get("is_emu"):
-                    return fake_open(cls, name, device_id=reply["device"])
+                    chosen = reply["device"] if device_id is None else device_id
+                    return fake_open(cls, name, device_id=chosen)
             raise b.DeviceNotFound("nothing answered")
 
         monkeypatch.setattr(b, "list_ports", lambda: (list(rig.ports), list(rig.ports)))
@@ -391,6 +405,60 @@ class TestTheSweep:
         assert said, "the sweep said nothing about what it was trying"
         assert said[0] == PROTEUS_PORT, "said so out of order"
         assert said[-1] == OTHER_PORT
+
+    def test_a_dead_remembered_port_is_not_probed_twice(self, monkeypatch, tmp_path):
+        """The sweep skips the port the probe just found dead.
+
+        Without the exclusion every fallback pays the stale port's discovery
+        timeout a second time, for an answer it already has.
+        """
+        path = _remembered(tmp_path)
+        rig = _Rig({PROTEUS_PORT: None, OTHER_PORT: REPLY}).install(monkeypatch)
+
+        b.ProteusBridge.connect(config_path=path)
+
+        assert rig.opened.count(PROTEUS_PORT) == 1
+        assert PROTEUS_PORT not in rig.tried
+
+    def test_the_fallback_reason_reaches_the_caller(self, monkeypatch, tmp_path):
+        """`on_fallback` gets the port and the error, so a front end can say
+        *why* the remembered port failed -- the difference between "the unit
+        moved" and "no MIDI backend at all"."""
+        path = _remembered(tmp_path)
+        _Rig({PROTEUS_PORT: None, OTHER_PORT: REPLY}).install(monkeypatch)
+        heard: list[tuple[str, BaseException]] = []
+
+        b.ProteusBridge.connect(
+            config_path=path,
+            on_fallback=lambda port, exc: heard.append((port, exc)),
+        )
+
+        assert heard and heard[0][0] == PROTEUS_PORT
+        assert isinstance(heard[0][1], b.DeviceError)
+
+    def test_a_missing_backend_is_not_reported_as_a_stale_port(
+        self, monkeypatch, tmp_path
+    ):
+        """No MIDI backend is not a remembered port that went quiet."""
+        path = _remembered(tmp_path)
+
+        def unavailable(*_a, **_k):
+            raise b.MidiUnavailable("no MIDI backend available")
+
+        monkeypatch.setattr(b.ProteusBridge, "open", classmethod(unavailable))
+        with pytest.raises(b.MidiUnavailable):
+            b.ProteusBridge.connect(config_path=path)
+
+    def test_a_named_device_id_is_used_rather_than_overwritten(
+        self, monkeypatch, tmp_path
+    ):
+        """`--device-id` a caller already knows must survive the reply."""
+        path = str(tmp_path / "config.toml")
+        _Rig({OTHER_PORT: REPLY}).install(monkeypatch)
+
+        got = b.ProteusBridge.connect(config_path=path, device_id=5)
+
+        assert got.device_id == 5, "the reply overwrote the caller's device ID"
 
 
 # --- the remembered-pair reader ---------------------------------------------

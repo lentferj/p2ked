@@ -56,8 +56,6 @@ object that was asked about.
 
 from __future__ import annotations
 
-import signal
-import sys
 import time
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -159,20 +157,14 @@ def _client(kind: str):
 
 
 def list_ports() -> Tuple[List[str], List[str]]:
-    """``(inputs, outputs)``.
+    """``(inputs, outputs)``, from the one implementation in the family.
 
-    Both clients are closed before returning. rtmidi leaks its backend
-    handle if they are not, which on ALSA shows up later as ports that
-    cannot be reopened -- a fault inherited, and fixed, in the sibling
-    projects.
+    :func:`vinsynlib.midi.list_ports` closes both clients before returning
+    and turns a backend that will not open into ``MidiUnavailable``. The
+    copy that used to live here did the same; it is a delegation now, not a
+    second implementation, because the two drifted once already.
     """
-    midi_in = _client("in")
-    midi_out = _client("out")
-    try:
-        return (list(midi_in.get_ports()), list(midi_out.get_ports()))
-    finally:
-        midi_in.delete()
-        midi_out.delete()
+    return midi.list_ports()
 
 
 def bidirectional_ports() -> List[str]:
@@ -181,31 +173,34 @@ def bidirectional_ports() -> List[str]:
     A synthesizer that can be asked a question has both. Anything else
     cannot answer, so probing it costs a timeout for nothing.
     """
-    ins, outs = list_ports()
-    return [name for name in ins if name in outs]
+    return midi.bidirectional_ports(list_ports())
 
 
-def likely_proteus_ports() -> List[str]:
-    lowered = [(name, name.lower()) for name in bidirectional_ports()]
-    return [name for name, low in lowered if any(h in low for h in _HINTS)]
+def likely_proteus_ports(
+    ports: Optional[Tuple[List[str], List[str]]] = None,
+) -> List[str]:
+    """Ports whose name hints at a Proteus, as an *ordering* only.
+
+    ``ports`` lets a caller that has already listed the host pass that
+    listing in, so the port table is enumerated once rather than twice.
+    """
+    if ports is None:
+        ins, outs = list_ports()
+    else:
+        ins, outs = ports
+    outputs = set(outs)
+    both = [name for name in ins if name in outputs]
+    return [name for name in both if any(h in name.lower() for h in _HINTS)]
 
 
 def install_clean_exit(on_exit: Optional[Callable[[], None]] = None) -> None:
-    """Close ports on SIGINT/SIGTERM rather than leaving them open."""
+    """Close ports on SIGINT/SIGTERM rather than leaving them open.
 
-    def handler(signum, _frame):  # pragma: no cover - signal path
-        if on_exit is not None:
-            try:
-                on_exit()
-            except Exception:
-                pass
-        sys.exit(128 + signum)
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            signal.signal(sig, handler)
-        except (ValueError, OSError):  # pragma: no cover - not main thread
-            pass
+    The handler is the family's, in :mod:`vinsynlib.midi`, because getting
+    it wrong leaves an ALSA port open until log-out and nobody can diagnose
+    that from the symptom. Delegated rather than copied.
+    """
+    midi.install_clean_exit(on_exit)
 
 
 # --- the bridge --------------------------------------------------------------
@@ -354,7 +349,9 @@ class ProteusBridge:
         config_path: str = cfg.DEFAULT_PATH,
         remembered: Optional[Tuple[str, str]] = None,
         scan: bool = False,
+        device_id: Optional[int] = None,
         on_try: Optional[Callable[[str], None]] = None,
+        on_fallback: Optional[Callable[[str, BaseException], None]] = None,
     ) -> "ProteusBridge":
         """Open the unit, sweeping every port only when that is necessary.
 
@@ -374,17 +371,17 @@ class ProteusBridge:
         re-enumeration renumbers ALSA clients out from under a saved name.
 
         A remembered port that does not answer falls back to the sweep, but
-        **it says so first**. The guess is gone, and the announcement is
-        what keeps the fallback from looking like the fast path having
-        worked -- which is how a slow launch quietly becomes the normal one.
-        What the sweep then finds is written back, so the launch after this
-        one is fast again.
+        **it says so first** -- through ``on_fallback`` if the caller gave
+        one, so both front ends can name the reason in their own words. The
+        fallback does not probe the dead port a second time. What the sweep
+        then finds is written back, so the launch after this one is fast
+        again.
 
-        The device ID is not remembered separately and does not need to be:
-        the probe broadcasts, and adopts whatever the reply reports, exactly
-        as :meth:`autodetect` does. Broadcast is not a safe long-term
-        default -- this unit ignores it -- which is why the ID is learned
-        rather than assumed, on both paths.
+        ``device_id`` is for a caller that already knows it (``--device-id``).
+        Without it, the probe broadcasts and adopts whatever the reply
+        reports, exactly as :meth:`autodetect` does. Broadcast is not a safe
+        long-term default -- this unit ignores it -- which is why the ID is
+        learned rather than assumed, on both paths.
 
         The policy itself is :func:`vinsynlib.midi.open_remembered_or_swept`,
         written and tested once for the whole family; this is the Proteus's
@@ -405,14 +402,35 @@ class ProteusBridge:
                 bridge = cls.open(
                     send,
                     recv_port=recv,
-                    device_id=m.BROADCAST_DEVICE,
+                    device_id=(
+                        m.BROADCAST_DEVICE
+                        if device_id is None
+                        else m.device_byte(device_id)
+                    ),
                     timeout=AUTODETECT_TIMEOUT,
                 )
+            except midi.MidiUnavailable:
+                # No backend at all is not a stale port. Let it out so the
+                # caller reports the real fault rather than sweeping for a
+                # device on a host that cannot open a port to begin with.
+                raise
             except Exception as exc:
                 raise DeviceError(str(exc)) from exc
-            if bridge.learn_device_id(timeout=AUTODETECT_TIMEOUT) is None:
-                bridge.close()
-                raise DeviceError(f"nothing identifying itself answered on {send!r}")
+            if device_id is None:
+                # The caller did not say, so learn it -- and close the
+                # bridge if that fails, for any reason. The old code only
+                # closed on a `None` reply, so an error mid-read leaked the
+                # ALSA port that list_ports() exists to keep from leaking.
+                try:
+                    learned = bridge.learn_device_id(timeout=AUTODETECT_TIMEOUT)
+                except Exception as exc:
+                    bridge.close()
+                    raise DeviceError(f"{send!r}: {exc}") from exc
+                if learned is None:
+                    bridge.close()
+                    raise DeviceError(
+                        f"nothing identifying itself answered on {send!r}"
+                    )
             # The discovery timeout is short on purpose -- a port that is
             # not the instrument should cost as little as possible -- but it
             # must not become the session's. Every later request that does
@@ -428,12 +446,19 @@ class ProteusBridge:
         return midi.open_remembered_or_swept(
             probe=probe,
             sweep=lambda try_hook: cls.autodetect(
-                timeout=AUTODETECT_TIMEOUT, on_try=try_hook
+                timeout=AUTODETECT_TIMEOUT,
+                on_try=try_hook,
+                # The remembered port has just failed; do not spend its
+                # timeout a second time. --scan did not probe it, so it is
+                # still a candidate there.
+                exclude=(remembered[0],) if remembered and not scan else (),
+                device_id=device_id,
             ),
             remembered=remembered,
             scan=scan,
             remember=remember,
             on_try=on_try,
+            on_fallback=on_fallback,
         )
 
     @classmethod
@@ -442,15 +467,30 @@ class ProteusBridge:
         *,
         timeout: float = AUTODETECT_TIMEOUT,
         on_try: Optional[Callable[[str], None]] = None,
+        exclude: Sequence[str] = (),
+        device_id: Optional[int] = None,
     ) -> "ProteusBridge":
         """Find a unit by broadcasting an Identity Request on every port.
 
         Hinted ports are tried first, which only changes the order. The
         reply decides, and it carries the device ID the unit is set to --
         so discovery ends knowing what to address, with no sweep over IDs.
+        Unless ``device_id`` is given, in which case the caller's ID is used
+        and only the reply's *identity* is checked.
+
+        ``exclude`` is a sequence of port names to skip -- the policy passes
+        the remembered port that has just failed, so it is not probed twice.
+
+        A port that will not even open (held by another program, gone since
+        the listing) is skipped rather than ending the sweep: one bad port
+        must not cost the whole search.
         """
         hinted = likely_proteus_ports()
-        candidates = hinted + [p for p in bidirectional_ports() if p not in hinted]
+        candidates = [
+            p
+            for p in hinted + [q for q in bidirectional_ports() if q not in hinted]
+            if p not in exclude
+        ]
         if not candidates:
             raise DeviceNotFound(
                 "no bidirectional MIDI ports on this host, so nothing can "
@@ -459,14 +499,28 @@ class ProteusBridge:
         for port in candidates:
             if on_try is not None:
                 on_try(port)
-            bridge = cls.open(port, device_id=m.BROADCAST_DEVICE, timeout=timeout)
+            try:
+                bridge = cls.open(
+                    port,
+                    device_id=(
+                        m.BROADCAST_DEVICE
+                        if device_id is None
+                        else m.device_byte(device_id)
+                    ),
+                    timeout=timeout,
+                )
+            except midi.MidiUnavailable:
+                raise
+            except Exception:
+                continue
             try:
                 fields = bridge.identify(timeout=timeout)
             except Exception:
                 bridge.close()
                 continue
             if fields is not None and fields.get("is_emu"):
-                bridge.device_id = m.device_byte(fields["device"])
+                if device_id is None:
+                    bridge.device_id = m.device_byte(fields["device"])
                 # The discovery timeout is short on purpose -- a port
                 # that is not the instrument should cost as little as
                 # possible -- but it must not become the session's. Every
