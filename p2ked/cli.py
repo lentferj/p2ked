@@ -32,6 +32,7 @@ from typing import Callable, Dict, List, Optional
 from vinsynlib import cli, midi
 from p2k import catalog as cat
 from p2k import roms
+from p2ked._report import say_fallback, say_probing
 
 __all__ = ["main", "build_parser"]
 
@@ -286,10 +287,22 @@ def _cmd_names(device, args) -> None:
 
 def _cmd_select(device, args) -> None:
     """Select a preset. **This changes what the unit is playing.**"""
+    from p2k import config as cfg
+
+    # --channel if given, else the one used last time, else 1 -- the same
+    # rule and the same helper the browser uses, so the help text's "(default:
+    # remembered, or 1)" is true here too. It was not: this read
+    # `args.channel or 1`, so a remembered channel was never consulted.
+    channel = (
+        cli.channel_of(
+            args, default=cfg.load_channel(args.config or cfg.DEFAULT_PATH) or 0
+        )
+        or 0
+    )
     entry = roms.preset(args.bank, args.pc)
-    device.select(entry, channel=(args.channel or 1) - 1)
+    device.select(entry, channel=channel)
     print(
-        f"selected {entry} on MIDI channel {args.channel or 1} "
+        f"selected {entry} on MIDI channel {channel + 1} "
         f"(MSB {entry.msb}, LSB {entry.lsb}, PC {entry.program_change})"
     )
 
@@ -320,13 +333,21 @@ _OFFLINE = {"banks", "roms", "list", "find", "resolve"}
 
 
 def _cmd_ports(_device, _args) -> None:
-    from p2k.bridge import likely_proteus_ports
+    # Listed once, through p2ked's own wrapper. `p2k.bridge.list_ports`
+    # turns a missing backend into `MidiUnavailable`; listing twice (once
+    # here, once in likely_proteus_ports) would also let the marks disagree
+    # with the table on hot-plug.
+    from p2k import bridge as b
 
     try:
-        ins, outs = midi.list_ports()
-        likely = sorted(likely_proteus_ports())
+        ins, outs = b.list_ports()
+    except ImportError as exc:
+        raise SystemExit(
+            "error: python-rtmidi is not installed, so no MIDI port can be listed."
+        ) from exc
     except midi.MidiUnavailable as exc:
         raise SystemExit(f"error: {exc}") from exc
+    likely = sorted(b.likely_proteus_ports(ports=(ins, outs)))
     # The rendering is the family's, so all nine listings look alike; only the
     # "looks like an E-MU" mark and the trailing note are p2ked's.
     print(
@@ -338,7 +359,8 @@ def _cmd_ports(_device, _args) -> None:
             note=(
                 "A name hint cannot decide anything. A Proteus on a DIN cable\n"
                 "is behind an interface whose name says nothing about E-MU;\n"
-                "`p2kcli status` asks every port and the identity reply decides."
+                "`p2kcli --scan status` asks every port, and the identity\n"
+                "reply decides."
             ),
         )
     )
@@ -354,11 +376,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Browse an E-MU Proteus 2000's presets.",
         distribution="p2ked",
     )
-    # config=False and favorites=False: nothing in p2kcli *offers* either, and a
-    # flag that is accepted and then ignored teaches the user that a flag can
-    # lie -- worse than no flag (docs/UX-SPEC.md section 2). The settings
-    # file is still read and written, at the browser's default -- see
-    # _build_device.
+    # config=True now: p2kcli reads and writes the settings cache (the
+    # remembered port and channel), so it offers the flag that names it.
+    # `--port` used to read "MIDI port name" and now reads the family's
+    # "default: the one remembered in config.toml", which is what it does.
+    # favorites=False: nothing here reads the favourites database, and a flag
+    # accepted and then ignored teaches the user that a flag can lie -- worse
+    # than no flag (vinsynlib's docs/UX-SPEC.md section 2).
     cli.add_common_arguments(
         parser,
         port=True,
@@ -367,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
         channel=True,
         device_id=True,
         catalog=True,
-        config=False,
+        config=True,
         favorites=False,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -415,6 +439,7 @@ def _build_device(args):
     from p2k import messages as msg
 
     b.install_clean_exit()
+    path = args.config or cfg.DEFAULT_PATH
     if args.port:
         device = b.ProteusBridge.open(
             args.port,
@@ -427,15 +452,25 @@ def _build_device(args):
             # Broadcast is not a safe default -- this Proteus ignores it,
             # so identity answers and every read then times out.
             device.learn_device_id(timeout=0.8)
+        # A port the user named is worth remembering, exactly as the browser
+        # remembers it; `connect` writes the pair itself after a sweep, and
+        # nothing else writes the `--port` path.
+        try:
+            if device.port and device.recv_port:
+                cfg.save_ports(device.port, device.recv_port, path)
+        except OSError:
+            pass
         return device
-    # No --config flag on this parser, so the settings file is the browser's
-    # default: ./config.toml, gitignored, safe to delete. One Identity Request
-    # to the remembered port; the sweep only when there is nothing
-    # remembered, when the remembered port no longer answers, or on --scan.
+    # One Identity Request to the remembered port; the sweep only when there
+    # is nothing remembered, when the remembered port no longer answers, or on
+    # --scan. `--device-id` is passed through so a caller that knows the unit's
+    # ID does not have it overwritten by the reply.
     return b.ProteusBridge.connect(
-        config_path=cfg.DEFAULT_PATH,
+        config_path=path,
         scan=args.scan,
-        on_try=lambda name: print(f"  probing {name}...", file=sys.stderr),
+        device_id=args.device_id,
+        on_try=say_probing,
+        on_fallback=say_fallback,
     )
 
 
@@ -444,6 +479,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     handler = _COMMANDS[args.command]
     # --channel and --device-id, both checked and both named the family's way.
     cli.validate_common(args)
+    # A flag that cannot mean anything here is refused rather than ignored.
+    if args.recv_port and not args.port:
+        midi.fail("--recv-port names the input to go with --port; give both")
+    if args.scan and args.port:
+        midi.fail("--scan searches for the port and --port names it; use one")
 
     if args.command in _OFFLINE:
         try:

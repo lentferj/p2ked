@@ -16,12 +16,13 @@
 """p2ked keeps the contract the other eight projects in the family keep.
 
 Every check below is the same one, run against this program rather than
-written out again here. The reasons are in docs/UX-SPEC.md section 5 and in
-the library: what drifted was never a bug anyone chose, it was a copy that
-nobody had a second copy to compare against.
+written out again here. The reasons are in vinsynlib's docs/UX-SPEC.md
+section 5 and in the library itself: what drifted was never a bug anyone
+chose, it was a copy that nobody had a second copy to compare against.
 """
 
 from p2k.terms import TERMS
+from p2ked import cli
 from p2ked.app import KEY_HINTS, P2kedApp, build_parser
 from vinsynlib import conformance
 
@@ -74,3 +75,26 @@ def test_the_legend_matches_the_family() -> None:
 
 def test_the_vocabulary_is_declared() -> None:
     assert not conformance.check_terms(TERMS)
+
+
+def test_the_pipe_front_end_matches_the_family() -> None:
+    # The parser checks used to run only against the browser. p2kcli is the
+    # other front door, and it had drifted: it did not offer --config while
+    # it read and wrote the settings cache, and --channel claimed a
+    # remembered default it never read. Both are fixed, and this keeps them
+    # fixed. --favorites is forbidden: nothing there reads the store, and a
+    # flag accepted and then ignored teaches the user that a flag can lie.
+    assert not conformance.check_flags(
+        cli.build_parser(),
+        required=(
+            "port",
+            "scan",
+            "recv-port",
+            "demo",
+            "channel",
+            "device-id",
+            "catalog",
+            "config",
+        ),
+        forbidden=("favorites",),
+    )
