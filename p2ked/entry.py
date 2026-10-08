@@ -27,6 +27,13 @@ where a console script exits before the traceback can be read.
 This is the one place that can say something useful, because it runs before
 any module that imports the library. It is deliberately tiny, and it must
 keep importing nothing but the standard library.
+
+**It does not call into the library to check the library.** An earlier
+version asked ``vinsynlib.is_compatible_version`` whether vinsynlib was new
+enough -- so a library too old to have that function raised
+``AttributeError`` here, a traceback naming the package the user never asked
+for, which is the exact failure this module exists to prevent. The version
+comparison is a dozen lines of standard library, and it stays here.
 """
 
 from __future__ import annotations
@@ -34,10 +41,40 @@ from __future__ import annotations
 import sys
 
 #: The minimum that has the API this project was written against.
-MINIMUM = (0, 1, 0)
+#:
+#: ``0.2.0`` is the version that added ``midi.open_remembered_or_swept``'s
+#: ``on_fallback`` hook, the per-file ownership guard in the settings cache,
+#: and the ``__version__`` whose absence used to be undetectable.
+MINIMUM = (0, 2, 0)
 
-#: Where to get it while it is not on an index.
-SOURCE = "vinsynlib @ git+https://github.com/lentferj/vinsynlib"
+#: Where to get it while it is not on an index. Pinned to the tag, not the
+#: branch: a branch can move to something older, which is how p2ked came to
+#: require an API that existed only in one checkout.
+SOURCE = "vinsynlib @ git+https://github.com/lentferj/vinsynlib@v0.2.0"
+
+
+def _release_parts(version: str, width: int) -> tuple[int, ...] | None:
+    """The leading numeric components of ``version``, or ``None``.
+
+    A component must begin with a digit; anything after the digits is a
+    pre-release or build marker and is ignored, so ``"0.2rc1"`` compares as
+    ``0.2``. A component that does not begin with a digit at all
+    (``"0.1.x"``) makes the whole string unusable rather than being guessed
+    at. Standard library only, on purpose -- see the module docstring.
+    """
+    parts: list[int] = []
+    for piece in version.split(".")[:width]:
+        digits = ""
+        for char in piece:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            return None
+        parts.append(int(digits))
+    if not parts:
+        return None
+    return tuple(parts + [0] * (width - len(parts)))
 
 
 def _diagnose(command: str) -> str | None:
@@ -51,21 +88,36 @@ def _diagnose(command: str) -> str | None:
     version = getattr(vinsynlib, "__version__", None)
     if not isinstance(version, str):
         return _missing(command)
-    if not vinsynlib.is_compatible_version(version, MINIMUM):
+    parts = _release_parts(version, len(MINIMUM))
+    if parts is None or parts < MINIMUM:
         return _too_old(command, version)
     return None
 
 
 def _how_to_install() -> str:
+    """The steps that work, rather than the ones that read as if they might.
+
+    Plain ``pip install -e .`` cannot install ``vinsynlib``: it is not on an
+    index, and pip ignores the ``[tool.uv.sources]`` path that ``uv`` reads.
+    Following it produces ``ERROR: Could not find a version that satisfies
+    the requirement vinsynlib`` -- which is the failure this module then
+    explains.
+    """
     return (
-        "Install it from source (it is not on PyPI yet):\n"
+        "Install it from source. Plain `pip install -e .` cannot do it: the\n"
+        "library is not on an index, so pip never sees it. Clone it beside\n"
+        "this checkout and install it first:\n"
+        "\n"
+        "    git clone https://github.com/lentferj/vinsynlib.git ../vinsynlib\n"
+        "    pip install --no-deps -e ../vinsynlib\n"
+        "    pip install -e .\n"
+        "\n"
+        "Or install it directly:\n"
         "\n"
         f'    pip install "{SOURCE}"\n'
         "\n"
-        "Installing this project itself brings it in too, which is the usual\n"
-        "way in from a clone:\n"
-        "\n"
-        "    pip install -e .        # or: uv sync\n"
+        "With uv, `uv sync` reads the sibling path from pyproject.toml, so\n"
+        "the checkout only has to exist.\n"
     )
 
 
