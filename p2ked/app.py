@@ -57,6 +57,7 @@ from textual.widgets import DataTable, Header, Input, Label, Static
 from p2k import catalog as cat
 from p2k import messages as params
 from p2k import roms
+from p2ked._report import say_connected, say_fallback, say_probing
 from vinsynlib import cli as vincli
 from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
 from vinsynlib.ui.hints import KeyHints
@@ -895,12 +896,12 @@ class P2kedApp(App):
         return None
 
     def action_select_preset(self) -> None:
-        # A focused DataTable consumes Enter itself, so selection normally
-        # arrives as RowSelected and this App-level binding never fires.
-        # When *neither* table has focus it does fire, and without this
-        # guard it would play whatever row the unfocused preset pane
-        # happens to remember -- an audible action from a pane the user is
-        # not looking at. Enter means "the row I am looking at".
+        # Enter reaches here through on_data_table_row_selected, because a
+        # focused DataTable consumes the key for its own row selection; there
+        # is no App-level Enter binding (see BINDINGS). The guard stays as
+        # defence in depth: it must never play whatever row the unfocused
+        # preset pane happens to remember -- an audible action from a pane
+        # the user is not looking at. Enter means "the row I am looking at".
         table = self.query_one("#preset-table")
         if not table.has_focus:
             return
@@ -1222,6 +1223,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     vincli.validate_common(args)
+    # A flag that cannot mean anything here is refused rather than ignored.
+    if args.recv_port and not args.port:
+        sys.exit("error: --recv-port names the input to go with --port; give both")
+    if args.scan and args.port:
+        sys.exit("error: --scan searches for the port and --port names it; use one")
 
     from p2k import config as cfg
 
@@ -1236,6 +1242,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         from p2k import messages as msg
 
         b.install_clean_exit()
+        #: The device ID the unit reported (or the one named), when a port was
+        #: named. ``None`` means nothing worth remembering came of it.
+        learned: Optional[int] = None
         try:
             if args.port:
                 device = b.ProteusBridge.open(
@@ -1255,7 +1264,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if learned is not None:
                         print(f"  device ID {learned}", file=sys.stderr)
                     else:
+                        learned = None
                         print("  no identity reply; using broadcast", file=sys.stderr)
+                else:
+                    learned = args.device_id
             else:
                 # One Identity Request to the remembered port; the sweep
                 # only when there is nothing remembered, when the
@@ -1266,24 +1278,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                 device = b.ProteusBridge.connect(
                     config_path=config_path,
                     scan=args.scan,
-                    on_try=lambda n: print(f"  probing {n}...", file=sys.stderr),
+                    device_id=args.device_id,
+                    on_try=say_probing,
+                    on_fallback=say_fallback,
                 )
+                if getattr(device, "port", None):
+                    say_connected(device.port)
         except Exception as exc:
             sys.exit(f"error: {exc}")
 
-        # Remember what worked, so the next run skips the sweep. `connect` writes
-        # the port pair itself, and only after a sweep -- the file is that
-        # path's input, and a fast launch must not rewrite it. A port the
-        # user named on this command line is worth remembering too, and
-        # nothing else writes it.
+        # Remember the port only when it is worth remembering: the user named
+        # it AND something answered. `connect` writes the pair itself after a
+        # sweep; the file is that path's input, and a fast launch must not
+        # rewrite it. The old code also saved `device_id` on every launch,
+        # which rewrote the file the fast path exists to trust -- and nothing
+        # ever read that key back. A port the user named and that answered is
+        # remembered here, and nothing else writes this path.
         try:
-            if args.port:
+            if args.port and learned is not None:
                 port = getattr(device, "port", None)
                 recv = getattr(device, "recv_port", None)
                 if port and recv:
                     cfg.save_ports(port, recv, config_path)
-            if getattr(device, "device_id", None) is not None:
-                cfg.save_device_id(int(device.device_id), config_path)
         except OSError:
             pass  # a read-only directory must not stop the browser
     # The channel given on the command line wins; otherwise the one used
