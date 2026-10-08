@@ -40,6 +40,23 @@ p2k/roms.py
   Proteus family (`p2000.ins`, `P2k_All.ins`, `E-mu.ins`), and cross-read
   against the Proteus 2000 Operation Manual.
 
+vinsynlib
+  The shared base of this family of terminal instrument browsers, and a
+  runtime dependency of p2ked (GPL-2.0-or-later; see its own LICENSE and
+  per-file notices). Everything p2ked once carried a copy of now lives
+  there: the settings cache (port, channel, device ID), the favourites
+  store (SQLite schema, cross-thread connection, per-platform data
+  directory), the keymap and the wrapped legend widget, the shared command
+  line and its help text, the port listing and the error taxonomy. The
+  copies it replaced were assembled from the sibling projects below, whose
+  copyright they carry:
+
+    rxved      Copyright (C) 2026  rxved contributors        - GPL-2.0-or-later
+    s3ked      Copyright (C) 2026  s3ked contributors        - GPL-2.0-or-later
+    eosed      Copyright (C) 2026  eosed contributors        - GPL-2.0-or-later
+    k2kremote  Copyright (C) 2026  k2kremote contributors    - GPL-2.0-or-later
+    mpc2emu    Copyright (C) 2025-2026  mpc2emu contributors - GPL-2.0-or-later
+
 p2k/bridge.py
   The throttled-output queue, the merged-input facade, the rtmidi-backend
   leak fix, the port-enumeration helpers, the read-modify-write config store
@@ -53,18 +70,12 @@ p2k/bridge.py
     k2kremote  Copyright (C) 2026  k2kremote contributors    - GPL-2.0-or-later
     mpc2emu    Copyright (C) 2025-2026  mpc2emu contributors - GPL-2.0-or-later
 
+  The read-modify-write config store and the port-enumeration helpers are
+  now maintained in vinsynlib rather than here.
+
 p2ked/app.py
-  The key-hint legend (KeyHints, wrap_blocks) is ported from rxved, which
-  ports it from s3ked, eosed and k2kremote. Same copyrights as above.
-
-p2k/favorites.py
-  The favourites store -- the SQLite schema, the cross-thread connection
-  wrapper, the per-platform data directory and the Favorites API -- is
-  adapted from rxved's rxved/favorites.py, with the slot identity changed
-  from Roland's bank-and-number to this instrument's catalog bank key and
-  program change. Same copyright as above:
-
-    rxved      Copyright (C) 2026  rxved contributors        - GPL-2.0-or-later
+  The key-hint legend (KeyHints, wrap_blocks) is now vinsynlib's, which
+  carries the copyright of every sibling it was assembled from.
 
 tools/extract_catalog.py
   Reads, but does not redistribute, the Cakewalk instrument-definition files

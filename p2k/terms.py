@@ -31,6 +31,12 @@ sample-based instrument is expanded.
 The wire's word stays in the code that builds wire messages: on the wire a
 preset is a Program Change, and Bank Select MSB chooses the ROM. That
 translation lives in :mod:`p2k.roms` where it is visible.
+
+**This module is a declaration, not yet a source of strings.** No
+user-facing text is built from :data:`TERMS` today; its one consumer is
+``tests/test_conformance.py``, which checks the vocabulary against the
+family. When a screen or a help block starts saying "bank" or "preset",
+it should read the word from here rather than spell it out again.
 """
 
 from __future__ import annotations

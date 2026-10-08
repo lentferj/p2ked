@@ -651,6 +651,16 @@ The latent oddity the review spotted in passing is fixed too:
 answers a wrong device ID with silence -- the failure mode that hides
 behind every other. It is now rejected, as is anything outside 0-127.
 
+**Re-opened and closed differently, 2026-10-08.** The library rewrite of
+the launch path made the *device-ID* half of this write-only again:
+`main()` called `save_device_id` on every launch, replacing the settings
+file the remembered-port fast path is supposed to trust, and nothing read
+the key back. The call is gone. The ID is learned from the identity reply
+on every launch and passed through from `--device-id` when the user gives
+one; it is not persisted, which is what makes the fast path one round trip
+rather than a rewrite. `load_device_id`/`save_device_id` survive in the
+shim for a future feature; nothing calls them today.
+
 ## 28. `Favorites.refresh_names` was never called — FIXED
 
 **Status:** **fixed 2026-09-20.** Real. **Verified by grep**: no caller
@@ -776,6 +786,14 @@ table's remembered cursor.
 The cursor-silence rule is about movement; this is the same surprise one
 step removed. Enter now means "the row I am looking at": it returns early
 unless the preset table has focus.
+
+**Reframed, 2026-10-08.** The library port removed the App-level Enter
+binding altogether (the rest of the family binds it nowhere; selection
+arrives as `RowSelected`). With no binding, a keypress can no longer reach
+the guard, so the test that pressed Enter became a test of nothing. The
+guard stays as defence in depth, and the test now calls
+`action_select_preset()` with the *bank* table focused -- which is the only
+way to reach it -- and asserts nothing plays.
 
 ## 36. The MidiQuest `.sqs` format is unread — shared across the projects
 
@@ -1059,3 +1077,27 @@ dependency as one imported by a module. `deptry` cannot find this one —
 it reports only imports — so the gap had to be closed by hand, and would
 have stayed open indefinitely on a machine whose system packages happened to
 match.
+
+## 44. The shared settings file and the published library — 2026-10-08
+
+**Status:** partly fixed; two things need a human with push access.
+
+The full review of the `unify` merge is in
+`docs/REVIEW-unify-2026-10-08.md`. Most of it is fixed in the tree beside
+this note. What is left:
+
+1. **vinsynlib must be pushed and tagged `v0.2.0`.** `p2ked/entry.py` now
+   relies on nothing from the library to check the library, so an old copy
+   is diagnosed rather than crashing, but the tag it prints
+   (`vinsynlib @ git+…@v0.2.0`) does not exist until somebody pushes. Until
+   then `pip install "<that URL>"` resolves the branch, which is the
+   situation the pin exists to end. The same `entry.py` change (local
+   version comparison, `MINIMUM = (0, 2, 0)`) is needed in all ten siblings.
+2. **A per-tool config directory is the proper fix** for nine tools sharing
+   one relative `config.toml`. The header guard and the table check stop
+   them destroying each other's settings and stop one adopting another's
+   remembered port, but the second tool in a directory still cannot save
+   its own. Moving the default to `config_dir(tool)/config.toml` fixes that
+   properly, at the cost of a family-wide change to `spec.py`'s `--config`
+   help and every tool's conformance test. Not done here: it is a contract
+   change, not a bug fix.

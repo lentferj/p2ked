@@ -30,7 +30,7 @@ module. Passing it in is the third way and the honest one.
 string a user reads says "favourite". That is deliberate and it is the
 family's: the flag on nine command lines is ``--favorites`` and the file it
 names is ``favorites.db``, so the identifier follows the file rather than
-the prose. See docs/UX-SPEC.md section 1.
+the prose. See vinsynlib's docs/UX-SPEC.md section 1.
 """
 
 from __future__ import annotations

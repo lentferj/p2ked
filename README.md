@@ -35,11 +35,15 @@ order a sequencer's MIDI track asks for them.
 p2ked is free software and always will be. Nothing is behind a paywall, no
 feature is withheld, and none of what follows changes that.
 
-But if it has been useful — if it saved you an evening of mapping zones
-by hand, or got a library onto a machine that had no way of reading it, or
-**best of all, if it has your vintage instrument switched on and in use more often
-than it was, and you are having more fun with it** — then please consider
-supporting the work.
+(These paragraphs describe the family's bench, which is shared between the
+sibling tools. p2ked's own share of it is the Proteus 2000 and the ROMs read
+from it in the hardware sessions recorded in `docs/RESOLUTION_NOTES.md`.)
+
+But if it has been useful — if it saved you reading a ROM's worth of preset
+names off the front panel one slot at a time, or told you which ROMs are
+fitted without you touching the unit, or **best of all, if it has your
+vintage instrument switched on and in use more often than it was, and you
+are having more fun with it** — then please consider supporting the work.
 
 **Because here is what it has actually cost:**
 
@@ -71,9 +75,10 @@ Stripe, so bank and tax details are never handed to the person paying.
 
 **Support is not expected, and it is not the only currency.**
 
-- **Bug reports** — ideally with the bank, preset or disk image that produced
-  them. A tool's failures are usually specific to one file rather than
-  general, and without that file they are very hard to reproduce.
+- **Bug reports** — ideally with the bank and preset numbers involved, the
+  exact command line, and what the unit did. A failure is usually specific
+  to one ROM or one unit rather than general, and without that detail it is
+  very hard to reproduce.
 - **Confirmations from hardware that is not on this bench**, which matters more
   here than for a single-machine tool. These tools write for whole *families*
   of instruments, and the bench holds only a subset. Whether a variant accepts
@@ -101,19 +106,20 @@ Full account in [DISCLAIMER.md](DISCLAIMER.md).
 
 ---
 
----
-
 ## ⚠️ Use at your own risk — back up first
 
- is provided **as is, with absolutely no warranty and no liability**
+p2ked is provided **as is, with absolutely no warranty and no liability**
 for data loss or **hardware damage**. You assume all risk. Full terms:
 [DISCLAIMER.md](DISCLAIMER.md).
 
-Before you use this software, **make good, current backups of all your files** —
-and of any existing banks on your instrument and storage media. These tools can
-write to hardware and storage media; a mistake, a bug, or untested output could
-overwrite or corrupt data, or be rejected by hardware. Always test on a spare
-unit or emulator **before** connecting irreplaceable equipment.
+p2ked **reads** the unit and can **select** a preset, which makes sound; it
+does not write to the unit's memory. Other tools in the family do write to
+hardware and storage media, and this warning is the family's. Even so:
+**make good, current backups of all your files** — and of any existing
+banks on your instrument and storage media — before you start. A mistake, a
+bug, or untested output could overwrite or corrupt data, or be rejected by
+hardware. Always test on a spare unit or emulator **before** connecting
+irreplaceable equipment.
 
 ---
 
@@ -206,14 +212,27 @@ system `python-rtmidi` are used rather than a fresh build.
 
 ```sh
 p2ked --demo           # built-in demo device; opens no MIDI ports
-p2ked                  # autodetect a Proteus-family unit
+p2ked                  # ask the remembered port, sweep if there is none
+p2ked --scan           # probe every port again (after the unit moves)
 p2ked --port "E-MU Proteus 2000 MIDI 1"
 ```
 
-Autodetect broadcasts a Universal Identity Request on every bidirectional
-port and matches the reply's manufacturer byte. The reply carries the device
-ID the unit is set to, so discovery ends knowing what to address — no sweep
-over 127 IDs.
+The first launch finds the unit by broadcasting a Universal Identity Request
+and reading the reply. The reply carries the device ID the unit is set to,
+so discovery ends knowing what to address — no sweep over 127 IDs. The port
+that answered is remembered in `config.toml` (in the working directory,
+gitignored, safe to delete), and every later launch asks *only that port*:
+one round trip instead of one probe per MIDI port on the machine. `--scan`
+ignores the remembered port and sweeps again, which is what is needed after
+the unit moves — USB re-enumeration renumbers ALSA clients out from under a
+saved name. A remembered port that stops answering falls back to the sweep
+and says so on stderr, so a launch that took the slow path never looks like
+a fast one.
+
+`config.toml` is shared, by name, with the other tools in the family, so it
+is **not** a place to keep anything of your own. Its first line records
+which tool wrote it; another tool reads and writes its own file, and leaves
+this one alone. `--config PATH` names a different file entirely.
 
 ### Keys
 
@@ -235,18 +254,18 @@ open next to a running sequencer.
 ### Command line
 
 ```sh
-p2kcli banks                    # the bank table (no unit needed)
-p2kcli list XLEAD-1             # one bank's presets (no unit needed)
-p2kcli find "bell"              # search names (no unit needed)
-p2kcli resolve 7 1 5            # what does this MSB/LSB/PC select?
-p2kcli ports                    # MIDI ports on this host
-p2kcli --demo hardware         # what the unit reports about itself
-p2kcli --demo channels         # every MIDI channel (silent)
-p2kcli --demo names XLEAD-1    # read a bank's names (silent)
-p2kcli select XLEAD-1 5        # select a preset ON THE UNIT
+p2kcli banks                 # the bank table (no unit needed)
+p2kcli list XLEAD-1          # one bank's presets (no unit needed)
+p2kcli find "bell"           # search names (no unit needed)
+p2kcli resolve 7 1 5         # what does this MSB/LSB/PC select?
+p2kcli ports                 # MIDI ports on this host
+p2kcli --demo hardware       # what the unit reports about itself
+p2kcli --demo channels       # every MIDI channel (silent)
+p2kcli --demo names XLEAD-1  # read a bank's names (silent)
+p2kcli select XLEAD-1 5      # select a preset ON THE UNIT
 ```
 
-Two commands are named differently from last year's p2kcli, with the old
+Two commands are named differently from earlier p2kcli, with the old
 spelling still accepted, because they collided with something:
 
 - `roms` is now `banks`. The family calls that table banks everywhere else
