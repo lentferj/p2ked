@@ -161,15 +161,23 @@ class TestTheChannelKeys:
 class TestEnterMeansTheRowYouAreLookingAt:
     """Item 35. With neither table focused, Enter played the hidden pane."""
 
-    async def test_enter_does_nothing_when_the_preset_pane_is_not_focused(self, app):
+    async def test_the_select_action_does_nothing_without_preset_focus(self, app):
+        """Calling the action with the *bank* table focused must not play.
+
+        Pressing Enter is no longer enough to test this: with no App-level
+        Enter binding, a keypress cannot reach the guard at all. The action
+        can, and the guard is the thing that must hold -- it is the last
+        line between "the row I am looking at" and playing whatever the
+        unfocused preset pane remembers.
+        """
         async with app.run_test() as pilot:
             await pilot.pause()
-            app.screen.set_focus(None)
-            await pilot.press("enter")
+            app.query_one("#bank-table").focus()
+            app.action_select_preset()
             for _ in range(6):
                 await pilot.pause()
             assert app.device.selected_log == [], (
-                "Enter played a preset from a pane the user is not in"
+                "select played a preset from a pane the user is not in"
             )
 
     async def test_enter_still_works_when_it_is_focused(self, app):
