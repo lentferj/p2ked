@@ -142,21 +142,6 @@ known-first-party = ["p2k", "p2ked", "vinsynlib"]
     "I001",    # import order
     "RUF022",  # __all__ not alphabetical
 ]
-"p2k/config.py" = [
-    "I001",    # import order
-    "PLW0603", # module-level `_warned`; a lock would be worse for once-per-run
-    "RUF022",  # __all__ not alphabetical
-    "UP031",   # "%04X" printf formatting in _toml_string
-]
-"p2k/favorites.py" = [
-    "E501",    # one 97-char line: the SQL LIKE/ESCAPE clause
-    "F401",    # unused `Iterable`/`Sequence` imports
-    "PLR0913", # Favorites.add takes every column; that is the upsert
-    "RUF022",  # __all__ not alphabetical
-    "RUF023",  # __slots__ not sorted
-    "S608",    # f-string ORDER BY; `order` is validated against a fixed set
-    "UP037",   # quoted annotations
-]
 "p2k/messages.py" = [
     "B905",    # zip() without strict=; lengths are equal by construction
     "C901",    # parse_setup_dump, _parse_master_blocks
@@ -321,16 +306,18 @@ omit = ["*/__pycache__/*"]
 show_missing = true
 skip_covered = false
 # Adopted 2026-10-02, once there was a number to look at. The suite reports
-# 69.60% with branch coverage on; the gate sits just below it so ordinary
+# about 72% with branch coverage on; the gate sits below it so ordinary
 # fluctuation does not turn `make check` red, while losing a module's
 # worth of tests still does.
 #
 # Two figures are low for a reason no synthetic test can fix, and neither
 # is a reason to lower the bar:
-#   p2k/bridge.py  24% -- the transport. Exercised against a real unit on
-#                        2026-10-02 (docs/RESOLUTION_NOTES.md §11) and by no
-#                        automated test, because it needs a cable.
-#   p2ked/app.py   57% -- the Textual front end. Its tests drive the
+#   p2k/bridge.py  ~47% -- the transport. Exercised against a real unit on
+#                        2026-10-02 (docs/RESOLUTION_NOTES.md §11); the
+#                        discovery path is now tested synthetically
+#                        (tests/test_connect.py), the wire still needs a
+#                        cable.
+#   p2ked/app.py   ~58% -- the Textual front end. Its tests drive the
 #                        behaviour that matters; what is left is layout and
 #                        event plumbing that would want a snapshot to pin.
 fail_under = 68
