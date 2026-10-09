@@ -144,8 +144,11 @@ class TestBrowserWiring:
 
         keys = {b.action: b.key for b in P2kedApp.BINDINGS}
         assert keys["toggle_favorite"] == "f"
-        assert keys["cycle_favorites"] == "F"
         assert keys["pick_categories"] == "C"
+        # `v`, not the family's `F`. `f` writes the favourites database and
+        # cycling the view only reads it, so a shift-pair between them put a
+        # write one slip away from a read. rxved's reasoning.
+        assert keys["cycle_favorites"] == "v"
 
     def test_the_store_is_injected_not_opened(self, tmp_path):
         """A test must never write into the user's real database."""

@@ -26,9 +26,10 @@ from p2ked import cli
 from p2ked.app import KEY_HINTS, P2kedApp, build_parser
 from vinsynlib import conformance
 
-#: The legend's own hints: `m channels` is where the family puts `m` in a
-#: browser, and the two below are p2ked's.
-EXTRAS = ("m channels", "C category", "a all ROMs")
+#: The legend's own hints. `m channels` is where the family puts `m` in a
+#: browser, the two after it are p2ked's, and `v favourites view` is
+#: rxved's key borrowed for the reason given below.
+EXTRAS = ("m channels", "v favourites view", "C category", "a all ROMs")
 
 
 def test_flags_match_the_family() -> None:
@@ -62,15 +63,34 @@ def test_keys_match_the_family() -> None:
     # table and every other table key with it. Removed rather than renamed, so
     # that all nine reach the key the same way. Checked from the other side
     # below, and by the two tests in test_audit_fixes.py.
-    assert not conformance.check_bindings(
+    problems = conformance.check_bindings(
         P2kedApp, favourites=True, channel=True, select=False
     )
+    # One deliberate divergence, and it is the whole of it: the favourites
+    # view is on `v` rather than the family's `F`. `f` writes the favourites
+    # database and cycling the view only reads it, so the shift-pair left a
+    # write one slip away from a read; `v` has no such twin. rxved moved off
+    # `F` for the same reason. The family asks a tool that renames a shared
+    # key to say why in its own test -- anything else appearing here is a
+    # real drift and must be fixed rather than added to the set.
+    assert set(problems) == {
+        "F is not bound; the family binds it to cycle_favorites",
+        "cycle_favorites is not reachable from F; it is bound to v",
+    }, "\n".join(problems)
 
 
 def test_the_legend_matches_the_family() -> None:
     # select=True here even though the binding check above says False: the
     # legend is a promise about which keys work, and this one does.
-    assert not conformance.check_legend(KEY_HINTS, extras=EXTRAS)
+    problems = conformance.check_legend(KEY_HINTS, extras=EXTRAS)
+    # The same single divergence, from the legend side, because `v favourites
+    # view` is declared as an extra and therefore legitimate here -- the only
+    # complaint left is the family's own `F` block going unfilled. Two tools
+    # now promise `v` where the family promises `F`, which is exactly why
+    # the family asks a tool to say why rather than to stay quiet.
+    assert set(problems) == {
+        "the legend is missing 'F favourites view'",
+    }, "\n".join(problems)
 
 
 def test_the_vocabulary_is_declared() -> None:

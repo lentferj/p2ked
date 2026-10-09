@@ -72,8 +72,9 @@ from vinsynlib.ui.hints import KeyHints
 
 __all__ = ["P2kedApp", "main", "build_parser", "KEY_HINTS", "wrap_blocks"]
 
-#: What `F` steps through, in order. Named after rxved's, deliberately:
-#: the same key should mean the same three things across these projects.
+#: What the favourites view steps through, in order. Named after rxved's,
+#: deliberately: the same key should mean the same three things across these
+#: projects. (It is `v` in both; see KEY_HINTS.)
 VIEW_ALL = "all"
 VIEW_BANK_FAVOURITES = "bank-favourites"
 VIEW_ALL_FAVOURITES = "all-favourites"
@@ -84,9 +85,17 @@ VIEW_LABELS = {
     VIEW_ALL_FAVOURITES: "every favourite, all banks",
 }
 
-#: The legend. In the family's order, with this tool's own hints in the one
-#: place the shared legend leaves room for them -- after "n note", before
-#: "i device" -- so a reader's eye finds them in the same spot in all nine.
+#: The legend. The shared blocks in the family's order, with this tool's own
+#: hints in the one place the shared legend leaves room for them -- after
+#: "n note", before "i device" -- so a reader's eye finds them in the same
+#: spot in all nine.
+#:
+#: ``v favourites view`` lives there too, and that is a declared divergence:
+#: the family puts the favourites view on ``F``, one shift-slip from the
+#: ``f`` that *writes* the favourites database. rxved moved it to ``v`` for
+#: exactly that reason and p2ked now agrees with it -- a read should not sit
+#: under a shift away from a write. See tests/test_conformance.py, which
+#: asserts this and nothing else about it.
 KEY_HINTS = (
     "↑↓ move",
     "tab pane",
@@ -96,13 +105,14 @@ KEY_HINTS = (
     "[ ] channel",
     "c set channel",
     "f favourite",
-    "F favourites view",
     "t tags",
     "n note",
     # `m` means channels in a browser everywhere in this family. Here that
     # was already true: ChannelScreen shows what every MIDI channel plays.
     "m channels",
-    # p2ked's own two.
+    # p2ked's own, plus the one key it borrows from rxved rather than the
+    # family.
+    "v favourites view",
     "C category",
     "a all ROMs",
     "i device",
@@ -362,7 +372,7 @@ class P2kedApp(App):
         Binding("right_square_bracket", "channel_up", "Channel +"),
         Binding("c", "pick_channel", "Channel"),
         Binding("f", "toggle_favorite", "Favourite"),
-        Binding("F", "cycle_favorites", "Favourites view"),
+        Binding("v", "cycle_favorites", "Favourites view"),
         Binding("t", "edit_tags", "Tags"),
         Binding("n", "edit_note", "Note"),
         Binding("C", "pick_categories", "Categories"),
@@ -420,7 +430,7 @@ class P2kedApp(App):
         #: read the user cannot see.
         self._busy = False
         self._filling = False
-        #: Which of the three views `F` is on.
+        #: Which of the three views `v` is on.
         self.view_mode = VIEW_ALL
         #: User banks whose names have already been fetched this session.
         self._auto_read: set = set()
@@ -850,6 +860,11 @@ class P2kedApp(App):
         somewhere different depending on what happens to be favourited, and
         a key whose behaviour you cannot predict is worse than an empty list
         that explains itself.
+
+        ``v``, not the family's ``F``: ``f`` writes the favourites database
+        and this only reads it, so a shift-slip between them is a write
+        arriving one slip away from a read. rxved's reasoning, and p2ked
+        follows it.
         """
         if self.favorites is None:
             self.notify_status("no favourites database")

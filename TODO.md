@@ -1169,3 +1169,27 @@ keeps the comparison so a
 `tests/test_app.py` (a read user bank is not flagged, and the status line
 says the baseline), `tests/test_cli.py::TestFind` (the printed-list marker is
 exercised on a ROM slot, since a user slot cannot produce that one).
+## 46. The favourites view moved from `F` to `v`, as rxved's is — FIXED 2026-10-09
+
+**Status:** **fixed.** Not a defect in itself, but the same error-prone
+shift-pair rxved had already moved away from.
+
+`f` **writes** the favourites database and `F` only read it, so a slip of
+the shift key turned a browse into an edit. `v` has no such twin, and it is
+where rxved had already put it. p2ked now agrees, which also leaves one
+fewer thing to learn between the two.
+
+The family's contract still puts `cycle_favorites` on `F`, so this is a
+declared divergence -- and `vinsynlib.conformance` asks a tool that renames
+a shared key to say so in its own test. `tests/test_conformance.py` now
+asserts exactly the two binding problems and the one legend problem this
+produces, and nothing else: anything further appearing there is real drift
+to be fixed rather than added to the set. Changing the family's key instead
+would be the other route, and would touch all nine tools and their
+conformance tests; that is a contract change, not this.
+
+Found while doing it, and fixed separately in spirit: `p2kcli select` reads
+the remembered channel, and the AST guard in `tests/test_legend.py` covered
+`config.save_*` only -- so a *read* of the developer's real `./config.toml`
+decided which channel the suite sent on. The guard now covers `load_*` too,
+and the test names its file.

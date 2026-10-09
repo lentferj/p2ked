@@ -203,22 +203,61 @@ class TestDeviceCommandsAgainstTheDemo:
         assert cli.main(["--demo", "status"]) == 0
         assert "E-MU" in capsys.readouterr().out
 
-    def test_select_sends_the_three_numbers(self, capsys, monkeypatch):
+    def test_select_sends_the_three_numbers(self, capsys, monkeypatch, tmp_path):
         """The one command that makes a sound.
 
         Asserted on the demo's record, so the three numbers are checked
         rather than merely "something was sent".
+
+        ``--config`` names a file of the test's own. `select` now reads the
+        remembered channel, and the default is *relative* -- so without this
+        the suite would send on whatever channel the developer's checkout
+        had left in `./config.toml`, which is exactly the leak the AST check
+        in test_legend.py exists to stop.
         """
         from p2ked.demo import DemoDevice
 
         device = DemoDevice()
         monkeypatch.setattr(cli, "_build_device", lambda args: device)
-        assert cli.main(["select", "USER-0", "3"]) == 0
+        config = tmp_path / "settings.toml"
+        assert cli.main(["--config", str(config), "select", "USER-0", "3"]) == 0
         assert device.selected_log, "nothing was selected"
         entry, channel = device.selected_log[0]
         assert (entry.msb, entry.lsb, entry.program_change) == (0, 0, 3)
         assert channel == 0
         assert "MSB 0" in capsys.readouterr().out
+
+    def test_a_remembered_channel_is_used(self, capsys, monkeypatch, tmp_path):
+        """`--channel` if given, else the one used last time, else 1.
+
+        The help text has said "(default: remembered, or 1)" since the
+        library took over the parser, and `select` used to read
+        `args.channel or 1` -- so the remembered half was a promise nothing
+        kept. This is that promise, pinned.
+        """
+        from p2k import config as cfg
+        from p2ked.demo import DemoDevice
+
+        config = tmp_path / "settings.toml"
+        # Zero-based, as the cache stores it and as `select` sends it: the
+        # browser saves `self.channel`, which is already the wire value.
+        cfg.save_channel(9, str(config))
+        device = DemoDevice()
+        monkeypatch.setattr(cli, "_build_device", lambda args: device)
+
+        assert cli.main(["--config", str(config), "select", "USER-0", "3"]) == 0
+        assert device.selected_log[0][1] == 9
+        assert "MIDI channel 10" in capsys.readouterr().out
+
+        # An explicit --channel still wins over what was remembered.
+        device.selected_log.clear()
+        assert (
+            cli.main(
+                ["--config", str(config), "--channel", "2", "select", "USER-0", "3"]
+            )
+            == 0
+        )
+        assert device.selected_log[0][1] == 1
 
     def test_an_offline_command_never_builds_a_device(self, monkeypatch, catalog_file):
         """The `_OFFLINE` promise, enforced rather than asserted in prose.

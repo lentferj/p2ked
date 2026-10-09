@@ -158,7 +158,17 @@ class TestConfigIsNotWrittenBehindTheSuitesBack:
                 with open(path, encoding="utf-8") as handle:
                     yield name, ast.parse(handle.read())
 
-    def test_every_config_save_in_the_suite_names_its_file(self):
+    def test_every_config_access_in_the_suite_names_its_file(self):
+        """Reads as well as writes.
+
+        The guard started out covering ``save_`` only, on the reasoning that
+        a write is what leaves a file behind. A *read* is just as dependent
+        on the working directory: ``p2kcli select`` selects on the channel
+        remembered in ``config.toml``, so a test that does not name a file
+        takes its channel from whatever the developer's checkout happens to
+        hold -- and that is a test that passes for one developer and fails
+        for the next. It did, in fact, happen.
+        """
         offenders = []
         for name, tree in self._test_sources():
             for node in ast.walk(tree):
@@ -167,19 +177,23 @@ class TestConfigIsNotWrittenBehindTheSuitesBack:
                 func = node.func
                 if not (
                     isinstance(func, ast.Attribute)
-                    and func.attr.startswith("save_")
+                    and (func.attr.startswith("save_") or func.attr.startswith("load_"))
                     and isinstance(func.value, ast.Name)
                     and func.value.id == "config"
                 ):
                     continue
-                # a path is either the last positional or path=
-                has_path = len(node.args) >= 2 or any(
-                    kw.arg == "path" for kw in node.keywords
-                )
+                # `load_*` takes the path as its one argument; `save_*`
+                # takes the value first and the path second. Either way a
+                # path is either positional or path=.
+                if func.attr.startswith("load_"):
+                    has_path = len(node.args) >= 1
+                else:
+                    has_path = len(node.args) >= 2
+                has_path = has_path or any(kw.arg == "path" for kw in node.keywords)
                 if not has_path:
                     offenders.append(f"{name}:{node.lineno} {func.attr}")
         assert not offenders, (
-            f"{offenders} save to config.DEFAULT_PATH, which is relative to "
+            f"{offenders} touch config.DEFAULT_PATH, which is relative to "
             f"the working directory. Pass a tmp_path."
         )
 
@@ -191,9 +205,14 @@ class TestConfigIsNotWrittenBehindTheSuitesBack:
                 if (
                     isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
-                    and node.func.attr.startswith("save_")
+                    and (
+                        node.func.attr.startswith("save_")
+                        or node.func.attr.startswith("load_")
+                    )
                     and isinstance(node.func.value, ast.Name)
                     and node.func.value.id == "config"
                 ):
                     found += 1
-        assert found, "no config.save_* calls found; the check is vacuous"
+        assert found, (
+            "no config.save_* or config.load_* calls found; the check is vacuous"
+        )

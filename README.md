@@ -245,8 +245,15 @@ this one alone. `--config PATH` names a different file entirely.
 | `m` | every MIDI channel: what it plays and why it might not — **silent** |
 | `/` | search names |
 | `c` | set the MIDI channel selections go out on |
+| `f` | mark or unmark the preset under the cursor — **this writes the favourites database** |
+| `v` | step the favourites view: all presets → this bank's favourites → every favourite (reads only) |
 | `i` | device identity and which ROMs are fitted |
 | `?` / `q` | help / quit |
+
+`f` writes and `v` reads, which is why they are not a shift-pair. The family
+puts the favourites view on `F`, one slip of the shift key from the key that
+writes; rxved moved it to `v` and p2ked follows. Every other key is where the
+family puts it.
 
 **Moving the cursor never sends anything.** That is enforced by a test, not
 just by intent: it is the property that decides whether you can leave this
