@@ -183,27 +183,18 @@ are catalogued too.
 
 ## Install
 
-Two checkouts, side by side — this project and the shared library it uses:
-
 ```sh
-git clone https://github.com/lentferj/vinsynlib.git ../vinsynlib
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install --no-deps -e ../vinsynlib
 .venv/bin/pip install -e .
 ```
 
 Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** — the
 shared base of this family of terminal instrument tools: the settings cache,
 the favourites database, the keymap and legend, the command line and the port
-listing. It is **not on PyPI**, so it is installed from the sibling checkout
-above, and installed *first* so that the second command finds the requirement
-already satisfied.
-
-`--no-deps` on the first install because vinsynlib's dependencies are this
-project's too, and a second copy of `textual` in the same venv is a version
-skew to diagnose somewhere else. With `uv`, `uv sync` takes the path from
-`[tool.uv.sources]` in `pyproject.toml`, so the checkout only has to exist
-and neither `pip` line is needed.
+listing. It comes from PyPI with the rest. To develop against a *working copy*
+of it instead of the published one, install that alongside — it shadows the
+published version in this environment only:
+`.venv/bin/pip install --no-deps -e ../vinsynlib`.
 
 `--system-site-packages` here is deliberate: ALSA's sequencer and the
 system `python-rtmidi` are used rather than a fresh build.
@@ -322,12 +313,11 @@ make check            # everything below; fails on the first error
 | `make audit` | `pip-audit`, `vulture`, `deptry`, `detect-secrets` |
 | `make check` | lint → format-check → typecheck → coverage → audit |
 
-`pip-audit` filters `vinsynlib` out of the runtime dependency list it audits.
-It is a sibling checkout rather than a package on an index, so `pip` cannot
-resolve it and the audit would fail resolving rather than audit anything;
-it is this family's own source, reviewed in this repository, and it carries
-no third-party dependency of its own at this layer. The pinned toolchain is
-audited in full.
+`pip-audit` audits the runtime dependency list it renders from
+`pyproject.toml`, including `vinsynlib` now that it comes from PyPI. It used
+to filter `vinsynlib` out, when it was a sibling checkout pip could not
+resolve and the audit would fail resolving rather than audit anything. The
+pinned toolchain is audited in full.
 
 ### Before pushing
 

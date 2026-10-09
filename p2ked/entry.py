@@ -47,10 +47,9 @@ import sys
 #: and the ``__version__`` whose absence used to be undetectable.
 MINIMUM = (0, 2, 0)
 
-#: Where to get it while it is not on an index. Pinned to the tag, not the
-#: branch: a branch can move to something older, which is how p2ked came to
-#: require an API that existed only in one checkout.
-SOURCE = "vinsynlib @ git+https://github.com/lentferj/vinsynlib@v0.2.0"
+#: Where to get it. On PyPI since 0.2.0; the floor is the version that added
+#: the API this project was written against (see MINIMUM).
+SOURCE = "vinsynlib>=0.2.0"
 
 
 def _release_parts(version: str, width: int) -> tuple[int, ...] | None:
@@ -95,29 +94,16 @@ def _diagnose(command: str) -> str | None:
 
 
 def _how_to_install() -> str:
-    """The steps that work, rather than the ones that read as if they might.
-
-    Plain ``pip install -e .`` cannot install ``vinsynlib``: it is not on an
-    index, and pip ignores the ``[tool.uv.sources]`` path that ``uv`` reads.
-    Following it produces ``ERROR: Could not find a version that satisfies
-    the requirement vinsynlib`` -- which is the failure this module then
-    explains.
-    """
+    """The one command that works: pip resolves vinsynlib from PyPI."""
     return (
-        "Install it from source. Plain `pip install -e .` cannot do it: the\n"
-        "library is not on an index, so pip never sees it. Clone it beside\n"
-        "this checkout and install it first:\n"
-        "\n"
-        "    git clone https://github.com/lentferj/vinsynlib.git ../vinsynlib\n"
-        "    pip install --no-deps -e ../vinsynlib\n"
-        "    pip install -e .\n"
-        "\n"
-        "Or install it directly:\n"
+        "Install it:\n"
         "\n"
         f'    pip install "{SOURCE}"\n'
         "\n"
-        "With uv, `uv sync` reads the sibling path from pyproject.toml, so\n"
-        "the checkout only has to exist.\n"
+        "or reinstall this tool; its dependency on vinsynlib resolves from\n"
+        "the index too:\n"
+        "\n"
+        "    pip install -e .\n"
     )
 
 

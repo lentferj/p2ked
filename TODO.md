@@ -1086,13 +1086,12 @@ The full review of the `unify` merge is in
 `docs/REVIEW-unify-2026-10-08.md`. Most of it is fixed in the tree beside
 this note. What is left:
 
-1. **vinsynlib must be pushed and tagged `v0.2.0`.** `p2ked/entry.py` now
-   relies on nothing from the library to check the library, so an old copy
-   is diagnosed rather than crashing, but the tag it prints
-   (`vinsynlib @ git+…@v0.2.0`) does not exist until somebody pushes. Until
-   then `pip install "<that URL>"` resolves the branch, which is the
-   situation the pin exists to end. The same `entry.py` change (local
-   version comparison, `MINIMUM = (0, 2, 0)`) is needed in all ten siblings.
+1. ~~**vinsynlib must be pushed and tagged `v0.2.0`.**~~ **Done, 2026-10-09.**
+   vinsynlib 0.2.0 is published on PyPI and tagged `v0.2.0`. The tag
+   `vinsynlib @ git+…@v0.2.0` now exists, and the ten siblings depend on
+   `vinsynlib>=0.2.0` from the index rather than a sibling checkout. What
+   remains is the `entry.py` change itself: p2ked uses `MINIMUM = (0, 2, 0)`,
+   and the other nine still carry `(0, 1, 0)`.
 2. **A per-tool config directory is the proper fix** for nine tools sharing
    one relative `config.toml`. The header guard and the table check stop
    them destroying each other's settings and stop one adopting another's

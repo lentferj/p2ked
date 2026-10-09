@@ -26,7 +26,7 @@ REQUIRED_BITS = (
     "error:",
     "vinsynlib",
     "pip install",
-    "git+https://github.com/lentferj/vinsynlib",
+    "vinsynlib>=0.2.0",
 )
 
 
