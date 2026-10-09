@@ -276,3 +276,46 @@ class TestWhatADisagreementMeans:
         c = cat.Catalog([cat.Entry("USER-0", 9, "Any Placeholder")])
         assert not c.differs("USER-0", 9)
         assert c.disagreement("USER-0", 9) is None
+
+
+class TestTheBankBaseOffset:
+    """TODO 18. The offset was re-walked on every call.
+
+    ``presets()`` used to walk ``rom.lsbs`` to find a bank's offset from the
+    start of its ROM, and the browser calls it once per highlighted row. The
+    table already knew the answer; it just was not written down.
+
+    What makes it safe to write down: ``ROMS`` is module data, built at
+    import, and nothing writes to it. The fitted-ROM filter the app toggles
+    is a list of bank ids in ``P2kedApp`` -- it decides which banks are
+    *shown*, not which numbers they answer on, so it cannot invalidate this.
+    The item's stated objection (``lsbs`` changes at runtime) turned out to
+    be about the app's filter rather than the table, and this test says what
+    is actually relied on.
+    """
+
+    def test_the_base_is_the_position_times_the_bank_size(self):
+        for entry in roms.ROMS:
+            for index, lsb in enumerate(entry.lsbs):
+                bank = roms.bank(f"{entry.id}-{lsb}")
+                assert bank.base == index * roms.PRESETS_PER_BANK, (
+                    f"{bank.id}: {bank.base} is not {index} banks in"
+                )
+
+    def test_the_first_preset_number_is_the_base(self):
+        for bank in roms.banks():
+            if not bank.count:
+                continue
+            first, last = roms.presets(bank.id)[0], roms.presets(bank.id)[-1]
+            assert first.number == bank.base
+            assert last.number == bank.base + bank.count - 1
+
+    def test_a_later_bank_does_not_restart_its_numbering(self):
+        """The whole point of ``number`` versus ``program_change``: a preset
+        is numbered within its ROM, so bank 1 preset 0 is ROM preset 128.
+        Recomputing the offset per call is where a slip would hide."""
+        for bank in roms.banks():
+            if bank.base == 0:
+                continue
+            assert roms.presets(bank.id)[0].program_change == 0
+            assert roms.presets(bank.id)[0].number != 0

@@ -151,6 +151,18 @@ class Bank:
     lsb: int
     #: Presets in this bank. The last bank of a ROM may hold fewer than 128.
     count: int
+    #: Offset of this bank's first preset from the start of the ROM:
+    #: ``PRESETS_PER_BANK`` per LSB that comes before it. Computed once when
+    #: the table is built rather than re-walked on every cursor move --
+    #: ``presets()`` used to walk ``rom.lsbs`` per call, and the browser
+    #: calls it once per highlighted row.
+    #:
+    #: Safe to hold because the table is module data: ``ROMS`` is a tuple
+    #: built at import and nothing writes to it. The fitted-ROM filter the
+    #: app toggles is a separate list of bank ids in ``P2kedApp`` -- it
+    #: decides which banks are *shown*, not which numbers they answer on,
+    #: so it cannot invalidate this.
+    base: int = 0
 
     @property
     def id(self) -> str:
@@ -319,10 +331,12 @@ def banks(rom_id: Optional[str] = None) -> List[Bank]:
     out: List[Bank] = []
     for entry in ROMS if rom_id is None else (rom(rom_id),):
         remaining = entry.count
+        base = 0
         for lsb in entry.lsbs:
             size = min(PRESETS_PER_BANK, remaining)
-            out.append(Bank(rom=entry, lsb=lsb, count=max(size, 0)))
+            out.append(Bank(rom=entry, lsb=lsb, count=max(size, 0), base=base))
             remaining -= size
+            base += PRESETS_PER_BANK
     return out
 
 
@@ -347,15 +361,14 @@ def presets(bank_id: str) -> List[Preset]:
     from the start of the bank, so bank 1 preset 0 is ROM preset 128 and
     program change 0. Both are carried; neither is derived at the point of
     use.
+
+    The ROM offset is read off the bank rather than re-walked: this is
+    called once per highlighted row, and the walk it used to do answered a
+    question the table already knows. See :attr:`Bank.base`.
     """
     entry = bank(bank_id)
-    base = 0
-    for lsb in entry.rom.lsbs:
-        if lsb == entry.lsb:
-            break
-        base += PRESETS_PER_BANK
     return [
-        Preset(bank=entry, number=base + index, program_change=index)
+        Preset(bank=entry, number=entry.base + index, program_change=index)
         for index in range(entry.count)
     ]
 
