@@ -243,6 +243,18 @@ means somebody saved over the factory preset, which is worth pointing out.
 In a *ROM* bank it cannot mean that — so it means the printed list is wrong
 and the unit is right. `Catalog.disagreement` says which.
 
+**Corrected 2026-10-09.** The user-bank half of that paragraph turned out to
+be wrong, and it is worth saying so here rather than deleting it: the
+sentence above was carried into `Catalog.disagreement`, which then printed
+it 512 times where nothing had been saved over anything. E-MU's own
+instrument-definition file cannot document user memory, so its user-bank
+sections hold placeholders — `usr:A0` … `usr:D127` — and a real preset name
+can never equal one. The comparison was therefore guaranteed to "fail" in
+every user bank, endlessly. `differs` now makes the comparison only where
+the printed list has authority, which is a ROM; a user bank's `*` is gone
+and so is that sentence. The ROM half of this note — all 49 Composer rows
+— stands as written, and is still tested.
+
 ---
 
 ## §8 — "Multi" means two different things on this machine

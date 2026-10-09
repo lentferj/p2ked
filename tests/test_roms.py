@@ -196,10 +196,15 @@ class TestXLeadTwo:
 class TestWhatADisagreementMeans:
     """A name differing from the catalog means different things by bank.
 
-    In a user bank: somebody saved over the factory preset. In a ROM bank
-    that is impossible, so it means the printed list is wrong -- which is
-    the case for 11 of one ROM's 640 names, every one a whitespace
+    In a ROM bank it means the printed list is wrong and the unit is right,
+    which is the case for 11 of one ROM's 640 names, every one a whitespace
     difference E-MU's own document normalised away.
+
+    A **user** bank cannot support the comparison at all: its printed names
+    are E-MU's own placeholders (``usr:A0``, or anything like it), so a
+    difference against them is guaranteed and means nothing. That is what
+    marked every slot of every user bank with ``*`` and printed "saved over
+    the factory preset" 128 times.
 
     Names here are invented, per CLAUDE.md; the shape of the difference is
     the real one.
@@ -210,7 +215,7 @@ class TestWhatADisagreementMeans:
 
         c = cat.Catalog(
             [
-                cat.Entry("USER-0", 0, "Book Name"),
+                cat.Entry("USER-0", 0, "Printed A Placeholder"),
                 cat.Entry("XLEAD2-0", 90, "abc:Woven 1"),
             ]
         )
@@ -218,27 +223,56 @@ class TestWhatADisagreementMeans:
         c.set_live_name("XLEAD2-0", 90, "abc:Woven  1")  # two spaces
         return c
 
-    def test_a_user_bank_difference_means_it_was_saved_over(self):
+    def test_a_user_bank_is_never_marked_as_edited(self):
+        """The bug: reading a user bank flagged every preset in it.
+
+        E-MU's instrument definitions cannot document user memory, so the
+        user banks carry placeholders where somebody's saved work goes. A
+        real name can never equal one, so the comparison was guaranteed to
+        "fail" for all 512 slots whether or not anybody had touched them.
+        """
         c = self._catalog()
-        assert c.disagreement("USER-0", 0, roms.USER.writable) == (
-            "saved over the factory preset"
-        )
+        assert not c.differs("USER-0", 0)
+        assert c.disagreement("USER-0", 0) is None
+        # The live name is still the one shown, and still says it came from
+        # the unit -- which was always the real signal here.
+        assert c.display_name("USER-0", 0) == "My Own Sound"
+        assert c.is_live("USER-0", 0)
 
     def test_a_rom_difference_means_the_book_is_wrong(self):
         c = self._catalog()
-        assert "printed list is wrong" in c.disagreement(
-            "XLEAD2-0", 90, roms.rom("XLEAD2").writable
-        )
+        assert "printed list is wrong" in c.disagreement("XLEAD2-0", 90)
 
     def test_agreement_is_not_a_disagreement(self):
         from p2k import catalog as cat
 
         c = cat.Catalog([cat.Entry("USER-0", 1, "Same")])
         c.set_live_name("USER-0", 1, "Same")
-        assert c.disagreement("USER-0", 1, True) is None
+        assert c.disagreement("USER-0", 1) is None
 
     def test_an_unread_slot_says_nothing(self):
         from p2k import catalog as cat
 
         c = cat.Catalog([cat.Entry("USER-0", 2, "Book")])
-        assert c.disagreement("USER-0", 2, True) is None
+        assert c.disagreement("USER-0", 2) is None
+
+    def test_a_bank_the_table_does_not_know_keeps_the_comparison(self):
+        """A LookupError must not switch the check off everywhere.
+
+        Invented bank ids -- a test fixture, a future ROM the table has not
+        grown yet -- are not user memory, so a printed name there keeps its
+        authority. This is also the shape of :class:`Catalog` used with a
+        catalog keyed by something other than p2k's bank ids.
+        """
+        from p2k import catalog as cat
+
+        c = cat.Catalog([cat.Entry("invented-0", 0, "Printed Name")])
+        c.set_live_name("invented-0", 0, "Saved Over")
+        assert c.differs("invented-0", 0)
+
+    def test_a_user_bank_with_nothing_read_says_nothing_either(self):
+        from p2k import catalog as cat
+
+        c = cat.Catalog([cat.Entry("USER-0", 9, "Any Placeholder")])
+        assert not c.differs("USER-0", 9)
+        assert c.disagreement("USER-0", 9) is None

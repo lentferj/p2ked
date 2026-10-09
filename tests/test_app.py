@@ -108,15 +108,34 @@ class TestReadingNamesIsSilent:
                 await pilot.pause()
             assert app.catalog.live_name("USER-0", 5) == demo_name("USER-0", 5)
 
-    async def test_a_difference_from_the_catalog_is_flagged(self, app):
-        """A user bank somebody has saved into is the most useful thing
-        this screen can point out."""
+    async def test_a_user_bank_read_is_not_flagged_as_edited(self, app):
+        """The reported bug: every preset in every user bank carried `*`.
+
+        The catalog's user-bank "names" are E-MU's placeholders, so reading
+        a real bank off the unit and comparing produced 128 differences and
+        128 footnotes saying "saved over the factory preset" -- on a bank
+        nobody had edited, and on a bank that had, indistinguishably.
+        """
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("r")
             for _ in range(40):
                 await pilot.pause()
-            assert app.catalog.differs("USER-0", 0)
+            assert app.catalog.is_live("USER-0", 0)
+            assert not app.catalog.differs("USER-0", 0)
+            assert app.catalog.disagreement("USER-0", 0) is None
+
+    async def test_the_status_line_says_why_the_count_is_absent(self, app):
+        """Not "0 differ": a user bank has nothing printed to differ from."""
+        said: list[str] = []
+        app.notify_status = lambda message, **_kw: said.append(message)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("r")
+            for _ in range(40):
+                await pilot.pause()
+            assert any("nothing printed to compare it against" in m for m in said)
+            assert not any("differ from the catalog" in m for m in said)
 
 
 class TestOneOperationAtATime:

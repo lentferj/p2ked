@@ -190,6 +190,9 @@ be saved over, so a difference in a ROM bank cannot mean "somebody stored
 their own sound here"; it means the printed list is wrong and the unit is
 right. That is what the screen will say, on all 49, and it is correct.
 
+This item is ROM-only and stands. The *user*-bank half of the same idea did
+not: see item 45, which removed it.
+
 ### 4. The cost, measured at the same time
 
 1664 names in 31.0 seconds: **18.6 ms per name**, from a sample three
@@ -1100,3 +1103,48 @@ this note. What is left:
    properly, at the cost of a family-wide change to `spec.py`'s `--config`
    help and every tool's conformance test. Not done here: it is a contract
    change, not a bug fix.
+## 45. Every user-bank preset was marked `*` as saved over — FIXED 2026-10-09
+
+**Status:** **fixed.** Real, and reported from the field: opening the
+browser and letting it read a user bank put a trailing `*` on all 128
+names, with the footnote "saved over the factory preset" under every one
+and a status line reading "read 128 names from USER-2; 128 differ from the
+printed catalog".
+
+**Cause.** `Catalog.differs` compared the live name against the printed
+one, and a user bank's printed "names" are E-MU's own placeholders. Their
+instrument-definition file cannot document what a user saves into user
+memory, so the user-bank sections hold `usr:A0` … `usr:D127` — 512 rows
+across the four banks. A real preset name can never equal `usr:C0`, so the
+comparison was guaranteed to "fail" for every slot in every user bank,
+whether or not anybody had touched it. Reproduced against the real
+generated catalog:
+
+    USER-0: printed='usr:A0'   differs=True   (before: every slot)
+    XTREME-0: printed='arp:…'  differs=True   (a real printed name)
+
+`p2ked/app.py`'s `_auto_read_user_names` already knew this — its docstring
+says a catalog entry for a user bank is "a placeholder and always wrong" —
+but that knowledge was never carried into `Catalog.differs`, which is where
+the `*` is decided.
+
+**Fix.** `differs` makes the comparison only where the printed list has
+authority, which is a ROM: a bank whose `rom.writable` is true answers
+False, because there is nothing real to disagree with. `disagreement`
+therefore no longer needs its `writable` parameter (it is gone, rather than
+left to be passed and ignored) and has one sentence left. `_adopt_names`
+reports what actually happened for a user bank instead of a count that can
+only ever be zero.
+
+**What is lost, deliberately.** A user bank somebody has saved into is no
+longer flagged. It was never flagged *correctly* — the flag fell for every
+bank, so it distinguished nothing. The real signal there is the live name
+itself, which is read and shown. Getting the flag back would need a catalog
+carrying real user-bank names, which nothing can generate.
+
+Tests: `tests/test_roms.py::TestWhatADisagreementMeans` (user bank never
+marked, ROM bank still marked, an unknown bank id keeps the comparison so a
+`LookupError` does not switch the check off everywhere),
+`tests/test_app.py` (a read user bank is not flagged, and the status line
+says why), `tests/test_cli.py::TestFind` (the marker is exercised on a ROM
+slot, since a user slot can no longer produce one).

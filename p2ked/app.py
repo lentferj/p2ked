@@ -846,9 +846,7 @@ class P2kedApp(App):
             return
         entry = self._current[row]
         name = self.catalog.display_name(entry.bank_id, entry.program_change)
-        why = self.catalog.disagreement(
-            entry.bank_id, entry.program_change, entry.rom.writable
-        )
+        why = self.catalog.disagreement(entry.bank_id, entry.program_change)
         note = f"  [dim]* {why}[/dim]" if why else ""
         self.query_one("#detail", Static).update(
             f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}"
@@ -977,10 +975,25 @@ class P2kedApp(App):
             )
         if bank_id == self._current_bank:
             self._fill_presets(bank_id)
-        self.notify_status(
-            f"read {len(names)} names from {bank_id}"
-            + (f"; {differing} differ from the catalog" if differing else "")
-        )
+        try:
+            own_memory = self._is_user_bank(bank_id)
+        except LookupError:  # a bank the table does not list: not our doing
+            own_memory = False
+        if own_memory and names:
+            # A user bank's printed names are placeholders -- `usr:C0` is
+            # E-MU's own admission that the document does not know -- so
+            # `differing` is 0 here whatever the unit said, and used to be
+            # 128, which marked every slot as saved over. Say what happened
+            # rather than reporting a count that cannot be non-zero.
+            self.notify_status(
+                f"read {len(names)} names from {bank_id}: your own work, with "
+                f"nothing printed to compare it against"
+            )
+        else:
+            self.notify_status(
+                f"read {len(names)} names from {bank_id}"
+                + (f"; {differing} differ from the catalog" if differing else "")
+            )
 
     def action_channel_down(self) -> None:
         """Previous MIDI channel. Sends nothing by itself."""

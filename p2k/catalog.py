@@ -23,9 +23,15 @@ Two sources, kept apart all the way to the screen:
 * **Live** names, read from a unit over System Exclusive.
 
 A single mapping cannot keep them distinguishable, and the distinction is
-the useful part: a user bank whose live name differs from the printed one is
-a bank somebody has saved their own work into, and that is the single most
-informative thing this program can put on a screen.
+the useful part: a ROM bank whose live name differs from the printed one is
+a printed list E-MU got wrong, and the unit is right. That is the single
+most informative thing this program can put on a screen.
+
+A **user** bank cannot support the same comparison. Its printed "names" are
+placeholders -- E-MU's own instrument-definition file ships ``usr:A0``
+wherever somebody's saved work goes -- so a difference against them is
+guaranteed and means nothing. See :meth:`differs` for what that costs and
+why it is still the right answer.
 
 Unlike the sibling rxved, reading live names here costs nothing but time --
 a Proteus names any preset on request without selecting it. There is
@@ -40,6 +46,8 @@ import sys
 import os
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
+
+from p2k import roms
 
 __all__ = ["Entry", "Catalog", "load", "empty", "DEFAULT_PATH"]
 
@@ -57,6 +65,20 @@ class Entry:
     @property
     def key(self) -> str:
         return f"{self.bank_id}:{self.program_change:03d}"
+
+
+def _writable_bank(bank_id: str) -> bool:
+    """Whether ``bank_id`` is the unit's own memory.
+
+    The four user banks, and nothing else: a bank p2ked's ROM table does
+    not list is *not* user memory, so the printed name keeps its authority.
+    A :class:`LookupError` must not quietly switch the check off everywhere,
+    which is what returning False here does.
+    """
+    try:
+        return roms.bank(bank_id).rom.writable
+    except LookupError:
+        return False
 
 
 class Catalog:
@@ -105,11 +127,19 @@ class Catalog:
     def differs(self, bank_id: str, program_change: int) -> bool:
         """Whether the unit and the printed list disagree about this slot.
 
-        **What a disagreement means depends on the bank.** In a user bank it
-        means somebody has saved their own work over the factory preset,
-        which is the most useful thing this program can point out. In a ROM
-        bank it cannot mean that -- ROM does not change -- so it means the
-        printed list is wrong, and the unit is right.
+        **A user bank cannot disagree, because its printed name is not a
+        name.** E-MU's own instrument-definition file cannot document what
+        a user has saved into user memory, so its user-bank sections hold
+        placeholders -- ``usr:A0``, ``usr:C0`` -- 512 of them across the
+        four banks. Comparing a real preset name against one of those
+        always "differs", which is what produced a screen where every slot
+        in every user bank carried ``*`` and the footnote said "saved over
+        the factory preset" 128 times. A placeholder is an admission that
+        the document does not know, not a claim to be wrong about.
+
+        So the comparison is only made where the printed list has
+        authority: a ROM. There a difference means the printed list is
+        wrong and the unit is right, which is the finding this exists for.
 
         That is not hypothetical, and it is not only whitespace. Reading
         whole ROMs off a unit and comparing them with E-MU's own published
@@ -125,28 +155,38 @@ class Catalog:
           carrying the wrong category prefix (one of them naming a different
           instrument entirely: ``kb3:DX Organ`` against ``kit:Kit 1``).
 
-        In both cases the unit is right and the printed list is wrong, which
-        is exactly what this method's docstring says a ROM-bank difference
-        means. Callers should say which kind of disagreement they are
-        showing; see :meth:`disagreement` and p2ked/app.py.
+        **What is lost by this:** a user bank somebody has saved into is no
+        longer flagged. It was never flagged *correctly* -- the printed
+        name was a placeholder, so the flag fell for every bank whether or
+        not anybody had touched it -- and the real signal for that case is
+        the live name itself, which is read and shown. To get the flag back
+        would mean a catalog that carried real user-bank names, which
+        nothing can generate; see :meth:`disagreement`.
         """
         live = self.live_name(bank_id, program_change)
         if live is None:
             return False
         printed = self.name(bank_id, program_change)
-        return printed is not None and printed != live
+        if printed is None or printed == live:
+            return False
+        return not _writable_bank(bank_id)
 
-    def disagreement(
-        self, bank_id: str, program_change: int, writable: bool
-    ) -> Optional[str]:
-        """Why the unit and the catalog differ here, in words.
+    def disagreement(self, bank_id: str, program_change: int) -> Optional[str]:
+        """Why the unit and the printed list differ here, in words.
 
-        ``None`` when they agree or the slot has not been read.
+        ``None`` when they agree, when the slot has not been read, or when
+        the bank is the unit's own memory -- where the printed name is a
+        placeholder and there is nothing to disagree with.
+
+        It used to take a ``writable`` flag and say "saved over the factory
+        preset" for a user bank. That sentence could only ever be reached by
+        comparing a live name against ``usr:C0``, so it was printed for
+        every slot in every user bank and never once because somebody had
+        actually saved over something. The parameter is gone rather than
+        left to be passed and ignored.
         """
         if not self.differs(bank_id, program_change):
             return None
-        if writable:
-            return "saved over the factory preset"
         return "the printed list is wrong; the unit is right"
 
     def display_name(self, bank_id: str, program_change: int) -> str:
@@ -165,8 +205,10 @@ class Catalog:
         about that slot, so a caller can show the same ``*`` the browser
         does. Search is where it matters most: the browser marks a slot the
         user is already looking at, while a search result is a name from a
-        bank they have not opened -- which is how a user bank somebody has
-        saved over gets noticed at all.
+        bank they have not opened -- which is how a ROM bank whose printed
+        list is wrong gets noticed at all. A user bank's hit never carries
+        the mark; its printed name is a placeholder, so there is nothing to
+        disagree with.
         """
         wanted = needle.strip().lower()
         if not wanted:

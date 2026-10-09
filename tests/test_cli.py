@@ -103,11 +103,16 @@ class TestFind:
     """
 
     def _catalog_with_a_disagreement(self, catalog_file):
-        """The printed catalog, plus one slot the unit has renamed."""
+        """The printed catalog, plus one slot the unit has renamed.
+
+        A **ROM** slot, deliberately: a user bank cannot produce a
+        disagreement any more (its printed names are placeholders), so this
+        is the only kind of slot that can carry the `*`.
+        """
         from p2k import catalog as cat
 
         catalog = cat.load(catalog_file)
-        catalog.set_live_name("USER-0", 0, "Renamed By Unit")
+        catalog.set_live_name("XLEAD-0", 5, "Renamed By Unit")
         return catalog
 
     def test_it_finds_a_name(self, capsys, catalog_file, monkeypatch):
@@ -133,16 +138,16 @@ class TestFind:
             "_catalog",
             lambda args: self._catalog_with_a_disagreement(catalog_file),
         )
-        assert cli.main(["--catalog", catalog_file, "find", "bell"]) == 0
+        assert cli.main(["--catalog", catalog_file, "find", "kelp"]) == 0
         out = capsys.readouterr().out
         assert "*" in out, "a name the unit disagrees about must be marked"
         assert "disagree" in out, "the footnote explaining the marker"
 
     def test_an_agreeing_name_is_not_marked(self, capsys, catalog_file):
         """Only a genuine disagreement gets the `*`."""
-        assert cli.main(["--catalog", catalog_file, "find", "forest"]) == 0
+        assert cli.main(["--catalog", catalog_file, "find", "bell"]) == 0
         out = capsys.readouterr().out
-        assert "Kelp Forest" in out
+        assert "Printed Bell" in out
         assert "disagree" not in out
 
     def test_the_live_name_is_shown_when_it_matches(
