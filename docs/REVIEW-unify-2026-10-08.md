@@ -15,11 +15,13 @@ SPDX-FileCopyrightText: Copyright (C) 2026  p2ked contributors
 > `make check` is green in both repositories. `TODO.md` item 44 records what
 > is left.
 >
-> **Status, 2026-10-09: F1 closed.** vinsynlib 0.2.0 is published on PyPI and
-> tagged `v0.2.0`, and the ten siblings now depend on `vinsynlib>=0.2.0` from
-> the index rather than a sibling checkout. The "`origin/main` is broken"
-> rows below describe the state before the push; they are kept as the record
-> of why the version gate was rewritten, not as a current status.
+> **Status, 2026-10-09: F1 and F5 closed by publication.** vinsynlib 0.2.0 is
+> published on PyPI and tagged `v0.2.0`; the ten siblings depend on
+> `vinsynlib>=0.2.0` from the index rather than a sibling checkout, the
+> `entry.py` version gate has been ported to all ten (fix item 6), and F5's
+> install-path findings fall with it. See the notes on F1 and F5 below. The
+> findings are kept as written: they are the record of why the gates were
+> built this way.
 
 Scope: `ddd9f6d..9b77ebb` on `master`. That is the fast-forward of `unify`
 (6403ec6, fc986cc, 52ff7ee, 3d27bbe, 5430ca1, 64d1ac1) plus 9b77ebb on top.
@@ -85,6 +87,14 @@ Checked and fine:
 ---
 
 ## F1 — Critical: the version gate depends on API that is not published
+
+> **Resolved, 2026-10-09.** vinsynlib 0.2.0 is published and tagged, so
+> `origin/main` has `is_compatible_version` and `__version__` reports `0.2.0`.
+> p2ked's `entry.py` now carries the stdlib-only comparison (`_release_parts`)
+> against `MINIMUM = (0, 2, 0)` and never imports the library to check it, and
+> the same port has been applied to all nine siblings (fix item 6). Fix item 5
+> — a check that the published library actually satisfies what `MINIMUM`
+> claims — is the one piece still not built.
 
 **Where:** `p2ked/entry.py:54`, `MINIMUM = (0, 1, 0)`, `SOURCE` at line 40.
 
@@ -349,6 +359,14 @@ Three related problems:
 ---
 
 ## F5 — Medium: the install path is broken, contradicts itself, and is open to dependency confusion
+
+> **Resolved, 2026-10-09 — by publication rather than by the fixes proposed
+> below.** `vinsynlib` is on PyPI at 0.2.0 and p2ked depends on
+> `vinsynlib>=0.2.0`, so a plain `pip install -e .` resolves it, the sibling
+> checkout and its `--no-deps` dance are gone from the Makefile and the
+> README, the dependency-confusion window is closed by the version floor and
+> the registration, and `entry.py` prints the one command that works. Item 4
+> (declaring `vinsynlib[ui,midi]`) is the only piece still open.
 
 1. **`make install` never installs vinsynlib** (`Makefile:53-60`).
    `requirements-dev.txt` does not list it and the project is installed
