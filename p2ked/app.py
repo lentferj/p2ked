@@ -424,6 +424,9 @@ class P2kedApp(App):
         self.view_mode = VIEW_ALL
         #: User banks whose names have already been fetched this session.
         self._auto_read: set = set()
+        #: The bank waiting for its names because something else had the
+        #: wire. One slot, not a queue -- see :meth:`_auto_read_user_names`.
+        self._wanted: Optional[str] = None
         #: ``{bank_id: {program change: name}}`` as each bank was first read
         #: this session -- the baseline a later read is compared against.
         #: Only user banks are ever read unprompted (a ROM's names are the
@@ -652,15 +655,52 @@ class P2kedApp(App):
         and a half seconds, silently.
 
         Once per bank per session, and never while something else is on the
-        wire. Pressing `r` still works and re-reads.
+        wire -- but a bank skipped because the wire was busy is *remembered*,
+        and read when it frees. That is the whole difference between this
+        and what it used to do:
+
+            scroll 0 -> 1 -> 2 quickly
+              old: bank 1 reads, bank 2 is dropped on the floor, and nothing
+                   runs until the cursor moves off it and back on
+              now: bank 1 reads, then bank 2 reads, with no further input
+
+        The want is recorded *before* the busy test, because returning before
+        recording it is what lost the bank in the first place. One slot, not
+        a queue: whichever bank is on screen when the wire frees is the one
+        that gets read, and a bank passed over in the interim is not
+        re-visited for its own sake.
         """
-        if self.device is None or self._busy:
+        if self.device is None:
             return
         if bank_id in self._auto_read or not self._is_user_bank(bank_id):
             return
-        self._auto_read.add(bank_id)
+        self._wanted = bank_id
+        self._pump_reading()
+
+    def _pump_reading(self) -> None:
+        """Start the read that is waiting, if there is one and the bus is free.
+
+        Main thread only. Every path that finishes with the wire clears
+        ``_busy`` and then calls this, so a read deferred by a busy bus is
+        picked up without anybody having to notice it was skipped.
+
+        A deferred bank is *not* dropped if the reader has moved on. The
+        auto-read was always going to read it -- it is the same read, one
+        cursor stop later -- and scrolling back to a bank that is already
+        loaded is the point. The alternative, dropping it, means a bank
+        scrolled past is never loaded until it is visited again, which is
+        the bug this whole mechanism was written about.
+        """
+        wanted = self._wanted
+        if wanted is None or self._busy or self.device is None:
+            return
+        if wanted in self._auto_read:
+            self._wanted = None
+            return
+        self._wanted = None
+        self._auto_read.add(wanted)
         self._busy = True  # main thread, before the spawn; see _busy
-        self._read_worker(bank_id)
+        self._read_worker(wanted)
 
     def _fill_presets(self, bank_id: str) -> None:
         table = self.query_one("#preset-table", DataTable)
@@ -978,7 +1018,18 @@ class P2kedApp(App):
 
     @work(thread=True)
     def _read_worker(self, bank_id: str) -> None:
-        """**MIDI only** -- the catalog is updated on the main thread."""
+        """**MIDI only** -- everything after it happens on the main thread.
+
+        The ``_busy`` flag is cleared on the main thread, by whatever
+        handler the hand-off reaches, and never in this thread's ``finally``.
+        Clearing it here let the flag flip *before* the names had made it
+        onto the main thread, so a fast second press started a second read
+        with the first still delivering; and with the deferred read below,
+        the next read would be spawned and then have the flag cleared out
+        from under it. One hand-off, one place, one order.
+        """
+        error: Optional[str] = None
+        names: Dict[int, str] = {}
         try:
 
             def progress(done: int, total: int) -> None:
@@ -989,14 +1040,30 @@ class P2kedApp(App):
             with self._lock:
                 names = self.device.read_bank_names(bank_id, on_progress=progress)
         except Exception as exc:
-            self.call_from_thread(self.notify_status, f"read: {exc}", refused=True)
-        else:
-            # Handed off *before* the flag is cleared below, so the next
-            # operation cannot start while this bank's names are still
-            # making their way onto the main thread.
-            self.call_from_thread(self._adopt_names, bank_id, names)
-        finally:
+            error = f"read: {exc} ({bank_id})"
+        try:
+            if error is not None:
+                self.call_from_thread(self._read_finished, error)
+            else:
+                self.call_from_thread(self._adopt_names, bank_id, names)
+        except Exception:
+            # The app is going away, so there is no main thread to hand off
+            # to. Clearing the flag here -- the very thing the docstring
+            # forbids -- is the lesser evil: a flag left set refuses every
+            # MIDI operation for the rest of the session, and there is no
+            # session left to race.
             self._busy = False
+
+    def _read_finished(self, error: Optional[str] = None) -> None:
+        """The wire is free again: say so, and pick up any deferred read.
+
+        Main thread. ``_adopt_names`` calls this after adopting a bank's
+        names, which is what keeps the flag and the adoption in one order.
+        """
+        if error is not None:
+            self.notify_status(error, refused=True)
+        self._busy = False
+        self._pump_reading()
 
     def _adopt_names(self, bank_id: str, names: Dict[int, str]) -> None:
         for program_change, name in names.items():
@@ -1043,6 +1110,7 @@ class P2kedApp(App):
         else:
             said = f"read {len(names)} names from {bank_id}; nothing changed"
         self.notify_status(said)
+        self._read_finished()
 
     def action_channel_down(self) -> None:
         """Previous MIDI channel. Sends nothing by itself."""

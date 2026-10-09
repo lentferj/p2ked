@@ -576,3 +576,59 @@ class TestUserBanksReadThemselves:
             )
         finally:
             store.close()
+
+    def test_a_read_skipped_by_a_busy_wire_is_not_forgotten(self, tmp_path):
+        """The reported bug: scrolling 0 -> 1 -> 2 quickly read bank 1 and
+        then nothing, because bank 2's read was dropped on the floor.
+
+        The old code tested ``_busy`` *before* deciding it wanted the bank,
+        so a bank that arrived while the wire was busy left no trace and
+        nothing re-drove it -- the cursor was already there, so no further
+        highlight event was ever going to fire.
+        """
+        app, store = self._app(tmp_path)
+        calls = []
+        app._read_worker = lambda bank_id: calls.append(bank_id)
+        try:
+            app._auto_read_user_names("USER-1")  # the bus is free: it starts
+            assert calls == ["USER-1"]
+            assert app._busy is True
+            app._auto_read_user_names("USER-2")  # bus busy: deferred, not lost
+            assert calls == ["USER-1"]
+            assert "USER-2" not in app._auto_read
+            assert app._wanted == "USER-2"
+
+            # Bank 1's read lands. This is what used to happen with nothing
+            # following it.
+            app._read_finished()
+            assert calls == ["USER-1", "USER-2"], (
+                "the deferred read was not picked up when the wire freed"
+            )
+            assert app._wanted is None
+        finally:
+            store.close()
+
+    def test_a_deferred_read_goes_ahead_even_after_the_reader_moved_on(self, tmp_path):
+        """The bank is not dropped once the cursor has left it.
+
+        It is the same read the auto-read was always going to do, one
+        cursor stop later; dropping it would mean a bank scrolled past is
+        never loaded until it is visited again, which is the reported bug
+        arriving by another road. What *does* clear a want is the read
+        having happened.
+        """
+        app, store = self._app(tmp_path)
+        calls = []
+        app._read_worker = lambda bank_id: calls.append(bank_id)
+        try:
+            app._current_bank = "COMPOSER-0"
+            app._wanted = "USER-2"
+            app._pump_reading()
+            assert calls == ["USER-2"]
+            # The read is in flight: nothing else starts, and the want is
+            # already consumed, so landing does not read it twice.
+            assert app._wanted is None
+            app._read_finished()
+            assert calls == ["USER-2"], "a consumed want was re-read"
+        finally:
+            store.close()
