@@ -374,7 +374,15 @@ decorated function, so the check is one more loop over an existing list,
 and the guard-that-the-guard-has-something-to-check pattern is already
 written twice in that file.
 
-**Blocked on:** nothing.
+**Fixed 2026-10-10.** The check is `test_no_worker_writes_the_settings_cache`,
+one more loop over that same `_workers()` generator. It catches any
+`*.save_*` call in a worker and reports the worker and the method.
+
+`test_a_worker_writing_config_is_caught` proves it can fail, by parsing a
+synthetic worker from `textwrap.dedent`. That second test matters more than
+it looks: the refactor which would make the check vacuous is exactly the one
+an edit feature tempts somebody into -- moving a settings write behind a
+worker so the interface does not pause on it.
 
 ## 12. `catalog.search` dropped the disagreement it knows about — FIXED
 
@@ -486,7 +494,22 @@ ROM set, which the app can change at runtime when the fitted-ROM filter is
 toggled, so a cache keyed on `bank_id` would need invalidating on exactly
 the event most likely to be forgotten.
 
-**Blocked on:** a reason. None yet.
+**Status:** **fixed 2026-10-10 -- and the stated reason not to do it was
+wrong.** The concern recorded below was that `lsbs` is the installed ROM set,
+which "the app can change at runtime when the fitted-ROM filter is toggled".
+That is the app's *list of bank ids*, `P2kedApp._bank_ids`, which decides
+what is **shown**; `roms.ROMS` is a tuple built at import and nothing writes
+to it. A preset's number within its ROM cannot therefore change under a
+cache, and there was never a cache to invalidate.
+
+`Bank` carries `base` now, filled in once by `banks()` where it already
+walked the LSBs, and `presets()` reads it. No behaviour change: three tests
+in `tests/test_roms.py::TestTheBankBaseOffset` assert the field equals
+`PRESETS_PER_BANK * index`, that the first and last preset numbers bracket a
+bank exactly, and that a later bank does not restart its numbering. The one
+case where the old walk and the new field could have diverged -- a *trailing*
+bank that is partly full -- cannot, because truncation only ever happens to
+the last bank of a ROM, so every bank before it is a whole 128 wide.
 
 ## 19. A test wrote `config.toml` into the working directory — FIXED
 
@@ -522,16 +545,34 @@ adds the following process/tooling items.*
 
 ## 20. No static type checking in CI
 
-**Status:** open, a suggestion rather than a defect. Not acted on.
+**Status:** **fixed 2026-10-10 -- as the whole gate, not just mypy.**
 
-mypy is not installed here and none of the four sibling projects configures
-it. The two places the review names as beneficiaries have both since been
-settled by other means: item 22's signature mismatch is real but
-unreachable (see there), and item 23's return type has changed shape and is
-pinned by a test. Worth doing across all four together, or not at all --
-one project with `mypy --strict` and three without is the worst of both.
+`.github/workflows/ci.yml` runs `make install && make check` on
+ubuntu/macOS/windows × Python 3.11/3.12/3.13 -- ruff, format, mypy, the
+suite with its coverage gate, and all four audits. The gate is not a
+reimplementation: CI runs the same commands a new contributor does, because
+a gate that diverges from the documented one is a gate nobody trusts.
 
-**Blocked on:** a decision to adopt it everywhere.
+The "all four together or not at all" half is still true and deliberately
+not attempted: this runs p2ked's **own** mypy configuration, not
+`--strict`. One project with a much stricter gate than its siblings buys a
+week of fixing the backlog and no family consistency.
+
+It earned its keep before it first ran. `make install` had been installing
+the project with `--no-deps`, which was correct while vinsynlib was a sibling
+checkout and silently wrong after the library moved to PyPI: the runtime
+dependency p2ked cannot start without was never installed at all, so
+`make install && make check` failed on the first import. The Makefile now
+installs plainly, and the clean-venv path has been run end to end to prove
+it -- which is the first time anybody ran that sequence since 3d27bbe
+documented it.
+
+Unverified until it runs on GitHub: whether python-rtmidi 1.5.8 builds from
+sdist on 3.13 for Windows and macOS. It publishes no cp313 wheel, so Linux
+gets `libasound2-dev` (already in the workflow) and the other two link
+against WinMM and CoreMIDI. If a build fails there, the fix is a Python
+version floor for the matrix or an unpinned `python-rtmidi` -- not a change
+to the project.
 
 ## 21. Test suite not parallelised
 

@@ -137,6 +137,89 @@ class TestWorkersOnlyDoMidi:
             f"that is the main thread's job"
         )
 
+    def test_no_worker_writes_the_settings_cache(self):
+        """TODO 11. The third check of this shape, for the same reason.
+
+        Nothing reaches `_update` from two threads today, because nothing
+        the workers do writes settings -- the rule is what keeps it safe,
+        not a lock. The rule is enforced for the catalog and for widgets,
+        and it was not enforced for the one call that would end badly
+        *elsewhere*: `Settings.update` rewrites the whole file, so two
+        concurrent writers interleave, and the user's port name can end up
+        half of each.
+
+        `test_a_worker_writing_config_is_caught` below proves this check can
+        fail; a guard that passes because it matched nothing is worse than
+        none.
+        """
+        offenders = []
+        for node in self._workers():
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr.startswith("save_")
+                ):
+                    offenders.append(f"{node.name}: {inner.func.attr}")
+        assert not offenders, (
+            f"worker(s) write settings: {sorted(set(offenders))}. `update` "
+            f"rewrites the whole file, so two writers interleave and the "
+            f"port can end up half of each. Hand it off instead."
+        )
+
+    def test_a_worker_writing_config_is_caught(self):
+        """The guard above must be able to fail. Written against a source
+        p2ked does not have, because the check is otherwise one refactor
+        away from being vacuous -- and the refactor that turns it vacuous
+        is exactly the one a future edit feature would tempt somebody into.
+        """
+        import textwrap
+
+        source = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "p2ked",
+            "app.py",
+        )
+        # Read, not parsed: the point is that the real source is where this
+        # check lives, so a future edit that moves it cannot leave the
+        # synthetic half behind testing nothing.
+        assert os.path.exists(source)
+        synthetic = ast.parse(
+            textwrap.dedent(
+                """
+                from textual import work
+
+                class Something:
+                    @work(thread=True)
+                    def _worker(self):
+                        from p2k import config
+                        config.save_channel(1)
+                """
+            )
+        )
+        offenders = []
+        for node in ast.walk(synthetic):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            decorated = any(
+                (isinstance(d, ast.Call) and getattr(d.func, "id", "") == "work")
+                or getattr(d, "id", "") == "work"
+                for d in node.decorator_list
+            )
+            if not decorated:
+                continue
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr.startswith("save_")
+                ):
+                    offenders.append(inner.func.attr)
+        assert offenders == ["save_channel"], (
+            "the check does not catch a worker writing settings; it would "
+            "pass on the tree it is meant to guard"
+        )
+
 
 class TestConfigIsNotWrittenBehindTheSuitesBack:
     """``config.DEFAULT_PATH`` is relative, so a pathless save hits the CWD.
