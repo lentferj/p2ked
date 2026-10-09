@@ -57,7 +57,13 @@ install: ## Create .venv and install pinned dev dependencies
 	@# venv's existence, which is false until the line above has run.
 	$(VENV)/bin/python -m pip install --upgrade pip
 	$(VENV)/bin/python -m pip install -r requirements-dev.txt
-	$(VENV)/bin/python -m pip install -e . --no-deps
+	@# --no-deps used to be here, and is gone now that vinsynlib resolves
+	@# from an index: with it, the shared library -- a runtime dependency
+	@# p2ked cannot start without -- was never installed at all, and
+	@# `make install && make check` failed on the first import. The pinned
+	@# dev set is installed above, so this line adds the project and the
+	@# runtime dependencies the pins do not cover.
+	$(VENV)/bin/python -m pip install -e .
 	@echo
 	@echo "Done. Next: make install-hooks"
 

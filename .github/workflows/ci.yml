@@ -1,0 +1,66 @@
+# p2ked's CI -- the gate `make check` is, run where nobody's machine decides.
+#
+# This exists because of TODO item 20: the suite passed on the checkout it
+# was written on and nowhere else. Two findings in one session were
+# environment-dependent -- a test that read the developer's real
+# `config.toml`, and an `audit-vulns` failure that turned out to be
+# pip-audit's network rather than the code. CI is what turns "green here"
+# into "green", and it runs the same commands a new contributor would.
+#
+# What it runs, and why those: `make install` creates the venv, then
+# `make check` runs ruff, format, mypy, the suite with its coverage gate,
+# and the four audits. Nothing is bespoke here -- a gate that diverges from
+# the documented one is a gate nobody trusts.
+#
+# `make install` is deliberately run rather than a spelled-out pip list: it
+# is the path the README documents, and it is what would have caught
+# `--no-deps` silently skipping vinsynlib after the library moved to PyPI.
+
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      # v7 across the board, matching the sibling projects and vinsynlib.
+      # checkout@v4 and setup-python@v5 target Node 20, which GitHub
+      # deprecated on 2025-09-19 and now force-runs on Node 24 with an
+      # annotation on every job. Nothing here uses an input those majors
+      # changed: checkout is called with no inputs, setup-python only with
+      # `python-version`.
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # The Makefile is the interface (`make install && make check`), so
+      # Windows needs make. choco is on the GitHub Windows images.
+      - name: Install make (Windows)
+        if: runner.os == 'Windows'
+        run: choco install make -y
+
+      # python-rtmidi publishes no cp313 wheel, so on 3.13 pip builds it
+      # from sdist, and on Linux that needs the ALSA headers to link
+      # against. macOS and Windows build against CoreMIDI and WinMM and
+      # need nothing here -- which is the same reason the project creates
+      # its venv with --system-site-packages: the interface is the host's.
+      - name: Install ALSA headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Install
+        run: make install
+
+      - name: Check
+        run: make check
