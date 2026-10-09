@@ -201,6 +201,16 @@ system `python-rtmidi` are used rather than a fresh build.
 
 ## Run
 
+The install puts both commands in the venv, so put that on `PATH` first —
+otherwise the shell answers `p2ked: command not found`:
+
+```sh
+source .venv/bin/activate          # PowerShell: .venv\Scripts\Activate.ps1
+```
+
+Or skip activation and spell out the path, which works whatever you did
+above: `.venv/bin/p2ked`.
+
 ```sh
 p2ked --demo           # built-in demo device; opens no MIDI ports
 p2ked                  # ask the remembered port, sweep if there is none
@@ -243,6 +253,9 @@ just by intent: it is the property that decides whether you can leave this
 open next to a running sequencer.
 
 ### Command line
+
+`p2kcli` is the same information in a pipe, from the same venv, so the
+commands below work however you chose to reach it above.
 
 ```sh
 p2kcli banks                 # the bank table (no unit needed)
