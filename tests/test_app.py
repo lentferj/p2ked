@@ -125,8 +125,9 @@ class TestReadingNamesIsSilent:
             assert not app.catalog.differs("USER-0", 0)
             assert app.catalog.disagreement("USER-0", 0) is None
 
-    async def test_the_status_line_says_why_the_count_is_absent(self, app):
-        """Not "0 differ": a user bank has nothing printed to differ from."""
+    async def test_the_first_read_is_the_session_baseline(self, app):
+        """Nothing is marked on the read that establishes the baseline --
+        there is no earlier state for it to be different from."""
         said: list[str] = []
         app.notify_status = lambda message, **_kw: said.append(message)
         async with app.run_test() as pilot:
@@ -134,8 +135,68 @@ class TestReadingNamesIsSilent:
             await pilot.press("r")
             for _ in range(40):
                 await pilot.pause()
-            assert any("nothing printed to compare it against" in m for m in said)
-            assert not any("differ from the catalog" in m for m in said)
+            assert app._baseline["USER-0"], "the read left no baseline"
+            assert not app._session_change("USER-0", 0)
+            assert any("baseline" in m for m in said)
+
+    async def test_a_name_changed_since_p2ked_was_opened_is_flagged(self, app):
+        """The signal that used to be claimed from a document that could
+        not support it: the unit says something different now."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("r")
+            for _ in range(40):
+                await pilot.pause()
+            original = app.catalog.live_name("USER-0", 0)
+            # What a second read would find after the preset is edited
+            # elsewhere -- on the unit's front panel, or by another tool.
+            app.catalog.set_live_name("USER-0", 0, "Edited Somewhere Else")
+            assert app._session_change("USER-0", 0)
+            assert app._marked_because("USER-0", 0) == (
+                "changed since p2ked was opened"
+            )
+            assert original != "Edited Somewhere Else"
+            # The mark survives a re-render and is not re-anchored by it.
+            app._fill_presets("USER-0")
+            assert app._session_change("USER-0", 0), "the baseline re-anchored"
+
+    async def test_a_bank_never_read_this_session_cannot_be_flagged(self, app):
+        """No baseline, no mark: p2ked does not guess what a bank held."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("r")
+            for _ in range(40):
+                await pilot.pause()
+            assert not app._session_change("USER-1", 0)
+            assert app._marked_because("USER-1", 0) is None
+
+    async def test_the_status_line_counts_session_changes(self, app):
+        """The status line is where the change is announced; the row then
+        carries it for the rest of the session."""
+        said: list[str] = []
+        app.notify_status = lambda message, **_kw: said.append(message)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("r")
+            for _ in range(40):
+                await pilot.pause()
+            said.clear()
+            # Stand in for the answer a second read would get back.
+            app._adopt_names("USER-0", {0: "Edited Somewhere Else", 1: "Another Edit"})
+            assert any("2 changed since p2ked was opened" in m for m in said)
+
+    async def test_an_unchanged_second_read_says_so(self, app):
+        said: list[str] = []
+        app.notify_status = lambda message, **_kw: said.append(message)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("r")
+            for _ in range(40):
+                await pilot.pause()
+            said.clear()
+            app._adopt_names("USER-0", dict(app._baseline["USER-0"]))
+            assert any("nothing changed" in m for m in said)
+            assert not any("differ" in m for m in said)
 
 
 class TestOneOperationAtATime:

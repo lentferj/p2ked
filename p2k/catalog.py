@@ -127,19 +127,30 @@ class Catalog:
     def differs(self, bank_id: str, program_change: int) -> bool:
         """Whether the unit and the printed list disagree about this slot.
 
-        **A user bank cannot disagree, because its printed name is not a
-        name.** E-MU's own instrument-definition file cannot document what
-        a user has saved into user memory, so its user-bank sections hold
-        placeholders -- ``usr:A0``, ``usr:C0`` -- 512 of them across the
-        four banks. Comparing a real preset name against one of those
-        always "differs", which is what produced a screen where every slot
-        in every user bank carried ``*`` and the footnote said "saved over
-        the factory preset" 128 times. A placeholder is an admission that
-        the document does not know, not a claim to be wrong about.
+        **A user bank cannot disagree with its printed list, because the
+        printed list has no real names in it.** E-MU's own
+        instrument-definition file cannot document what a user has saved
+        into user memory, so its user-bank sections hold placeholders --
+        ``usr:A0``, ``usr:C0`` -- 512 of them across the four banks.
+        Comparing a real preset name against one of those always "differs",
+        which is what produced a screen where every slot in every user bank
+        carried ``*`` and the footnote said "saved over the factory preset"
+        128 times. A placeholder is an admission that the document does not
+        know, not a claim to be wrong about.
 
-        So the comparison is only made where the printed list has
-        authority: a ROM. There a difference means the printed list is
-        wrong and the unit is right, which is the finding this exists for.
+        **That is not the end of the user-bank story.** What a user bank can
+        disagree with is *itself, earlier in this session*: p2ked reads one
+        the moment it is looked at, and a later read that finds a different
+        name has found something that changed while the program was open.
+        That is the useful signal -- it used to be claimed here, from a
+        document that could not support it -- and it now lives in
+        ``p2ked.app.P2kedApp._session_change``, which owns the baseline.
+        This method is only ever asked what is true against the *printed*
+        list, which is why it answers False for user memory.
+
+        So the comparison is only made where the printed list has authority:
+        a ROM. There a difference means the printed list is wrong and the
+        unit is right, which is the finding this exists for.
 
         That is not hypothetical, and it is not only whitespace. Reading
         whole ROMs off a unit and comparing them with E-MU's own published
@@ -155,13 +166,15 @@ class Catalog:
           carrying the wrong category prefix (one of them naming a different
           instrument entirely: ``kb3:DX Organ`` against ``kit:Kit 1``).
 
-        **What is lost by this:** a user bank somebody has saved into is no
-        longer flagged. It was never flagged *correctly* -- the printed
-        name was a placeholder, so the flag fell for every bank whether or
-        not anybody had touched it -- and the real signal for that case is
-        the live name itself, which is read and shown. To get the flag back
-        would mean a catalog that carried real user-bank names, which
-        nothing can generate; see :meth:`disagreement`.
+        **What is lost, and where it went:** a user bank cannot be flagged
+        against a printed list, and it is not flagged against one any more.
+        It used to be, for all 512 slots, because a placeholder is always
+        "differently named". The comparison that would mean something --
+        this bank against *itself* at the start of the session -- needs state
+        a catalog file cannot hold, so it lives in the browser:
+        ``p2ked.app.P2kedApp._session_change``. Callers that show a ``*``
+        should call ``_marked_because`` there, which decides which of the
+        two complaints this slot is carrying.
         """
         live = self.live_name(bank_id, program_change)
         if live is None:

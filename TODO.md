@@ -1128,23 +1128,44 @@ says a catalog entry for a user bank is "a placeholder and always wrong" —
 but that knowledge was never carried into `Catalog.differs`, which is where
 the `*` is decided.
 
-**Fix.** `differs` makes the comparison only where the printed list has
-authority, which is a ROM: a bank whose `rom.writable` is true answers
-False, because there is nothing real to disagree with. `disagreement`
-therefore no longer needs its `writable` parameter (it is gone, rather than
-left to be passed and ignored) and has one sentence left. `_adopt_names`
-reports what actually happened for a user bank instead of a count that can
-only ever be zero.
+**Fix, in two parts.**
 
-**What is lost, deliberately.** A user bank somebody has saved into is no
-longer flagged. It was never flagged *correctly* — the flag fell for every
-bank, so it distinguished nothing. The real signal there is the live name
-itself, which is read and shown. Getting the flag back would need a catalog
-carrying real user-bank names, which nothing can generate.
+1. **`Catalog.differs` compares only where the printed list has authority**,
+   which is a ROM: a bank whose `rom.writable` is true answers False, because
+   there is nothing real to disagree with. `disagreement` therefore no longer
+   needs its `writable` parameter (it is gone, rather than left to be passed
+   and ignored) and has one sentence left.
+
+2. **The user-bank flag is rebuilt against the right baseline.** The
+   comparison that would mean something is this bank against *itself* at the
+   start of the session — proposed by the maintainer in review. `r` on a user
+   bank takes a baseline on its first read; the next read compares against it
+   and flags the presets whose name changed since p2ked was opened. The
+   baseline is frozen for the session (re-anchoring would make a `*` vanish
+   the moment it was noticed). No printed catalog is involved, so nothing that
+   cannot know what a preset is gets a vote.
+
+   The baseline is taken **lazily**, on the first read of each bank, not by
+   reading all four user banks at startup: four banks is about ten seconds of
+   System Exclusive, the bus carries one thing at a time, and p2ked reads a
+   user bank the moment it is looked at anyway. The one cost is that a preset
+   edited elsewhere *before* its bank was first opened shows no mark — p2ked
+   cannot know what it said before it first asked.
+
+   The mark, the detail footnote, the search view and the status line now come
+   from `P2kedApp._marked_because`, which decides which of the two complaints
+   a slot is carrying: "changed since p2ked was opened", or the printed list
+   being wrong — and says which, because a reader deserves to know which.
+
+**What is still not flagged, and why.** A user bank the unit was in before
+p2ked ever asked. There is no source for that but the unit itself, and
+asking for it is the baseline read. If an eager startup read of the four user
+banks is wanted, it is a small change to `_auto_read_user_names`; it has not
+been made because of the ten seconds and the single bus.
 
 Tests: `tests/test_roms.py::TestWhatADisagreementMeans` (user bank never
-marked, ROM bank still marked, an unknown bank id keeps the comparison so a
-`LookupError` does not switch the check off everywhere),
+marked against the printed list, ROM bank still marked, an unknown bank id
+keeps the comparison so a
 `tests/test_app.py` (a read user bank is not flagged, and the status line
-says why), `tests/test_cli.py::TestFind` (the marker is exercised on a ROM
-slot, since a user slot can no longer produce one).
+says the baseline), `tests/test_cli.py::TestFind` (the printed-list marker is
+exercised on a ROM slot, since a user slot cannot produce that one).

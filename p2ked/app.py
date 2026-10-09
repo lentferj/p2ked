@@ -424,6 +424,12 @@ class P2kedApp(App):
         self.view_mode = VIEW_ALL
         #: User banks whose names have already been fetched this session.
         self._auto_read: set = set()
+        #: ``{bank_id: {program change: name}}`` as each bank was first read
+        #: this session -- the baseline a later read is compared against.
+        #: Only user banks are ever read unprompted (a ROM's names are the
+        #: catalog's job), so in practice this is "what your user memory said
+        #: when you opened p2ked". See :meth:`_session_change`.
+        self._baseline: Dict[str, Dict[int, str]] = {}
         #: Empty = every category. Categories are the "bas:" style prefix
         #: E-MU puts on a preset name.
         self._categories: set = set()
@@ -602,6 +608,39 @@ class P2kedApp(App):
         entry = roms.bank(bank_id)
         return getattr(entry, "rom", None) is roms.USER
 
+    def _session_change(self, bank_id: str, program_change: int) -> bool:
+        """Whether this slot's name changed since this session began.
+
+        The baseline is the **first read of that bank in this session**, which
+        for a user bank is the lumpy thing p2ked already does the moment you
+        look at it -- so "what the unit said when you opened it", without a
+        catalog that could know. A ROM bank has no baseline (it is only read
+        when asked, and it does not change), so this is False there, and its
+        `*` comes from :meth:`p2k.catalog.Catalog.differs` instead.
+
+        The baseline is frozen for the session on purpose. Re-anchoring after
+        every read would make a `*` vanish the moment it is noticed, which is
+        the opposite of useful.
+        """
+        original = self._baseline.get(bank_id, {}).get(program_change)
+        if original is None:
+            return False
+        live = self.catalog.live_name(bank_id, program_change)
+        return live is not None and live != original
+
+    def _marked_because(self, bank_id: str, program_change: int) -> Optional[str]:
+        """Why this slot carries ``*``, or ``None``.
+
+        Two different complaints, and a reader is owed the difference:
+        something the user did since p2ked was opened, and a printed list
+        that is simply wrong. The first only exists for a bank that has been
+        read twice this session; the second only exists where the printed
+        list has authority, which is a ROM.
+        """
+        if self._session_change(bank_id, program_change):
+            return "changed since p2ked was opened"
+        return self.catalog.disagreement(bank_id, program_change)
+
     def _auto_read_user_names(self, bank_id: str) -> None:
         """Fetch a user bank's names the first time it is looked at.
 
@@ -649,7 +688,7 @@ class P2kedApp(App):
             table.clear()
             for entry in self._current:
                 name = self.catalog.display_name(entry.bank_id, entry.program_change)
-                if self.catalog.differs(entry.bank_id, entry.program_change):
+                if self._marked_because(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b] [dim]*[/dim]"
                 elif self.catalog.is_live(entry.bank_id, entry.program_change):
                     shown = f"[b]{name}[/b]"
@@ -846,7 +885,7 @@ class P2kedApp(App):
             return
         entry = self._current[row]
         name = self.catalog.display_name(entry.bank_id, entry.program_change)
-        why = self.catalog.disagreement(entry.bank_id, entry.program_change)
+        why = self._marked_because(entry.bank_id, entry.program_change)
         note = f"  [dim]* {why}[/dim]" if why else ""
         self.query_one("#detail", Static).update(
             f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}"
@@ -962,6 +1001,19 @@ class P2kedApp(App):
     def _adopt_names(self, bank_id: str, names: Dict[int, str]) -> None:
         for program_change, name in names.items():
             self.catalog.set_live_name(bank_id, program_change, name)
+        # The baseline: this bank as it stood the first time it was read this
+        # session. Established before any comparison, so the very read that
+        # creates it is never itself marked as a change.
+        baseline = self._baseline.get(bank_id)
+        if baseline is None:
+            self._baseline[bank_id] = dict(names)
+            changed: List[int] = []
+        else:
+            changed = [
+                program_change
+                for program_change, name in sorted(names.items())
+                if program_change in baseline and baseline[program_change] != name
+            ]
         differing = sum(1 for pc in names if self.catalog.differs(bank_id, pc))
         # A favourite made before any names were known carries a blank
         # label, and shows as one in the favourites view and in `name`
@@ -975,25 +1027,22 @@ class P2kedApp(App):
             )
         if bank_id == self._current_bank:
             self._fill_presets(bank_id)
-        try:
-            own_memory = self._is_user_bank(bank_id)
-        except LookupError:  # a bank the table does not list: not our doing
-            own_memory = False
-        if own_memory and names:
-            # A user bank's printed names are placeholders -- `usr:C0` is
-            # E-MU's own admission that the document does not know -- so
-            # `differing` is 0 here whatever the unit said, and used to be
-            # 128, which marked every slot as saved over. Say what happened
-            # rather than reporting a count that cannot be non-zero.
-            self.notify_status(
-                f"read {len(names)} names from {bank_id}: your own work, with "
-                f"nothing printed to compare it against"
+
+        marks = []
+        if changed:
+            marks.append(f"{len(changed)} changed since p2ked was opened")
+        if differing:
+            marks.append(f"{differing} differ from the printed list")
+        if marks:
+            said = f"read {len(names)} names from {bank_id}: " + ", ".join(marks)
+        elif baseline is None:
+            said = (
+                f"read {len(names)} names from {bank_id}: that is this "
+                f"session's baseline for this bank"
             )
         else:
-            self.notify_status(
-                f"read {len(names)} names from {bank_id}"
-                + (f"; {differing} differ from the catalog" if differing else "")
-            )
+            said = f"read {len(names)} names from {bank_id}; nothing changed"
+        self.notify_status(said)
 
     def action_channel_down(self) -> None:
         """Previous MIDI channel. Sends nothing by itself."""
@@ -1056,23 +1105,33 @@ class P2kedApp(App):
                 self.notify_status(f"nothing matching {text!r}")
                 return
             lines = [f"{len(hits)} match(es) for {text!r}", ""]
-            marked = 0
+            notes = {"session": 0, "printed": 0}
             for bank_id, program_change, name, differs in hits[:400]:
                 try:
                     entry = roms.preset(bank_id, program_change)
                 except LookupError:
                     continue
-                marked += bool(differs)
+                # Two reasons for the mark, and a search result comes from a
+                # bank the reader has not opened -- so which one it is has
+                # to be counted, not guessed at.
+                changed = self._session_change(bank_id, program_change)
+                notes["session" if changed else "printed"] += bool(differs or changed)
                 lines.append(
                     f"{bank_id:<12} {program_change:03d}  "
-                    f"{name + (' *' if differs else ''):<20} "
+                    f"{name + (' *' if differs or changed else ''):<20} "
                     f"PC {entry.program_change:>3}  LSB {entry.lsb:>2}  "
                     f"MSB {entry.msb:>3}"
                 )
-            if marked:
+            if notes["session"]:
                 lines += [
                     "",
-                    f"* {marked} of these differ from the printed "
+                    f"* {notes['session']} of these changed since p2ked was "
+                    f"opened: this session's names, not the printed catalog.",
+                ]
+            if notes["printed"]:
+                lines += [
+                    "",
+                    f"* {notes['printed']} of these differ from the printed "
                     f"catalog: the unit's name is shown.",
                 ]
             if len(hits) > 400:
