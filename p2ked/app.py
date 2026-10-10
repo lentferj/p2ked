@@ -45,12 +45,14 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Header, Label, Static
 
@@ -145,6 +147,44 @@ KEY_HINTS = (
 )
 
 
+@dataclass(frozen=True)
+class EditChange:
+    """One master edit, as the undo timeline sees it.
+
+    It carries no data of its own, and that is the point: the value an
+    undo has to send back is the one :meth:`MasterEditor.finish` recorded
+    *before* the edit went out, and :meth:`MasterEditor.undo_plan` is still
+    where ``z`` reads it from. What this entry adds is the **position**.
+
+    ``z`` reverses the most recent change of either kind, and a favourite
+    toggle can land between two edits. Two logs would each have to be
+    asked which of them happened last; one list cannot disagree with
+    itself about that, so the two kinds share this one.
+    """
+
+
+@dataclass(frozen=True)
+class FavouriteChange:
+    """One ``f`` press, so ``z`` can put it back.
+
+    ``was_favourite`` is what the slot held *before* the keypress, which
+    is the state an undo restores -- not the complement of whatever the
+    store happens to say when ``z`` is pressed, because something else
+    could have toggled the same slot in between.
+
+    The undo is a write to the local favourites database and nothing
+    else: no frame goes out, and no MIDI operation is in it.
+    """
+
+    bank_id: str
+    number: int
+    was_favourite: bool
+
+
+#: What ``z`` can reverse. See :class:`EditChange` for why it is one list.
+Change = EditChange | FavouriteChange
+
+
 class ReportScreen(ModalScreen[None]):
     """A scrollable block of text: device details, help."""
 
@@ -237,6 +277,17 @@ class P2kedApp(App):
     #: first use. Declared here for the same reason ``_busy`` is.
     _allow_write: bool
 
+    #: The MIDI channel selections go out on, 0-based. A reactive rather
+    #: than a plain attribute so the header's line cannot go stale: three
+    #: places set it -- ``--channel`` at startup, ``[`` / ``]``, and the
+    #: ``c`` prompt -- and one of them being missed is exactly how a
+    #: display ends up naming a channel the app is not sending on.
+    channel: int = reactive(0, init=False)
+
+    def watch_channel(self, channel: int) -> None:
+        """Say it on the line that persists, wherever it was set."""
+        self.sub_title = self._channel_line()
+
     # --- the write gate ------------------------------------------------------
 
     @property
@@ -265,20 +316,59 @@ class P2kedApp(App):
         self.notify_status(self._gate.describe())
 
     def action_undo(self) -> None:
-        """``z`` in the browser: reverse the last logged master edit.
+        """``z`` in the browser: reverse the last change, either kind.
 
         The edit screen binds the same key to the same name -- a modal
         screen's bindings take precedence over the app's, so there is no
-        double handling -- but an edit is made *through* the screen and
+        double handling -- but a change is made *through* the screen and
         undone *from* the browser after it closes, so the key has to work
         with no screen open. It is the app's because the worker is: see
         :meth:`_undo_master_edits`.
+
+        One change, not one edit: a favourite toggle made with ``f`` is
+        undoable here too, and ``z`` reverses whichever of the two came
+        last. See :class:`EditChange`.
         """
         self._undo_master_edits(1)
 
     def action_undo_all(self) -> None:
-        """``Z``: every logged master edit, newest first."""
-        self._undo_master_edits(self._editor.log.pending)
+        """``Z``: every change there is, of either kind, newest first."""
+        self._undo_master_edits(None)
+
+    def _saying_screen(self) -> Optional[MasterEditScreen]:
+        """The modal an edit sentence belongs to, if one is open.
+
+        Two ways to be the right screen, and the live one wins. A worker
+        that finishes after its screen closed still reports to the screen
+        the app recorded when *it* opened one -- ``_edit_screen`` -- and
+        ``say`` on a screen that is gone is a no-op, so it has to be
+        asked for. But a screen underneath a PromptScreen, or one a
+        caller pushed by hand, is not recorded there, and it is the one
+        the user is looking at all the same.
+        """
+        top = self.screen
+        if isinstance(top, MasterEditScreen):
+            return top
+        return getattr(self, "_edit_screen", None)
+
+    def _say_edit(self, message: str, *, refused: bool = False) -> None:
+        """One sentence about an edit, where the user is looking.
+
+        The master-parameter editor is a modal. While it is open the app's
+        own ``#status`` line is the dimmed backdrop behind it -- a refusal
+        written there is written where the user cannot read it, which is
+        how "edits made through ``e`` appear to do nothing" looked. So the
+        sentence also goes to the open screen's own status line
+        (:meth:`p2ked.multi.MasterEditScreen.say`).
+
+        The app's line is written either way, and that is deliberate: it
+        is the record, it is what a test can assert on with no screen
+        open, and it is what is left on screen once the modal closes.
+        """
+        screen = self._saying_screen()
+        if screen is not None:
+            screen.say(message, refused=refused)
+        self.notify_status(message, refused=refused)
 
     def action_edit_master(self) -> None:
         """Open the master-parameter editor.
@@ -344,7 +434,9 @@ class P2kedApp(App):
         A refusal says so and sends nothing. :meth:`MasterEditor.allow`
         answers both cases -- a locked gate and a value outside the
         parameter's range -- because both are a reader's question rather
-        than a failure of the program.
+        than a failure of the program. The sentence goes through
+        :meth:`_say_edit`, because this is called from inside the edit
+        screen and its own status line is where the answer belongs.
         """
         parameter = MASTER_BY_ID.get(parameter_id)
         if parameter is None:
@@ -354,10 +446,10 @@ class P2kedApp(App):
             return
         refusal = self._editor.allow(parameter, value)
         if refusal is not None:
-            self.notify_status(refusal, refused=True)
+            self._say_edit(refusal, refused=True)
             return
         if self._busy:
-            self.notify_status("busy", refused=True)
+            self._say_edit("busy", refused=True)
             return
         self._busy = True  # main thread, before the spawn; see _busy
         self._apply_worker(parameter_id, value)
@@ -404,24 +496,84 @@ class P2kedApp(App):
             ok, message = self._editor.finish(
                 parameter, value, before=before, after=after
             )
-        if getattr(self, "_edit_screen", None) is not None:
-            self._edit_screen.result(ok, message)
-        self.notify_status(message, refused=not ok)
+        if ok:
+            # The edit is now undoable, and `z` has to know that *after*
+            # any favourite toggle -- so it goes on the shared timeline
+            # rather than only on the editor's own log. See EditChange.
+            self._changes.append(EditChange())
+        screen = self._saying_screen()
+        if screen is not None:
+            # The screen says it as well as the status line, because it is
+            # the one showing the row that just changed -- and it is a
+            # modal, so the app's line is behind it. A screen that closed
+            # underneath the worker is drawn nowhere and still reports:
+            # see MasterEditScreen._draw.
+            screen.result(ok, message, parameter_id=parameter_id, value=value)
+        else:
+            self._say_edit(message, refused=not ok)
 
-    def _undo_master_edits(self, count: int) -> None:
-        """Reverse the last ``count`` edits. Nothing read-only about it."""
+    def _undo_master_edits(self, count: Optional[int] = None) -> None:
+        """Reverse the last ``count`` changes. Nothing read-only about it.
+
+        ``None`` means every change there is, which is what ``Z`` asks for.
+
+        **Two kinds, one timeline.** A master edit is reversed by sending
+        the value it replaced back over the wire, on a worker; a favourite
+        toggle is reversed in the local favourites store and **goes nowhere
+        near the device**. ``z`` reverses whichever came last, so the
+        entries are kept in the order they happened rather than one log per
+        kind -- see :class:`EditChange`.
+
+        Each entry leaves the timeline as it is undone, so an undo that
+        fails halfway cannot be replayed by the next press. The editor's
+        own log loses the same entries at the same time, which is what
+        keeps "N undoable with z" on the edit screen true.
+        """
         if self._busy:
-            self.notify_status("busy", refused=True)
+            self._say_edit("busy", refused=True)
             return
-        plan = self._editor.undo_plan(count)
-        if not plan:
-            self.notify_status("nothing to undo")
+        if not self._changes:
+            self._say_edit("nothing to undo")
             return
-        self._busy = True  # main thread, before the spawn; see _busy
-        self._undo_worker(plan)
+        wanted = len(self._changes) if count is None else count
+        if wanted <= 0:
+            return
+        taken = self._changes[-wanted:]
+        del self._changes[-wanted:]
+        # The local kind first, and with no wire involved at all: a
+        # favourite lives in SQLite, and undoing one is a write there. New
+        # ones are undone before old ones, like the edits after them.
+        favourites = [c for c in reversed(taken) if isinstance(c, FavouriteChange)]
+        for change in favourites:
+            self._undo_favourite(change)
+        edits = sum(1 for c in taken if isinstance(c, EditChange))
+        if edits:
+            # Still off the editor's log: undo_plan is what `z` has always
+            # read the value to send from, and taking them off there as
+            # well as off the timeline is what leaves the two agreeing.
+            plan = self._editor.undo_plan(edits)
+            self._busy = True  # main thread, before the spawn; see _busy
+            self._undo_worker(plan, len(favourites))
+
+    def _undo_favourite(self, change: FavouriteChange) -> None:
+        """Put one ``f`` press back. **Sends nothing: no MIDI here.**
+
+        ``Favorites.toggle`` rather than a remove-then-add, for the reason
+        ``f`` itself uses it: un-favouriting keeps the row, so a rating,
+        tags, a note and the original date survive being toggled off and
+        on. A delete followed by a fresh add destroyed all four, and ``z``
+        is one keystroke from ``f``.
+        """
+        if self.favorites is None:  # pragma: no cover - recorded only when not
+            return
+        name = self.catalog.display_name(change.bank_id, change.number)
+        self.favorites.toggle(change.bank_id, change.number, name=name)
+        self._refill_bank_count(change.bank_id)
+        if change.bank_id == self._current_bank:
+            self._refill_keeping_place()
 
     @work(thread=True)
-    def _undo_worker(self, plan) -> None:
+    def _undo_worker(self, plan, favourites: int = 0) -> None:
         results: List[Tuple[int, bool]] = []
         try:
             with self._lock:
@@ -432,11 +584,35 @@ class P2kedApp(App):
                     except Exception:
                         results.append((parameter_id, False))
         finally:
-            self.call_from_thread(self._edit_undone, results)
+            self.call_from_thread(self._edit_undone, results, favourites, plan)
 
-    def _edit_undone(self, results) -> None:
+    def _edit_undone(self, results, favourites: int = 0, plan=()) -> None:
         self._busy = False
-        self.notify_status(self._editor.undo_report(results))
+        screen = self._saying_screen()
+        if screen is not None:
+            # The undo put values back, so the rows that showed the edited
+            # ones have to say what the unit reports now -- a row left
+            # reading a value `z` just sent away is the same lie a stale
+            # edit cell was.
+            screen.undone(plan, results)
+        self._say_edit(self._undo_sentence(results, favourites))
+
+    def _undo_sentence(self, results, favourites: int) -> str:
+        """One sentence over both kinds of undo.
+
+        With no favourite undone this is the editor's own report, verbatim
+        -- "undid 1 edit", "undid 1; the unit rejected 1 (parameters 259)"
+        -- because that wording is what the MIDI half is pinned to. A
+        favourite is named separately, and it is listed first because it is
+        what was undone first: it needed no wire.
+        """
+        if not favourites:
+            return self._editor.undo_report(results)
+        said = f"undid {favourites} favourite{'s' if favourites != 1 else ''}"
+        edits = self._editor.undo_report(results)
+        if edits == "nothing to undo":
+            return said
+        return f"{said}; {edits}"
 
     def __init__(
         self,
@@ -503,6 +679,10 @@ class P2kedApp(App):
         #: catalog's job), so in practice this is "what your user memory said
         #: when you opened p2ked". See :meth:`_session_change`.
         self._baseline: Dict[str, Dict[int, str]] = {}
+        #: Everything ``z`` can reverse, in the order it happened. Two kinds
+        #: share it -- a master edit and a favourite toggle -- because ``z``
+        #: reverses whichever came last; see :class:`EditChange`.
+        self._changes: List[Change] = []
         #: Empty = every category. Categories are the "bas:" style prefix
         #: E-MU puts on a preset name.
         self._categories: set = set()
@@ -581,6 +761,11 @@ class P2kedApp(App):
 
     def on_mount(self) -> None:
         self.title = "p2ked"
+        # The header's sub-title, so the channel is on screen all the time
+        # rather than only for as long as the sentence that announced a
+        # change. rxved shows its send channel the same way -- a suffix on
+        # the sub-title line -- and the family agrees on where to look.
+        self.sub_title = self._channel_line()
         banks = self.query_one("#bank-table", DataTable)
         for label, key in (
             ("bank", "bank"),
@@ -845,7 +1030,13 @@ class P2kedApp(App):
         # row so that a rating, tags, a note and the original date survive
         # being toggled off and on. Doing it here as a delete followed by a
         # fresh add destroyed all four, and `f` is one keystroke.
+        was = self.favorites.get(entry.bank_id, entry.program_change) is not None
         now = self.favorites.toggle(entry.bank_id, entry.program_change, name=name)
+        # Recorded so `z` can put it back, in the same timeline as the
+        # master edits: `z` reverses whichever of the two came last. The
+        # state *before* the keypress is what an undo restores, because
+        # that is the only thing this keypress can be held to.
+        self._changes.append(FavouriteChange(entry.bank_id, entry.program_change, was))
         self.notify_status(f"{'favourited' if now else 'unfavourited'} {name}")
         self._refill_bank_count(entry.bank_id)
         self._refill_keeping_place()
@@ -1014,6 +1205,16 @@ class P2kedApp(App):
     def notify_status(self, message: str, *, refused: bool = False) -> None:
         prefix = "[b]refused[/b] · " if refused else ""
         self.query_one("#status", Static).update(prefix + message)
+
+    def _channel_line(self) -> str:
+        """What the header says about the send channel.
+
+        1-16, not 0-15: the channel a sequencer is set to is the one on the
+        unit's display and in its manual, and ``self.channel`` is the wire
+        value. Both halves are said, because a reader who has only ever
+        seen the number in a config file has seen the 0-based one.
+        """
+        return f"sending on MIDI channel {self.channel + 1}"
 
     # --- navigation ---------------------------------------------------------
 
@@ -1244,6 +1445,11 @@ class P2kedApp(App):
         opened from. ``on_refresh`` is the hand-off and re-runs this same
         worker -- which is also why a refresh cannot interleave with the read
         that opened the screen, since ``_busy`` is still set.
+
+        ``on_undo`` is handed in for the same reason: a modal screen cuts
+        the app's binding chain, so ``z`` pressed here would otherwise be
+        dead -- and this is the screen an edit made through ``e`` comes
+        back to, which is where ``z`` gets pressed.
         """
         screen = MultiScreen(
             dump,
@@ -1251,6 +1457,7 @@ class P2kedApp(App):
             mode,
             fitted=self.installed,
             on_edit=self.action_edit_master,
+            on_undo=self._undo_master_edits,
         )
         screen.on_refresh = self._refresh_multi
         self.push_screen(screen)

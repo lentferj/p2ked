@@ -294,7 +294,20 @@ class DemoDevice:
                 "preset": preset,
                 "volume": volume,
                 "pan": 64,
-                "mix_output": 1,
+                # -1 is "use the preset's own output". A channel that is on
+                # uses it; a channel that is off stays routed to Send 2,
+                # which is a real thing a unit can be found like and is the
+                # reason a channel on a rear submix jack can be silent with
+                # every other setting correct.
+                #
+                # This used to be 1 on all thirty-two channels, which made
+                # the multi screen report "32 of 32 would not sound" on a
+                # demo where three channels were deliberately switched on --
+                # a screen reporting a fault the data did not have, which is
+                # the one thing a read path must not do. The fix is here, in
+                # the data, and not in p2k/messages.py's reason: a channel
+                # that really is routed to a send really is silent.
+                "mix_output": -1 if enable else 1,
                 "arp": 0,
                 "enable": enable,
                 "bank_map": 0,

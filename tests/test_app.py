@@ -27,6 +27,7 @@ from textual.widgets import DataTable, Label
 from p2ked.app import P2kedApp
 from p2ked.demo import DemoDevice
 from p2ked.multi import MultiScreen, mode_summary
+from p2ked.prompts import PromptScreen
 
 pytestmark = pytest.mark.asyncio
 
@@ -337,6 +338,73 @@ class TestChannel:
             )
 
 
+class TestTheChannelIsAlwaysOnScreen:
+    """The send channel, said where it stays.
+
+    It used to be said only in the sentence that announced a change --
+    "channel 3" on the status line, which the next status message
+    replaced. A channel is the one setting that decides whether a
+    selection lands anywhere at all, so it belongs in the header, the way
+    rxved shows its own send channel.
+
+    ``self.channel`` is the wire value, 0-based; everything a reader sees
+    is 1-16, because that is what the unit's display and its manual use.
+    """
+
+    async def test_the_header_shows_the_channel_at_startup(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert "midi channel 1" in app.sub_title.lower()
+
+    async def test_the_bracket_keys_move_it(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("right_square_bracket")
+            await pilot.pause()
+            assert "midi channel 2" in app.sub_title.lower()
+            await pilot.press("left_square_bracket")
+            await pilot.pause()
+            assert "midi channel 1" in app.sub_title.lower()
+
+    async def test_it_is_clamped_rather_than_wrapped(self, app):
+        """Wrapping from 16 to 1 on a key held down a moment too long is
+        how a selection ends up on a channel the user did not choose and
+        cannot see they are on. The same rule the status line follows,
+        now visible on the line that persists."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.channel = 0
+            await pilot.press("left_square_bracket")
+            await pilot.pause()
+            assert "midi channel 1" in app.sub_title.lower()
+            app.channel = 15
+            await pilot.press("right_square_bracket")
+            await pilot.pause()
+            assert "midi channel 16" in app.sub_title.lower()
+
+    async def test_the_c_prompt_moves_it(self, app):
+        """The other door -- and the sentence the prompt says is now the
+        one the header keeps."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_pick_channel()
+            await pilot.pause()
+            assert isinstance(app.screen, PromptScreen)
+            await pilot.press(*list("12"))
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.channel == 11
+            assert "midi channel 12" in app.sub_title.lower()
+
+    async def test_it_follows_the_channel_the_command_line_gave(self):
+        """``--channel`` is how a session gets its channel, and the header
+        has to say what the app was started with, not a default."""
+        app = P2kedApp(DemoDevice(), catalog=cat.empty(), channel=6)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert "midi channel 7" in app.sub_title.lower()
+
+
 class TestMultiScreen:
     """The multi screen: every channel, and what it refuses to claim.
 
@@ -428,22 +496,23 @@ class TestMultiScreen:
                 for c in screen._dump.channels
             }
             # Channel 1 is off, and an off channel reads preset 0 -- so both
-            # are said, nearest cause first, plus the send the demo routes
-            # every channel through.
+            # are said, nearest cause first, plus the send the demo leaves
+            # its disabled channels routed to.
             assert reasons[1] == [
                 "channel is disabled (MIDI Enable is off)",
                 "no preset assigned",
                 "routed to send 2, not the preset's output",
             ]
             # Channel 6 is enabled but at volume 0: the second cause, which
-            # a disabled channel in front of it would have masked.
-            assert reasons[6] == [
-                "volume is 0",
-                "routed to send 2, not the preset's output",
-            ]
-            # Channel 9 is enabled and at full volume, so the send is all
-            # that stands between it and the preset's own output.
-            assert reasons[9] == ["routed to send 2, not the preset's output"]
+            # a disabled channel in front of it would have masked. Its mix
+            # output is the preset's own, so the volume is all that is
+            # wrong with it.
+            assert reasons[6] == ["volume is 0"]
+            # Channels 9 and 10 are on, at full volume, and using the
+            # preset's own output -- so nothing the unit reports stands
+            # between them and a sound, and they are not listed at all.
+            assert reasons[9] == []
+            assert reasons[10] == []
 
     async def test_a_channel_pointing_at_a_rom_that_is_not_fitted_says_so(self, app):
         """The one reason that comes from what the unit said it has fitted.
@@ -466,11 +535,12 @@ class TestMultiScreen:
     async def test_it_says_which_channels_would_sound(self):
         """The headline sentence, on data it is true of.
 
-        The demo routes all thirty-two of its channels to a send, so its own
-        dump makes every one of them soundless -- which is true of that data
-        and says nothing about the screen. So this one hands it a dump whose
-        channels are all live, and one that ignores Program Change, which is
-        the other thing worth knowing before aiming a select at a channel.
+        Two halves, and the demo supplies both on its own now that an
+        enabled channel uses the preset's own output: channels 9 and 10
+        would sound. This one goes further and hands the screen a dump
+        where *every* channel is live except one that ignores Program
+        Change, which is the other thing worth knowing before aiming a
+        select at a channel.
         """
         dump = DemoDevice().read_setup()
         for entry in dump.channels:
@@ -483,15 +553,56 @@ class TestMultiScreen:
         assert "Ignores Program Change on channel 4" in report
         assert "— a select aimed there does nothing" in report
 
+    async def test_the_demo_s_own_enabled_channels_would_sound(self, app):
+        """The honest version of the sentence above, on the demo's real data.
+
+        The demo deliberately switches three channels on. It used to route
+        all thirty-two through Send 2, so the screen said every one of them
+        would not sound -- a fault the data did not have, reported by a
+        read path, which is the one thing it must not do. The fix was in
+        the data: an enabled channel uses the preset's own output. Channel
+        6 stays silent for the reason it is *meant* to show, volume 0.
+        """
+        async with app.run_test() as pilot:
+            screen = await self._open(app, pilot)
+            dump = screen._dump
+            enabled = [c for c in dump.channels if c.enable]
+            assert [c.channel_display for c in enabled] == [6, 9, 10]
+            fitting = screen._fitted
+            says_sound = {
+                c.channel_display
+                for c in dump.channels
+                if not c.silence_reasons(multitimbral=True, fitted=fitting)
+            }
+            assert says_sound == {9, 10}
+            assert "2 of 32 channels would sound" not in screen._report()
+            assert "30 of 32 channels would not sound:" in screen._report()
+            # And the rows carry it: "why not" is blank for those two.
+            table = screen.query_one("#multi-table", DataTable)
+            keys = [c.key.value for c in table.columns.values()]
+            assert str(table.get_row("8")[keys.index("why")]) == ""
+            assert str(table.get_row("9")[keys.index("why")]) == ""
+            assert "volume is 0" in str(table.get_row("5")[keys.index("why")])
+
     async def test_it_says_which_channels_would_not_sound(self, app):
         """And it says what it cannot see, rather than leaving a silence on
-        screen that the reader has to interpret."""
+        screen that the reader has to interpret.
+
+        The demo's own data is counted as it stands: three channels are
+        switched on, one of them at volume 0, and the twenty-nine that are
+        off are still routed to Send 2. Two would sound; thirty would not.
+        """
         async with app.run_test() as pilot:
             screen = await self._open(app, pilot)
             report = screen._report()
-            assert "32 of 32 channels would not sound:" in report
+            assert "30 of 32 channels would not sound:" in report
+            # The three kinds of fault the demo's data really has, each
+            # named once -- not rounded into "everything is broken".
             assert "channel is disabled (MIDI Enable is off)" in report
+            assert "volume is 0" in report
+            assert "routed to send 2, not the preset's output" in report
             assert "ch  1  " in report
+            assert "ch  9  " not in report
             assert "the cable" in report
             assert "the monitor" in report
 

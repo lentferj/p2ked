@@ -47,7 +47,7 @@ pyproject.toml is what collects them.
 """
 
 import pytest
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Static
 
 from p2k import catalog as cat
 from p2k import messages as m
@@ -61,7 +61,12 @@ from p2ked.masteredit import (
     MasterEditor,
     probe_channel_ids,
 )
-from p2ked.multi import CHANNEL_EDIT_HINT, MasterEditScreen, MultiScreen
+from p2ked.multi import (
+    CHANNEL_EDIT_HINT,
+    MasterEditScreen,
+    MultiScreen,
+    ValuePickerScreen,
+)
 from p2ked.prompts import PromptScreen
 
 #: A parameter whose range runs either side of zero, so a sign error in the
@@ -71,11 +76,42 @@ TRANSPOSE = MASTER_BY_ID[m.Parameter.MASTER_TRANSPOSE]
 CLOCK_TEMPO = MASTER_BY_ID[m.Parameter.MASTER_CLOCK_TEMPO]
 #: One with choices, where the range is an enumeration rather than a span.
 MIDI_MODE = MASTER_BY_ID[m.Parameter.MIDI_MODE]
+#: The row a parameter with a plain integer range sits on.
+#:
+#: The typed prompt is what a numeric parameter still gets. A parameter
+#: with ``choices`` now opens its own picker instead -- ``enter`` on "MIDI
+#: mode" used to answer ``0=omni, 1=poly, 2=multi`` and ask for the number,
+#: which is a vocabulary the unit does not have. Row 0 happens to be a
+#: choice, so the tests that exercise the prompt move the cursor off it.
+TRANSPOSE_ROW = [p.parameter_id for p in MASTER_PARAMETERS].index(
+    m.Parameter.MASTER_TRANSPOSE
+)
 
 
 @pytest.fixture
 def app():
     return P2kedApp(DemoDevice(), catalog=cat.empty())
+
+
+@pytest.fixture
+def favouriting(tmp_path):
+    """An app with a favourites store, and the store to look at.
+
+    ``tmp_path`` because a test must not write into the user's real
+    database -- rxved learned that one the hard way, by leaving two files
+    in it. A catalog with two names, because `f` records the name with the
+    row and a store full of blanks tests nothing about the labels.
+    """
+    from p2k.favorites import Favorites
+
+    store = Favorites(str(tmp_path / "favourites.db"))
+    catalog = cat.Catalog(
+        [
+            cat.Entry("USER-0", 0, "Velvet Bell"),
+            cat.Entry("USER-0", 1, "Rusted Pad"),
+        ]
+    )
+    return P2kedApp(DemoDevice(), catalog=catalog, favorites=store), store
 
 
 def _record(app):
@@ -741,11 +777,10 @@ class TestTheMasterEditScreen:
             await pilot.pause()
             screen.query_one("#master-table", DataTable).focus()
             await pilot.press("enter")
-            await _wait_for(pilot, lambda: isinstance(app.screen, PromptScreen))
-            await pilot.press("1")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ValuePickerScreen))
             await pilot.press("enter")
             await pilot.pause()
-            assert applied == [(m.Parameter.MIDI_MODE, 1)]
+            assert applied == [(m.Parameter.MIDI_MODE, 2)]
 
     async def test_a_word_where_a_number_was_asked_for_is_refused(self, app):
         said = _record(app)
@@ -756,7 +791,9 @@ class TestTheMasterEditScreen:
         async with app.run_test() as pilot:
             app.push_screen(screen)
             await pilot.pause()
-            screen.query_one("#master-table", DataTable).focus()
+            table = screen.query_one("#master-table", DataTable)
+            table.focus()
+            table.move_cursor(row=TRANSPOSE_ROW)
             await pilot.press("enter")
             await _wait_for(pilot, lambda: isinstance(app.screen, PromptScreen))
             await pilot.press(*list("loud"))
@@ -775,7 +812,9 @@ class TestTheMasterEditScreen:
         async with app.run_test() as pilot:
             app.push_screen(screen)
             await pilot.pause()
-            screen.query_one("#master-table", DataTable).focus()
+            table = screen.query_one("#master-table", DataTable)
+            table.focus()
+            table.move_cursor(row=TRANSPOSE_ROW)
             await pilot.press("enter")
             await _wait_for(pilot, lambda: isinstance(app.screen, PromptScreen))
             await pilot.press("enter")
@@ -792,3 +831,286 @@ class TestTheMasterEditScreen:
             assert said[-1] == ("clock tempo = 300", False)
             screen.result(False, "transpose did not take 5")
             assert said[-1] == ("transpose did not take 5", True)
+
+
+class TestUndoCoversBothKindsOfChange:
+    """``z`` reverses the last change of either kind, and ``Z`` all of them.
+
+    ``f`` writes the local favourites database; an edit writes to the unit.
+    Neither was undoable before this: ``z`` only ever looked at the
+    master-edit log, so a favourite made with one keystroke could not be
+    put back with one more, while an edit could be -- a difference in
+    undo-ability that had nothing to do with how easy either is to make.
+
+    One timeline, because ``z`` has to reverse whichever came *last*, and
+    a favourite toggle can land between two edits. See
+    :class:`p2ked.app.EditChange` for why it is one list rather than two.
+
+    The favourite half sends nothing: it is a write to SQLite and a
+    redraw, and there is no frame and no device call in it anywhere.
+    """
+
+    async def _press_f(self, app, pilot, times=1):
+        for _ in range(times):
+            await pilot.press("f")
+            await pilot.pause()
+
+    async def test_f_then_z_puts_the_favourite_back(self, favouriting):
+        """With an *empty* edit log, which is what used to swallow it.
+
+        ``z`` asked the edit log first and found nothing there, so it said
+        "nothing to undo" -- while a favourite the user had just made sat
+        in the store with the keystroke that could undo it. The favourite
+        is a change like any other now.
+        """
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            assert store.get("USER-0", number) is None
+            assert app._editor.log.pending == 0
+            await self._press_f(app, pilot)
+            assert store.get("USER-0", number) is not None
+            await pilot.press("z")
+            await pilot.pause()
+            assert store.get("USER-0", number) is None
+
+    async def test_the_previous_state_is_what_comes_back_not_the_complement(
+        self, favouriting
+    ):
+        """``f`` twice is a favourite that was undone by pressing ``f``
+        again, and ``z`` has to restore the *favourite* -- the state the
+        keypress replaced -- not simply flip whatever the store says."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            await self._press_f(app, pilot)  # favourited
+            await self._press_f(app, pilot)  # and un-favourited again
+            assert store.get("USER-0", number) is None
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert store.get("USER-0", number) is not None
+            # ... and it flipped the *toggle*, it did not re-run `f`.
+            assert len(app._changes) == 1
+
+    async def test_z_after_a_master_edit_still_reverses_the_edit(self, favouriting):
+        """The half that has always worked, unchanged: the previous value
+        goes back over the wire, and the log loses the entry."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_CLOCK_TEMPO, 300)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(m.Parameter.MASTER_CLOCK_TEMPO, 300)]
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log[-1] == (m.Parameter.MASTER_CLOCK_TEMPO, 120)
+            assert app._editor.log.pending == 0
+            assert store.get("USER-0", 0) is None
+
+    async def test_the_newest_of_the_two_kinds_is_undone_first(self, favouriting):
+        """``f``, then an edit: ``z`` takes the edit, because it came last,
+        and the next ``z`` takes the favourite. One timeline, not two."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            await self._press_f(app, pilot)
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app._editor.log.pending == 1
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            # The edit, newest first -- and the favourite is untouched.
+            assert app.device.set_log[-1] == (m.Parameter.MASTER_TRANSPOSE, 0)
+            assert app._editor.log.pending == 0
+            assert store.get("USER-0", number) is not None
+            await pilot.press("z")
+            await pilot.pause()
+            assert store.get("USER-0", number) is None
+
+    async def test_the_edit_can_come_first_and_the_favourite_second(self, favouriting):
+        """The other order, so "newest first" is not passing by the
+        accident of which kind the test happened to make first."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            await self._press_f(app, pilot)
+            await pilot.press("z")
+            await pilot.pause()
+            # The favourite, because it came second.
+            assert store.get("USER-0", number) is None
+            assert app._editor.log.pending == 1
+            assert app.device.set_log == [(m.Parameter.MASTER_TRANSPOSE, 5)]
+
+    async def test_Z_undoes_both_kinds_newest_first(self, favouriting):
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            await self._press_f(app, pilot)
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            await pilot.press("Z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log[-1] == (m.Parameter.MASTER_TRANSPOSE, 0)
+            assert app._editor.log.pending == 0
+            assert store.get("USER-0", number) is None
+            assert app._changes == []
+
+    async def test_a_favourite_undo_never_touches_the_device(self, favouriting):
+        """No frame, no device call: it is a write to the local store."""
+        app, _store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._press_f(app, pilot)
+            app.device.received.clear()
+            await pilot.press("z")
+            await pilot.pause()
+            assert app.device.received == []
+            assert app.device.set_log == []
+            assert app.device.copy_log == []
+            assert app.device.selected_log == []
+
+    async def test_nothing_to_undo_when_neither_kind_changed(self, favouriting):
+        app, _store = favouriting
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("z")
+            await pilot.pause()
+            assert said[-1] == ("nothing to undo", False)
+            assert app._changes == []
+
+    async def test_a_favourite_survives_a_FavouriteChange_of_a_different_slot(
+        self, favouriting
+    ):
+        """Two slots, one ``z``: only the one under the cursor went back."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._press_f(app, pilot)  # slot 0
+            app.query_one("#preset-table").focus()
+            await pilot.press("down")
+            await pilot.pause()
+            await self._press_f(app, pilot)  # slot 1
+            assert store.get("USER-0", 0) is not None
+            assert store.get("USER-0", 1) is not None
+            await pilot.press("z")
+            await pilot.pause()
+            assert store.get("USER-0", 0) is not None
+            assert store.get("USER-0", 1) is None
+
+    async def test_the_browser_s_keys_cover_both_kinds(self, favouriting):
+        """``z`` and ``Z`` are the legend's own words, and neither says
+        "edit" -- the family spells them that way and this is now true of
+        them."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            await pilot.press("f")
+            await pilot.pause()
+            await pilot.press("Z")
+            await pilot.pause()
+            assert store.get("USER-0", number) is None
+            assert app._changes == []
+
+
+class TestUndoFromTheMultiScreen:
+    """``z`` pressed on the multi screen, which is where an edit returns.
+
+    ``escape`` on the master editor does not close the multi screen -- it
+    dismisses the editor over it -- so this is the screen a user is looking
+    at when they decide the edit was a mistake. It used to swallow the key:
+    a modal screen cuts the app's binding chain, which is the whole reason
+    the master editor binds ``w`` and ``z`` for itself, and the multi
+    screen bound neither. The app's own ``z`` was dead here, invisibly,
+    for a key the legend advertises.
+
+    The screen now serves the keys itself, against the app's own timeline
+    -- handed in the way ``on_edit`` is, because a screen owns no worker
+    and ``z`` reverses on one.
+    """
+
+    async def _open_multi(self, app, pilot):
+        await pilot.press("m")
+        await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
+        return app.screen
+
+    async def test_z_on_the_multi_screen_reverses_the_edit(self, favouriting):
+        """The whole way round: ``m``, ``e``, an edit, ``escape``, ``z``.
+
+        The key that failed used to reach nothing at all -- not even
+        "nothing to undo" -- because the app-level binding never arrived.
+        """
+        app, _store = favouriting
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await _open_master_edit(app, pilot)
+            await pilot.press("w")
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            await pilot.press("escape")
+            await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
+            assert app._editor.log.pending == 1
+            assert app._changes != []
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log[-1] == (m.Parameter.MASTER_TRANSPOSE, 0)
+            assert app.device.parameters[m.Parameter.MASTER_TRANSPOSE] == 0
+            assert app._editor.log.pending == 0
+            assert app._changes == []
+            assert said[-1] == ("undid 1 edit", False)
+
+    async def test_z_on_the_multi_screen_puts_a_favourite_back(self, favouriting):
+        """The other kind, from the same screen: no wire, no worker."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            await pilot.press("f")
+            await pilot.pause()
+            assert store.get("USER-0", number) is not None
+            await self._open_multi(app, pilot)
+            await pilot.press("z")
+            await pilot.pause()
+            assert store.get("USER-0", number) is None
+            assert app._changes == []
+
+    async def test_Z_on_the_multi_screen_takes_both_kinds(self, favouriting):
+        """Both binds, one screen: ``Z`` leaves nothing behind."""
+        app, store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            await pilot.press("f")
+            await pilot.pause()
+            await self._open_multi(app, pilot)
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            await pilot.press("Z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log[-1] == (m.Parameter.MASTER_TRANSPOSE, 0)
+            assert store.get("USER-0", number) is None
+            assert app._changes == []
+
+    async def test_the_multi_screen_says_the_key_is_there(self, favouriting):
+        """A key nobody is told about is a key nobody presses, and this one
+        was invisible twice over: not bound, and not in the footer."""
+        app, _store = favouriting
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_multi(app, pilot)
+            hints = [str(h.visual) for h in screen.query(Static)]
+            assert any("z undo" in text for text in hints)

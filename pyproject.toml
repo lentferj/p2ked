@@ -156,6 +156,7 @@ known-first-party = ["p2k", "p2ked", "vinsynlib"]
 ]
 "p2ked/multi.py" = [
     "RUF012",  # BINDINGS and DEFAULT_CSS are Textual class constants
+    "PLR0913", # MultiScreen.__init__ takes one injected thing per column it draws
     "S110",    # a refresh after the screen closed: nothing to report to
     "SIM105",  # contextlib.suppress would hide which table was refreshed
 ]
