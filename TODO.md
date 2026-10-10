@@ -1240,10 +1240,12 @@ the remembered channel, and the AST guard in `tests/test_legend.py` covered
 decided which channel the suite sent on. The guard now covers `load_*` too,
 and the test names its file.
 
-## 47. The per-channel parameter IDs — the probe is written, the answer is a session's
+## 47. The per-channel parameter IDs — the alternative route, and the answer is a session's
 
 **Status:** open, and not closable from software: it needs a unit on the
-desk.
+desk. It no longer blocks per-channel *editing*, which now goes through the
+setup dump (below); what it would add is a cheaper write, one small frame per
+field instead of a ~1 KB whole-setup one.
 
 `probe_channel_ids()` in `p2ked/masteredit.py` reads a range of parameter
 IDs -- 662-1023 by default, the block after the master arpeggiator at
@@ -1254,17 +1256,17 @@ a value that happens to agree once is not a mapping, and this is a finding
 to be recorded rather than an assignment to be made automatically.
 
 **Why the answer is not in here.** The Setup Dump carries all nine
-per-channel values positionally, so reading them is solved; setting one
-needs its parameter ID, and no document to hand lists them.
-`CHANNEL_EDIT_IDS` is `None` for that reason, and the edit screen refuses a
-per-channel edit with a sentence (`CHANNEL_EDIT_HINT`) rather than sending
-to a number it invented. A wrong ID is a write to a place nobody named,
-which is the one failure this project's own rules forbid.
+per-channel values positionally, so reading them is solved; setting one *by
+ID* needs its parameter ID, and no document to hand lists them.
+`CHANNEL_EDIT_IDS` is `None` for that reason: a wrong ID is a write to a
+place nobody named, which is the one failure this project's own rules
+forbid. What changed is that there is now a second route that needs no ID --
+see item 52 -- so this is an optimisation to earn rather than a blocker.
 
 **For the next hardware session:** run the probe against a real unit,
 establish which answering ID is which of the dump's nine fields, and record
-the mapping here -- after which per-channel editing needs nothing but the
-table.
+the mapping here -- after which per-channel editing can choose between the ID
+route (one frame per field) and the dump route (one whole-setup write).
 
 ## 48. Editing exists — the gate, the log, and the read-back — 2026-10-10
 
@@ -1379,3 +1381,53 @@ Two honesty rules are baked in. Nothing asserts a preset name -- E-MU's ROM
 contents are not this project's to redistribute -- and nothing asserts a
 range the documents disagree about (§12's "?" for a channel's ROM ID is left
 alone). What the suite asserts is only what the unit itself settles.
+
+## 52. Per-channel editing exists, and no unit has received one — OPEN
+
+**Status:** the write path is built and tested synthetically; the hardware
+half is waiting.
+
+Per-channel values are written by writing the **setup dump back**. The
+specification is what licenses it: a command station "receive[s] and
+understand[s] the old setup dump" (spec p. 29, under "Generic Dump Request"),
+so `read_setup` -> `mutate_channel` -> `ProteusBridge.send_setup_dump` ->
+`read_setup` is a complete per-channel edit, and the field is verified out of
+the dump the unit sends afterwards. A dump is "all settings selected by the
+Master Menu and settings made on the Preset Select screen" (spec p. 26), so the
+write is whole-setup -- which is safe only because the round trip is
+byte-for-byte and every other byte is the one the unit just sent.
+`docs/RESOLUTION_NOTES.md` §13 has the reasoning, the cites and the caveat.
+
+What is in:
+
+- `p2ked/masteredit.py` -- the pure half. `mutate_channel` plans the mutation
+  (a new `SetupDump`, one `ChannelState` replaced), `allow_channel_field` /
+  `allow_channel_sound` are the gate and the transcribed ranges in `allow()`'s
+  own refusal style, `decline_channel` refuses what needs a dump in hand,
+  `finish_channel` logs only what the read-back agreed with, and
+  `ChannelChange` / `ChannelLog` / `channel_undo_plan` / `channel_undo_report`
+  are the undo half.
+- `p2k/bridge.py` and `p2ked/demo.py` -- `send_setup_dump`. One frame, no
+  chunking, `SEND_GAP` after it; the demo adopts the frame so its next
+  `read_setup` answers with what it was given, which is the only way a
+  synthetic read-back can verify anything.
+- `p2ked/app.py` -- `action_edit_channel(channel, field, value)` and
+  `action_channel_sound(channel, rom_id, preset, bank_map)`, the two callbacks
+  the UI calls. Gate and range on the main thread, MIDI on a worker, one entry
+  on the undo timeline per write (a sound is one write over three fields), and
+  `z` restores `before` by writing the dump again.
+- `tests/test_channel_edits.py` -- the gate, the range, the bytes (only the
+  edited field's bytes move), the read-back, the sound, and `z` over both
+  kinds.
+
+**The caveat, and it is the whole of the risk.** No unit has received a dump
+from p2ked. Every other write here is a Parameter Value Edit whose frame is one
+document's example; this one is a 977-byte frame the unit is documented to
+accept and that has never been sent to one. The documented error route does not
+work on this unit (§7), so a dump the unit cannot serve is *ignored* -- the
+failure mode is silence, and the read-back is the only witness. So the first
+hardware session should send back an **unmodified** dump (§12's instruction,
+now testable: `send_setup_dump(read_setup())`) and compare what the unit
+reports afterwards with what came in. Until then, item 52 is a synthetic green.
+The UI half is still open: the multi screen's per-channel editor is not
+written, so nothing calls `action_edit_channel` from a key yet.

@@ -560,7 +560,10 @@ value, by two independent readings of every master parameter.
   authority for where the channels are.
 - **Writing.** Nothing was written. Whether the unit accepts a Setup Dump
   back, and what it does with the two undocumented trailing blocks, is
-  untested and out of scope: p2ked reads.
+  untested and out of scope: p2ked reads. — *2026-10-11: still untested, but
+  no longer out of scope. §13 writes the dump back as the per-channel route;
+  the receive path there is documented and never exercised, which is the
+  caveat that section's own last paragraph.*
 
 ---
 
@@ -1432,3 +1435,105 @@ else — and compare it with what came in. That is the first verification, and i
 is the least that can be written and still exercise the path: it replaces the
 live setup with a copy of itself. Until it has happened, `encode_setup_dump` is
 a builder nothing has called on a cable.
+
+---
+
+## §13 — Per-channel editing, by writing the whole setup back
+
+**2026-10-11.** p2ked read a channel's nine values out of one Setup Dump since
+§8 and refused to set any of them, because setting one needed its parameter ID
+and no document to hand lists those. The refusal is gone. The write goes the
+other way round: the dump itself is the message, so nothing needs numbering.
+
+**The sentence that licenses it.** "The generic dump replaces the setup dump
+(command 1Ch) as the new dump format sent by the command stations" ... "The
+command stations still receive and understand the old setup dump and will
+transmit one if explicitly requested to do so via sysex" (spec p. 29, under
+"Generic Dump Request"). Read plainly, and in the direction that matters here:
+a command station *sends* `61h` and *receives* `1Ch`. That is the whole
+authority — a documented receive path in the one document that describes the
+message, and nothing more.
+
+**What one write covers.** "All settings selected by the Master Menu and
+settings made on the Preset Select screen, with the exception of the
+program/preset map and tuning tables" (spec p. 26). There is therefore no such
+thing as a one-field write: a per-channel edit is a whole-setup write whose
+other bytes are the ones the unit sent a moment earlier. §12 recorded that as
+caveat one and it is now the mechanism rather than a caveat — read the live
+dump, change the one channel's one field, re-encode, send, read again, verify
+the field.
+
+**Why the other bytes are the unit's own.** The encoder is the byte-for-byte
+inverse of the parser (§12), so a dump re-encoded unchanged is the same frame
+the unit sent. An edit therefore moves the two bytes of the edited field and
+nothing else, and that is asserted three times over:
+`TestSetupDumpEncoder.test_an_edit_changes_only_the_bytes_it_should`
+(tests/test_messages.py) at the encoder, and
+`TestTheMutationIsTheOnlyThingThatMoves` (tests/test_channel_edits.py) at the
+mutation, which compares whole frames and checks the offsets that moved. A
+value past 127 moves both bytes of its field, which the second of those pins
+so an encoder that only moved the low byte would not pass.
+
+**The rule survives unchanged: no parameter ID is invented.** This route writes
+the dump's own field positions — the nine §8's structural search found and
+`_setup_dump_payload` puts back where it found them — so there is no number to
+address and nothing to guess. `CHANNEL_EDIT_IDS` stays `None`,
+`probe_channel_ids()` stays the read-only probe it was, and item 47 stays open
+as the *alternative*: one small frame per field instead of a ~1 KB whole-setup
+write, once a session with a unit has established which ID is which field.
+
+**One frame, and no size cap in the path.** A dump is one SysEx message by
+definition — splitting it would produce something the parser could not read —
+and `ProteusBridge.send_setup_dump` hands the whole frame to `send_message` in
+one call, as every other message here does, with `SEND_GAP` after it. The
+specification's size advice ("try to avoid sending messages with more than 244
+Data Bytes, or 41 Parameter Edits", spec p. 6; §12) is advice about *parameter
+edits* batched into one message, and 244 bytes is 122 pairs, so the binding
+figure there is the 41-edit one. Nothing in this path truncates or chunks, and
+there is no limit to report: the demo's dump is a 970-byte payload in a 977-byte
+frame, which is the size §8 read off a real unit in the first place — the unit
+sends one of these back on request, so a 977-byte frame is not a thing this
+family has never seen.
+
+**Where each piece lives.**
+
+- `p2ked/masteredit.py` — the rules, with no I/O in them:
+  `mutate_channel(dump, channel, values)` is the pure planner that builds a new
+  `SetupDump` with one channel replaced; `allow_channel_field` and
+  `allow_channel_sound` are the gate and the transcribed ranges in
+  `allow()`'s own refusal style; `decline_channel` refuses what needs a dump in
+  hand (a channel this setup does not have, a dump that did not fully decode);
+  `finish_channel` logs only what the read-back agreed with; `ChannelChange`
+  is the undo record, `ChannelLog` its log, and `channel_undo_plan` /
+  `channel_undo_report` the `z` half.
+- `p2k/bridge.py` — `send_setup_dump(dump)`, the wire. Sent, then not
+  verified, like `set_parameter`: the gate, the read-back and the log are the
+  caller's.
+- `p2ked/demo.py` — the same method, and it *adopts* the frame: the fake's
+  next `read_setup` answers with what it was given. A fake that recorded a
+  whole-setup write and carried on answering its original dump would make
+  every read-back agree, including the ones that should fail.
+- `p2ked/app.py` — `action_edit_channel(channel, field, value)` and
+  `action_channel_sound(channel, rom_id, preset, bank_map)`, the two callbacks
+  the UI calls. Gate and range on the main thread, MIDI on a worker, and the
+  read-back decides whether the edit is logged and whether it joins the one
+  timeline `z` reverses. A channel undo re-reads the dump and restores
+  `before` — the unit may have been touched by hand in between, and the old
+  value belongs in the channel the unit reports now.
+
+**One entry for a sound.** `rom_id`, `preset` and `bank_map` are what aims a
+channel at a sound, and the unit takes them together, so
+`action_channel_sound` writes all three in one dump, verifies all three, and
+records **one** `ChannelChange` under `SOUND_FIELD`. Three `z` presses that
+each restored a third of a sound would not put back the sound anybody had.
+
+**Caveat: no unit has received one from p2ked.** Everything above is a
+transcription plus a synthetic test suite. The receive path is documented and
+has never been exercised on a cable, the documented error route does not work
+on this unit (§7), so a dump the unit cannot serve is *ignored* and the only
+evidence either way is the read-back. `make test-hardware` should therefore
+start where §12 said it should: send back an unmodified dump — the one
+`read_setup` just returned, re-encoded and nothing else — and compare what the
+unit reports afterwards with what came in. Until that has run,
+`send_setup_dump` is a builder nothing has called on hardware, and every
+sentence in this section is about p2ked rather than about a Proteus.
