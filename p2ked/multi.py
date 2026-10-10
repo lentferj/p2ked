@@ -358,6 +358,17 @@ class MasterEditScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "close", "Close"),
         Binding("q", "close", "Close"),
+        # `w` is here as well as on the app, and both are needed. A modal
+        # screen's bindings take precedence over the app's -- the whole
+        # point of a modal -- so the app's `w` never arrives on this
+        # screen; without this one the gate could only be armed by closing
+        # the very screen that is saying "edits are refused until it is
+        # armed" and "press w".
+        #
+        # The gate itself is the editor's, which the app handed in: the
+        # same object the app's own key toggles and the same one its edits
+        # go through, so the two cannot disagree about which is open.
+        Binding("w", "toggle_write_gate", "Write gate"),
         Binding("z", "undo", "Undo"),
         Binding("Z", "undo_all", "Undo all"),
     ]
@@ -417,7 +428,8 @@ class MasterEditScreen(ModalScreen[None]):
             yield DataTable(id="master-table", cursor_type="row", zebra_stripes=True)
             yield Static(self._report(), classes="note")
             yield Static(
-                "[dim]enter edit · z undo · Z undo all · esc / q to close[/dim]"
+                "[dim]w gate · enter edit · z undo · Z undo all · "
+                "esc / q to close[/dim]"
             )
 
     def on_mount(self) -> None:
@@ -480,6 +492,20 @@ class MasterEditScreen(ModalScreen[None]):
         self.app.push_screen(PromptScreen(question), apply)
 
     # --- actions ----------------------------------------------------------
+
+    def action_toggle_write_gate(self) -> None:
+        """``w`` on this screen: the app's own key, and why this one exists.
+
+        A modal screen's bindings win over the app's, so ``w`` pressed here
+        never reaches :meth:`P2kedApp.action_toggle_write_gate`. The gate it
+        arms is still the app's -- the editor was handed in with it -- so
+        what is toggled is the one the app's edits are checked against, and
+        the report below it is redrawn rather than left describing the state
+        the gate was in before the keypress.
+        """
+        self._editor.gate.toggle()
+        self.query_one(".note", Static).update(self._report())
+        _say(self.app, self._editor.gate.describe())
 
     def action_undo(self) -> None:
         if self._on_undo is not None:

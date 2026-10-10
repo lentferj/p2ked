@@ -224,6 +224,13 @@ class DemoDevice:
     #: Invented master-parameter values, by parameter ID; anything in a
     #: block and not named here is sent as 0. Chosen to be obviously a
     #: demo (120 bpm, effects off) and not one unit's settings.
+    #:
+    #: The sysEx device ID is here so that the dump and
+    #: :meth:`read_parameter` answer the same number for this one unit.
+    #: Without it the dump carries 0 while a parameter read answers 5 --
+    #: one fake disagreeing with itself about its own ID, which is
+    #: exactly the sort of disagreement an edit verified against one and
+    #: displayed from the other would hide.
     MASTER_VALUES = {
         257: 120,  # clock tempo, bpm
         264: 2,  # bend range, semitones
@@ -232,6 +239,9 @@ class DemoDevice:
         273: -1,  # BEATS channels: use basic channel
         385: m.MidiMode.MULTI,
         386: 1,  # mode change enabled
+        #: The fake's own sysEx device ID, so the dump and the read-back
+        #: cannot disagree about it.
+        388: DEMO_DEVICE_ID,
         513: 1,
         520: 1,  # effects algorithms, min is 1
         641: 0,  # arpeggiator off

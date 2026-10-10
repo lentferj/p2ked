@@ -1,0 +1,794 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-FileCopyrightText: Copyright (C) 2026  p2ked contributors
+#
+# This file is part of p2ked.
+#
+# p2ked is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 2 of the License, or (at your option) any later
+# version.
+#
+# p2ked is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+# details.
+
+"""The write path: the gate, the range, the log, and what is not offered.
+
+p2ked was read-only until the maintainer decided editing was in. What makes
+that safe is five things, and this file is the one that pins them:
+
+* **The gate is locked by default.** ``w`` arms it. An edit aimed at a
+  locked gate is refused *and nothing is sent* -- a refusal that still
+  wrote to the unit would be worse than no gate at all, so the app-level
+  tests assert on the fake's ``set_log`` rather than on the sentence.
+* **A value outside the parameter's range is refused**, for the same
+  reason: the sentence is not the point, the absence of a write is.
+* **An edit is logged only when the read-back agreed.** A Proteus ignores
+  a request it cannot serve rather than refusing it, so "sent" and "taken"
+  are different facts, and only the second is undoable -- undoing the
+  first would send back a value nobody saw the unit accept.
+* **Undo sends the previous value back**, the one recorded *before* the
+  new one went out. A write that failed to land has nothing to read
+  afterwards, so the old value cannot be recovered later.
+* **What p2ked cannot name a parameter ID for is not written at all.**
+  ``probe_channel_ids`` is the read-only way to establish the per-channel
+  IDs on a real unit, and it is checked here for sending nothing but
+  requests.
+
+Two levels, on purpose. :class:`p2ked.masteredit.MasterEditor` is pure and
+is tested directly; the app's workers are driven headlessly against
+:class:`p2ked.demo.DemoDevice`, which records every ``set_parameter`` and
+``copy_master_setup`` it was handed -- so "nothing was sent" is an
+assertion about the wire rather than about a message.
+
+The async tests need no marker: ``asyncio_mode = "auto"`` in
+pyproject.toml is what collects them.
+"""
+
+import pytest
+from textual.widgets import DataTable
+
+from p2k import catalog as cat
+from p2k import messages as m
+from p2ked.app import P2kedApp, build_parser
+from p2ked.demo import DemoDevice
+from p2ked.masteredit import (
+    CHANNEL_EDIT_IDS,
+    MASTER_BY_ID,
+    MASTER_PARAMETERS,
+    EditGate,
+    MasterEditor,
+    probe_channel_ids,
+)
+from p2ked.multi import CHANNEL_EDIT_HINT, MasterEditScreen, MultiScreen
+from p2ked.prompts import PromptScreen
+
+#: A parameter whose range runs either side of zero, so a sign error in the
+#: check shows up here rather than on one of the 0-127 ones.
+TRANSPOSE = MASTER_BY_ID[m.Parameter.MASTER_TRANSPOSE]
+#: One with a plain unsigned range, and a value the demo does not start at.
+CLOCK_TEMPO = MASTER_BY_ID[m.Parameter.MASTER_CLOCK_TEMPO]
+#: One with choices, where the range is an enumeration rather than a span.
+MIDI_MODE = MASTER_BY_ID[m.Parameter.MIDI_MODE]
+
+
+@pytest.fixture
+def app():
+    return P2kedApp(DemoDevice(), catalog=cat.empty())
+
+
+def _record(app):
+    """Capture what the app says, and whether it said it as a refusal.
+
+    The refusal flag is kept rather than discarded: ``notify_status``
+    prefixes it on the status line, and a refusal that was announced
+    without it would look like news rather than a "no".
+    """
+    said = []
+
+    def say(message, *, refused=False):
+        said.append((message, refused))
+
+    app.notify_status = say
+    return said
+
+
+async def _wait_for(pilot, ready, attempts=100):
+    """Wait until ``ready()`` is true, or fail saying so.
+
+    Every app-level operation here finishes on a worker thread and is
+    handed back with ``call_from_thread``, so how many trips through the
+    message loop it takes is a property of the machine. A fixed count of
+    pauses is a guess, and a guess in a test is a flake.
+    """
+    for _ in range(attempts):
+        if ready():
+            return
+        await pilot.pause()
+    raise AssertionError("the app never reached the state the test waited for")
+
+
+async def _open_master_edit(app, pilot):
+    """``m`` then ``e``: the multi screen, and the master editor over it.
+
+    The whole way in, because the edit screen is only reachable from there
+    and the button that opens it is part of what is being tested.
+    """
+    await pilot.press("m")
+    await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
+    await pilot.press("e")
+    await _wait_for(pilot, lambda: isinstance(app.screen, MasterEditScreen))
+    return app.screen
+
+
+class TestTheGateIsLockedByDefault:
+    """A write needs an explicit act.
+
+    This is the family's ``w write gate`` -- vinsynlib's ``EDITOR_KEYS``,
+    so it is the same key in rxved and here -- and the legend shows which
+    state it is in. "Why did my edit not send?" has to be answerable from
+    where the question is asked.
+    """
+
+    def test_a_new_gate_is_locked(self):
+        gate = EditGate()
+        assert gate.armed is False
+        assert gate.describe() == "write gate locked"
+
+    def test_the_editor_does_not_come_up_armed(self):
+        """``MasterEditor()`` with no arguments must not be the armed one:
+        the default is what a caller gets by forgetting."""
+        editor = MasterEditor()
+        assert isinstance(editor.gate, EditGate)
+        assert editor.gate.armed is False
+
+    def test_the_app_starts_locked(self, app):
+        assert app._gate.armed is False
+        # One gate and one log per app, and the editor is built on them:
+        # the state the screen shows has to be the one the edits go through.
+        assert app._editor.gate is app._gate
+        assert app._editor.log.pending == 0
+
+    def test_the_refusal_names_the_key(self):
+        refusal = EditGate().refuse("transpose")
+        assert "transpose not sent" in refusal
+        assert "the write gate is locked" in refusal
+        assert "Press w to arm it" in refusal
+
+    async def test_w_arms_the_gate_and_says_which_state_it_is_in(self, app):
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("w")
+            assert app._gate.armed is True
+            assert said[-1] == ("write gate ARMED", False)
+            await pilot.press("w")
+            assert app._gate.armed is False
+            assert said[-1] == ("write gate locked", False)
+
+
+class TestAllowWriteArmsTheGateAtStartup:
+    """``--allow-write`` is the family's flag, and p2ked now takes it.
+
+    The docstrings in :mod:`p2ked.masteredit` and :mod:`p2ked.multi` have
+    always said it starts the gate armed, so what is pinned here is both
+    halves of the promise: the parser accepts it, and an app built with it
+    can write with no ``w`` pressed at all.
+    """
+
+    def test_the_parser_accepts_it_and_defaults_to_locked(self):
+        locked = build_parser().parse_args([])
+        assert locked.allow_write is False
+        armed = build_parser().parse_args(["--allow-write"])
+        assert armed.allow_write is True
+
+    def test_it_arms_the_one_gate_the_app_creates(self):
+        app = P2kedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        # The same one gate and one editor the locked app has: the flag is
+        # the state it starts in, not a second object to keep in step.
+        assert app._gate.armed is True
+        assert app._editor.gate is app._gate
+        assert app._editor.log.pending == 0
+
+    async def test_an_edit_reaches_the_unit_with_no_key_pressed(self):
+        app = P2kedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(m.Parameter.MASTER_TRANSPOSE, 5)]
+
+    async def test_the_same_run_without_the_flag_is_refused(self):
+        """The default is still locked: the flag is what makes the
+        difference, not the presence of a test that says otherwise."""
+        app = P2kedApp(DemoDevice(), catalog=cat.empty())
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == []
+            message, refused = said[-1]
+            assert "the write gate is locked" in message
+            assert refused
+
+
+class TestALockedEditIsRefused:
+    """Refused, and nothing on the wire.
+
+    The sentence is the half of this that is easy to get right. The
+    load-bearing half is that a refused edit leaves the unit alone, which
+    is why these assert on the fake's ``set_log``.
+    """
+
+    def test_the_gate_alone_refuses_an_otherwise_legal_edit(self):
+        refusal = MasterEditor().allow(TRANSPOSE, 5)
+        assert refusal is not None
+        assert "transpose" in refusal
+        assert "the write gate is locked" in refusal
+
+    def test_an_armed_gate_allows_the_same_edit(self):
+        editor = MasterEditor(EditGate(armed=True))
+        assert editor.allow(TRANSPOSE, 5) is None
+
+    def test_the_gate_is_answered_before_the_range_is(self):
+        """A locked gate is the answer even when the value is also wrong:
+        arming it must not turn a silent refusal into a sent edit."""
+        refusal = MasterEditor().allow(TRANSPOSE, 999)
+        assert "the write gate is locked" in refusal
+        assert "must be" not in refusal
+
+    async def test_the_app_refuses_a_locked_edit_and_sends_nothing(self, app):
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_master_edit(app, pilot)
+            assert screen._editor.gate.armed is False
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [], "a locked edit still reached the unit"
+            assert app.device.copy_log == []
+            assert app._editor.log.pending == 0
+            message, refused = said[-1]
+            assert "transpose not sent" in message
+            assert "the write gate is locked" in message
+            assert refused
+
+    async def test_an_armed_edit_does_reach_the_unit(self, app):
+        """The other side of the same check: with the gate armed the very
+        edit the previous test refused goes out, so the refusal above is
+        about the gate rather than about the parameter."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await _open_master_edit(app, pilot)
+            await pilot.press("w")
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(m.Parameter.MASTER_TRANSPOSE, 5)]
+
+
+class TestAnOutOfRangeEditIsRefused:
+    """The ranges are transcribed, so they are asserted rather than
+    assumed -- and an edit outside one is refused before it is sent."""
+
+    def test_below_the_low_end_is_refused(self):
+        refusal = MasterEditor(EditGate(armed=True)).allow(TRANSPOSE, -25)
+        assert refusal == "transpose must be -24-24, and -25 is not"
+
+    def test_above_the_high_end_is_refused(self):
+        refusal = MasterEditor(EditGate(armed=True)).allow(TRANSPOSE, 25)
+        assert refusal == "transpose must be -24-24, and 25 is not"
+
+    def test_both_ends_are_allowed(self):
+        """An inclusive range, checked at both edges: a comparison wrong by
+        one is the mistake this pins."""
+        editor = MasterEditor(EditGate(armed=True))
+        assert editor.allow(TRANSPOSE, -24) is None
+        assert editor.allow(TRANSPOSE, 24) is None
+
+    def test_a_choice_parameter_takes_only_its_choices(self):
+        editor = MasterEditor(EditGate(armed=True))
+        assert editor.allow(MIDI_MODE, 3) == "MIDI mode must be 0-2, and 3 is not"
+        for value in range(3):
+            assert editor.allow(MIDI_MODE, value) is None
+
+    async def test_the_app_refuses_an_out_of_range_edit_and_sends_nothing(self, app):
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await _open_master_edit(app, pilot)
+            await pilot.press("w")  # arm the gate: only the range is in the way
+            assert app._gate.armed is True
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 25)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [], "an out-of-range edit reached the unit"
+            assert app._editor.log.pending == 0
+            message, refused = said[-1]
+            assert message == "transpose must be -24-24, and 25 is not"
+            assert refused
+
+
+class TestAReadBackThatDisagreesIsNotLogged:
+    """Sent is not taken.
+
+    A Proteus ignores a request it cannot serve rather than refusing it,
+    so a write that left no trace looks exactly like a success. The
+    read-back is what separates them, and an edit that cannot be verified
+    must not become undoable.
+    """
+
+    def test_a_read_that_failed_is_said_and_logs_nothing(self):
+        editor = MasterEditor(EditGate(armed=True))
+        ok, message = editor.finish(TRANSPOSE, 5, before=0, after=None)
+        assert ok is False
+        assert "read-back failed" in message
+        assert "nothing is logged" in message
+        assert editor.log.changes == []
+
+    def test_a_read_back_that_disagrees_is_said_and_logs_nothing(self):
+        editor = MasterEditor(EditGate(armed=True))
+        ok, message = editor.finish(TRANSPOSE, 5, before=0, after=0)
+        assert ok is False
+        assert "did not take 5" in message
+        assert "still reports 0" in message
+        assert editor.log.changes == []
+        assert editor.log.pending == 0
+
+    def test_a_read_back_that_agreed_is_logged_with_the_old_value(self):
+        editor = MasterEditor(EditGate(armed=True))
+        ok, message = editor.finish(CLOCK_TEMPO, 300, before=120, after=300)
+        assert ok is True
+        assert message == "clock tempo = 300"
+        assert editor.log.changes == [(m.Parameter.MASTER_CLOCK_TEMPO, 120, 300)]
+
+    def test_a_value_that_could_not_be_read_first_is_not_invented(self):
+        """``before`` is ``None`` when the read before the write failed.
+        The log then carries the value sent, because that is the only one
+        anybody knows -- it does not guess a zero."""
+        editor = MasterEditor(EditGate(armed=True))
+        editor.finish(TRANSPOSE, 5, before=None, after=5)
+        assert editor.log.changes == [(m.Parameter.MASTER_TRANSPOSE, 5, 5)]
+
+    async def test_an_edit_a_broken_wire_interrupted_is_not_logged(self):
+        class Broken(DemoDevice):
+            def read_parameter(self, parameter_id, *, timeout=None):
+                raise TimeoutError("no reply")
+
+        app = P2kedApp(Broken(), catalog=cat.empty())
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [], "the edit was sent after the read failed"
+            assert app._editor.log.pending == 0
+            message, refused = said[-1]
+            assert "transpose" in message
+            assert "no reply" in message
+            assert refused
+
+    async def test_an_edit_the_unit_ignores_is_not_logged_and_cannot_be_undone(self):
+        """The case the read-back exists for, against a unit that takes the
+        frame and disregards it.
+
+        This is not a perverse fake: the real thing has no "refused" reply
+        on the cable either, which is exactly why silence cannot be
+        distinguished from success without reading the value back.
+        """
+
+        class Deaf(DemoDevice):
+            def set_parameter(self, parameter_id, value, *, timeout=None):
+                self.handle(
+                    m.parameter_edit(parameter_id, value, device=self.device_id)
+                )
+
+        app = P2kedApp(Deaf(), catalog=cat.empty())
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_CLOCK_TEMPO, 300)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.received, "the edit was never sent; the check is vacuous"
+            assert app._editor.log.pending == 0
+            message, refused = said[-1]
+            assert "did not take 300" in message
+            assert "still reports 120" in message
+            assert refused
+            # And so there is nothing to undo: `z` says so rather than
+            # sending a value the unit never accepted.
+            app._undo_master_edits(1)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert said[-1] == ("nothing to undo", False)
+
+
+class TestUndoSendsThePreviousValue:
+    """``z`` reverses the last edit and ``Z`` all of them, by sending back
+    the value that was there before.
+
+    That is why the log records it *before* the new value goes out: a
+    write that failed to land has nothing to read back afterwards, so the
+    only recoverable old value is the one kept at the time.
+    """
+
+    def _editor(self):
+        editor = MasterEditor(EditGate(armed=True))
+        editor.finish(TRANSPOSE, 5, before=0, after=5)
+        editor.finish(CLOCK_TEMPO, 300, before=120, after=300)
+        return editor
+
+    def test_the_log_holds_the_old_value_first(self):
+        assert self._editor().log.changes == [
+            (m.Parameter.MASTER_TRANSPOSE, 0, 5),
+            (m.Parameter.MASTER_CLOCK_TEMPO, 120, 300),
+        ]
+
+    def test_the_undo_plan_is_the_old_value_newest_first(self):
+        assert self._editor().undo_plan(1) == [(m.Parameter.MASTER_CLOCK_TEMPO, 120)]
+
+    def test_a_plan_is_taken_off_the_log_as_it_is_made(self):
+        """An undo that fails halfway must not be replayed twice on the
+        next press: the entry leaves the log the moment it is planned."""
+        editor = self._editor()
+        assert editor.undo_plan(1) == [(m.Parameter.MASTER_CLOCK_TEMPO, 120)]
+        assert editor.log.pending == 1
+        assert editor.undo_plan(9) == [(m.Parameter.MASTER_TRANSPOSE, 0)]
+        assert editor.log.pending == 0
+        assert editor.undo_plan(1) == []
+
+    def test_undoing_nothing_plans_nothing(self):
+        editor = MasterEditor()
+        assert editor.undo_plan(0) == []
+        assert editor.undo_plan(3) == []
+
+    def test_a_cleared_log_has_nothing_left_to_undo(self):
+        editor = self._editor()
+        editor.log.clear()
+        assert editor.log.pending == 0
+        assert editor.undo_plan(1) == []
+
+    def test_the_report_names_what_happened(self):
+        editor = MasterEditor()
+        assert editor.undo_report([]) == "nothing to undo"
+        assert editor.undo_report([(m.Parameter.MASTER_TRANSPOSE, True)]) == (
+            "undid 1 edit"
+        )
+        assert editor.undo_report([(257, True), (259, True)]) == "undid 2 edits"
+        assert editor.undo_report([(259, False), (257, True)]) == (
+            "undid 1; the unit rejected 1 (parameters 259)"
+        )
+
+    async def test_the_app_sends_the_previous_value_back(self, app):
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_master_edit(app, pilot)
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_CLOCK_TEMPO, 300)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(m.Parameter.MASTER_CLOCK_TEMPO, 300)]
+            assert app.device.parameters[m.Parameter.MASTER_CLOCK_TEMPO] == 300
+            # `z`, pressed on the screen the edit was offered on.
+            screen.action_undo()
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [
+                (m.Parameter.MASTER_CLOCK_TEMPO, 300),
+                (m.Parameter.MASTER_CLOCK_TEMPO, 120),
+            ]
+            assert app.device.parameters[m.Parameter.MASTER_CLOCK_TEMPO] == 120
+            assert app._editor.log.pending == 0
+            assert said[-1] == ("undid 1 edit", False)
+
+    async def test_z_and_Z_are_the_browser_s_keys_too(self, app):
+        """The same two keys, with no edit screen open.
+
+        An edit is offered on the master edit screen and undone after it is
+        closed, so the keys cannot belong to the screen alone: the legend
+        promises ``z undo`` and ``Z undo all`` in the browser, and the app
+        is what owns the worker and the log they are applied to.
+        """
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            app._apply_master_edit(m.Parameter.MASTER_CLOCK_TEMPO, 300)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app._editor.log.pending == 2
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log[-1] == (m.Parameter.MASTER_CLOCK_TEMPO, 120)
+            assert app._editor.log.pending == 1
+            await pilot.press("Z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log[-1] == (m.Parameter.MASTER_TRANSPOSE, 0)
+            assert app._editor.log.pending == 0
+            assert app.device.parameters[m.Parameter.MASTER_TRANSPOSE] == 0
+
+    async def test_z_with_an_empty_log_says_so_and_sends_nothing(self, app):
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("z")
+            await pilot.pause()
+            assert app.device.set_log == []
+            assert app.device.copy_log == []
+            assert said[-1] == ("nothing to undo", False)
+
+    async def test_undo_all_sends_every_previous_value_back_newest_first(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_master_edit(app, pilot)
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            app._apply_master_edit(m.Parameter.MASTER_CLOCK_TEMPO, 300)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app._editor.log.pending == 2
+            screen.action_undo_all()
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [
+                (m.Parameter.MASTER_TRANSPOSE, 5),
+                (m.Parameter.MASTER_CLOCK_TEMPO, 300),
+                # newest first, each one the value it replaced
+                (m.Parameter.MASTER_CLOCK_TEMPO, 120),
+                (m.Parameter.MASTER_TRANSPOSE, 0),
+            ]
+            assert app.device.parameters[m.Parameter.MASTER_TRANSPOSE] == 0
+            assert app.device.parameters[m.Parameter.MASTER_CLOCK_TEMPO] == 120
+            assert app._editor.log.pending == 0
+
+
+class TestThePerChannelProbeWritesNothing:
+    """The per-channel multimode parameter IDs are not established, and
+    p2ked refuses to guess them: a wrong ID is a write to a number nobody
+    knows. ``probe_channel_ids`` is the read-only way to find them on a
+    real unit, so what it must not do is write.
+    """
+
+    def test_it_reads_the_range_and_reports_what_answered(self):
+        asked = []
+        answers = {700: 3, 900: 8}
+
+        def read(parameter_id):
+            asked.append(parameter_id)
+            return answers.get(parameter_id)
+
+        found = probe_channel_ids(read)
+        assert found["low"] == 662
+        assert found["high"] == 1024
+        assert found["answered"] == [700, 900]
+        assert asked == list(range(662, 1024))
+
+    def test_the_range_is_a_hint_the_caller_can_narrow(self):
+        asked = []
+
+        def note(parameter_id):
+            asked.append(parameter_id)
+
+        found = probe_channel_ids(note, low=662, high=666)
+        assert asked == [662, 663, 664, 665]
+        assert found == {"low": 662, "high": 666, "answered": []}
+
+    def test_the_per_channel_ids_are_absent_rather_than_guessed(self):
+        """``None``, not a table of plausible numbers. The refusal is the
+        honest answer until a hardware session establishes them."""
+        assert CHANNEL_EDIT_IDS is None
+
+    def test_every_frame_the_probe_sends_is_a_request(self):
+        """The strongest form of "writes nothing" available without a unit.
+
+        The fake's ``read_parameter`` answers from its own memory and puts
+        nothing on the wire, so a probe through it would leave ``received``
+        empty and the check below would be vacuous. This device asks over
+        the wire instead: the probe really does emit 362 frames, and every
+        one of them is a Parameter Value *request*.
+        """
+
+        class WireReading(DemoDevice):
+            """The fake, with its reads on the wire so they can be seen.
+
+            Two changes, both of them things a real unit does. The request
+            goes out as a frame, so what the probe emits is inspectable
+            rather than assumed; and an ID the unit has no parameter for is
+            **silent** rather than answered with a default, because that is
+            what makes "which ones answer" a question with an answer --
+            the fake's own ``read_parameter`` returns 0 for everything,
+            which would make every ID in the range look present.
+            """
+
+            def read_parameter(self, parameter_id, *, timeout=None):
+                self.handle(m.parameter_request(parameter_id, device=self.device_id))
+                if parameter_id not in self.parameters:
+                    return None
+                return super().read_parameter(parameter_id, timeout=timeout)
+
+        device = WireReading()
+        # An answer inside the range, so `answered` is not vacuous either.
+        device.parameters[700] = 3
+        found = probe_channel_ids(device.read_parameter)
+        assert found["answered"] == [700]
+        assert len(device.received) == 1024 - 662
+        assert {m.parse(frame).command for frame in device.received} == {
+            m.Command.PARAMETER_REQUEST
+        }
+        assert device.set_log == [], "the probe set a parameter"
+        assert device.copy_log == [], "the probe copied a setup"
+        # And the check above can actually see a write -- without this it
+        # would also pass on a probe that sent nothing at all.
+        device.set_parameter(m.Parameter.MASTER_CLOCK_TEMPO, 120)
+        assert any(
+            m.parse(frame).command == m.Command.PARAMETER_EDIT
+            for frame in device.received
+        )
+
+
+class TestTheMasterEditScreen:
+    """What the editor shows before anything is sent: the gate's state, the
+    undo count, every parameter p2ked can name an ID for, and why the
+    per-channel ones are not on offer."""
+
+    def _screen(self, editor=None, values=None, on_apply=None):
+        return MasterEditScreen(
+            DemoDevice().read_setup(),
+            {} if values is None else values,
+            MasterEditor() if editor is None else editor,
+            on_apply=on_apply,
+        )
+
+    def test_it_shows_the_gate_and_says_what_that_means(self):
+        report = self._screen()._report()
+        assert "write gate locked" in report
+        assert "edits are refused until it is armed" in report
+        armed = self._screen(MasterEditor(EditGate(armed=True)))._report()
+        assert "write gate ARMED" in armed
+        assert "every edit below will be sent" in armed
+
+    def test_it_counts_what_z_would_undo(self):
+        editor = MasterEditor(EditGate(armed=True))
+        editor.finish(TRANSPOSE, 5, before=0, after=5)
+        assert "1 edit(s) undoable with z." in self._screen(editor)._report()
+
+    def test_it_says_why_per_channel_edits_are_not_offered(self):
+        assert CHANNEL_EDIT_HINT in self._screen()._report()
+        assert "docs/TODO item 47" in CHANNEL_EDIT_HINT
+
+    def test_every_parameter_offered_is_one_p2ked_already_reads(self):
+        """The IDs in ``MASTER_PARAMETERS`` were established by reading them
+        back off a unit and comparing them with the dump
+        (RESOLUTION_NOTES §10) -- so each one is in the Setup Dump, and the
+        dump's value for it is inside the range the editor accepts. A range
+        narrower than the unit's own value would refuse an edit the unit
+        was already in."""
+        dump = DemoDevice().read_setup()
+        for parameter in MASTER_PARAMETERS:
+            assert parameter.parameter_id in dump.master
+            value = dump.parameter(parameter.parameter_id)
+            assert parameter.low <= value <= parameter.high, parameter.label
+
+    def test_the_fake_agrees_with_itself_about_the_values_the_editor_shows(self):
+        """The demo's read-back and its own dump have to be one unit.
+
+        An edit is verified by reading the parameter, and the screen shows
+        a value read the same way; a fake whose two answers disagreed would
+        let a write look verified against one and displayed from the other.
+        """
+        device = DemoDevice()
+        dump = device.read_setup()
+        for parameter in MASTER_PARAMETERS:
+            assert device.read_parameter(parameter.parameter_id) == dump.parameter(
+                parameter.parameter_id
+            ), parameter.label
+
+    async def test_it_lists_every_parameter_with_its_range_and_its_value(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_master_edit(app, pilot)
+            table = screen.query_one("#master-table", DataTable)
+            assert [row.key.value for row in table.rows.values()] == [
+                str(parameter.parameter_id) for parameter in MASTER_PARAMETERS
+            ]
+            assert [column.key.value for column in table.columns.values()] == [
+                "param",
+                "now",
+                "range",
+            ]
+            # A list, not a tuple: DataTable.get_row answers a list, and what
+            # is being pinned here is the cells and their order rather than
+            # the container Textual happened to choose for them.
+            assert list(table.get_row(str(m.Parameter.MASTER_TRANSPOSE))) == [
+                "transpose",
+                "0",
+                "-24 - 24",
+            ]
+            # A choice parameter is spelled with its choices, and the value
+            # the unit reported is shown as the name rather than the number.
+            assert list(table.get_row(str(m.Parameter.MIDI_MODE))) == [
+                "MIDI mode",
+                "multi",
+                "omni / poly / multi",
+            ]
+            assert screen._values[m.Parameter.MASTER_CLOCK_TEMPO] == 120
+
+    async def test_a_parameter_that_could_not_be_read_shows_a_question_mark(self, app):
+        """A read that failed is said, not rounded to zero -- and a choice
+        value outside its own enumeration is not spelled as one."""
+        screen = self._screen(
+            values={
+                m.Parameter.MIDI_MODE: None,
+                m.Parameter.MASTER_FX_BYPASS: 9,
+            }
+        )
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            table = screen.query_one("#master-table", DataTable)
+            assert table.get_row(str(m.Parameter.MIDI_MODE))[1] == "?"
+            assert table.get_row(str(m.Parameter.MASTER_FX_BYPASS))[1] == "unknown (9)"
+
+    async def test_enter_on_a_row_offers_that_edit_and_the_answer_reaches_on_apply(
+        self, app
+    ):
+        applied = []
+        screen = self._screen(
+            values={m.Parameter.MIDI_MODE: 2},
+            on_apply=lambda parameter_id, value: applied.append((parameter_id, value)),
+        )
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            screen.query_one("#master-table", DataTable).focus()
+            await pilot.press("enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, PromptScreen))
+            await pilot.press("1")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert applied == [(m.Parameter.MIDI_MODE, 1)]
+
+    async def test_a_word_where_a_number_was_asked_for_is_refused(self, app):
+        said = _record(app)
+        applied = []
+        screen = self._screen(
+            on_apply=lambda parameter_id, value: applied.append((parameter_id, value))
+        )
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            screen.query_one("#master-table", DataTable).focus()
+            await pilot.press("enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, PromptScreen))
+            await pilot.press(*list("loud"))
+            await pilot.press("enter")
+            await pilot.pause()
+            assert applied == []
+            message, refused = said[-1]
+            assert message == "'loud' is not a number"
+            assert refused
+
+    async def test_an_empty_answer_offers_no_edit(self, app):
+        applied = []
+        screen = self._screen(
+            on_apply=lambda parameter_id, value: applied.append((parameter_id, value))
+        )
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            screen.query_one("#master-table", DataTable).focus()
+            await pilot.press("enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, PromptScreen))
+            await pilot.press("enter")
+            await pilot.pause()
+            assert applied == []
+
+    async def test_the_result_of_an_edit_is_said_from_the_screen(self, app):
+        said = _record(app)
+        screen = self._screen()
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            screen.result(True, "clock tempo = 300")
+            assert said[-1] == ("clock tempo = 300", False)
+            screen.result(False, "transpose did not take 5")
+            assert said[-1] == ("transpose did not take 5", True)

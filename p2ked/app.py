@@ -232,13 +232,25 @@ class P2kedApp(App):
     #: ``__init__``. See there for what the flag is for.
     _busy: bool
 
+    #: What ``--allow-write`` was given on the command line: the state the
+    #: gate below starts in, recorded because the gate itself is created on
+    #: first use. Declared here for the same reason ``_busy`` is.
+    _allow_write: bool
+
     # --- the write gate ------------------------------------------------------
 
     @property
     def _gate(self) -> EditGate:
-        """One gate per app, created on first use."""
+        """One gate per app, created on first use.
+
+        Armed when it is first made if ``--allow-write`` was given, and
+        locked otherwise. The flag is a starting state rather than a second
+        gate, because two gates would mean a caller could hold one the app
+        does not check -- and the screen's ``w`` and the app's ``w`` toggle
+        the same object either way.
+        """
         if getattr(self, "_write_gate", None) is None:
-            self._write_gate = EditGate(armed=False)
+            self._write_gate = EditGate(armed=self._allow_write)
         return self._write_gate
 
     @property
@@ -251,6 +263,22 @@ class P2kedApp(App):
     def action_toggle_write_gate(self) -> None:
         self._gate.toggle()
         self.notify_status(self._gate.describe())
+
+    def action_undo(self) -> None:
+        """``z`` in the browser: reverse the last logged master edit.
+
+        The edit screen binds the same key to the same name -- a modal
+        screen's bindings take precedence over the app's, so there is no
+        double handling -- but an edit is made *through* the screen and
+        undone *from* the browser after it closes, so the key has to work
+        with no screen open. It is the app's because the worker is: see
+        :meth:`_undo_master_edits`.
+        """
+        self._undo_master_edits(1)
+
+    def action_undo_all(self) -> None:
+        """``Z``: every logged master edit, newest first."""
+        self._undo_master_edits(self._editor.log.pending)
 
     def action_edit_master(self) -> None:
         """Open the master-parameter editor.
@@ -306,10 +334,28 @@ class P2kedApp(App):
     def _apply_master_edit(self, parameter_id: int, value: int) -> None:
         """Send one master edit, then read it back.
 
-        The whole thing is on a worker: a write and its verification are one
-        operation, and splitting them across threads would let another read
-        land between them.
+        The gate and the range are checked here, on the main thread and
+        before anything is spawned -- the same shape as ``_busy`` below.
+        This is the only place an edit can be stopped before it reaches
+        the wire: the screen offers the edit, but the app is what sends it,
+        so a check that lived on the screen would be a check the next
+        caller of this method could simply not make.
+
+        A refusal says so and sends nothing. :meth:`MasterEditor.allow`
+        answers both cases -- a locked gate and a value outside the
+        parameter's range -- because both are a reader's question rather
+        than a failure of the program.
         """
+        parameter = MASTER_BY_ID.get(parameter_id)
+        if parameter is None:
+            self.notify_status(
+                f"parameter {parameter_id} is not one p2ked edits", refused=True
+            )
+            return
+        refusal = self._editor.allow(parameter, value)
+        if refusal is not None:
+            self.notify_status(refusal, refused=True)
+            return
         if self._busy:
             self.notify_status("busy", refused=True)
             return
@@ -401,9 +447,14 @@ class P2kedApp(App):
         favorites=None,
         installed=None,
         config_path: Optional[str] = None,
+        allow_write: bool = False,
     ) -> None:
         super().__init__()
         self.device = device
+        #: What ``--allow-write`` asked for. The gate is built lazily -- see
+        #: :attr:`_gate` -- so the flag is kept here as the state to start it
+        #: in rather than passed to a gate that does not exist yet.
+        self._allow_write = allow_write
         self.catalog = catalog if catalog is not None else cat.empty()
         self.channel = channel
         #: Injected rather than opened here, so a test never writes into the
@@ -1399,6 +1450,7 @@ def build_parser() -> argparse.ArgumentParser:
         catalog=True,
         config=True,
         favorites=True,
+        allow_write=True,
     )
     parser.add_argument(
         "--all-roms",
@@ -1542,6 +1594,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         installed=installed,
         config_path=config_path,
         channel=channel,
+        allow_write=args.allow_write,
     )
     try:
         app.run()
