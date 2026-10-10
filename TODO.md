@@ -284,8 +284,13 @@ be silent, and was verified against hardware. See RESOLUTION_NOTES §8.
 **Superseded plan:**
 
 rxved has a multi-mode screen: 16 parts, their channels, levels, receive
-switches and routing, plus a report on why a channel is silent. p2ked has
-nothing equivalent.
+switches and routing, plus a report on why a channel is silent.
+~~p2ked has nothing equivalent.~~ **DONE 2026-10-10.** `m` (and `p2kcli
+channels`) reads one Setup Dump and shows all 32 channels, their nine
+parameters, the master panel and the why-not column, with the documented
+reason set for every channel that would be silent. The edit half of the
+same parity is item 48; multisetup browsing is still deferred -- the
+primitive is built and documented, the UI is not.
 
 "Multi" is two things on this machine and they need two features:
 
@@ -1234,3 +1239,70 @@ the remembered channel, and the AST guard in `tests/test_legend.py` covered
 `config.save_*` only -- so a *read* of the developer's real `./config.toml`
 decided which channel the suite sent on. The guard now covers `load_*` too,
 and the test names its file.
+
+## 47. The per-channel parameter IDs — the probe is written, the answer is a session's
+
+**Status:** open, and not closable from software: it needs a unit on the
+desk.
+
+`probe_channel_ids()` in `p2ked/masteredit.py` reads a range of parameter
+IDs -- 662-1023 by default, the block after the master arpeggiator at
+641-661, which is a hint about where to look and is labelled as one -- and
+reports which of them answer. It takes a `read` callable, sends nothing, and
+does not try to match the answers against the dump's nine fields by itself:
+a value that happens to agree once is not a mapping, and this is a finding
+to be recorded rather than an assignment to be made automatically.
+
+**Why the answer is not in here.** The Setup Dump carries all nine
+per-channel values positionally, so reading them is solved; setting one
+needs its parameter ID, and no document to hand lists them.
+`CHANNEL_EDIT_IDS` is `None` for that reason, and the edit screen refuses a
+per-channel edit with a sentence (`CHANNEL_EDIT_HINT`) rather than sending
+to a number it invented. A wrong ID is a write to a place nobody named,
+which is the one failure this project's own rules forbid.
+
+**For the next hardware session:** run the probe against a real unit,
+establish which answering ID is which of the dump's nine fields, and record
+the mapping here -- after which per-channel editing needs nothing but the
+table.
+
+## 48. Editing exists — the gate, the log, and the read-back — 2026-10-10
+
+**Status:** done. `p2ked/masteredit.py` is the logic and has no I/O in it,
+`p2ked/multi.py` is the screen, `p2ked/app.py` is the wire, and
+`p2k/bridge.py` grew `set_parameter()` beside the reads. Item 7's "no
+editing, and no plan to add it casually" is reversed; what was built is the
+apparatus that item asked for.
+
+The write path is the family's editor shape rather than an invention: a
+write gate locked by default (`w` arms it, and the edit screen says which
+state it is in instead of leaving the question to a keybinding manual), an
+undo log (`z` the last edit, `Z` all of them) that sends the *previous*
+value back, because the old value is recorded before the new one goes out,
+and a read-back after every edit on the same worker -- nothing lands
+between the write and the verification. Only what the read-back agrees with
+is logged, so undo cannot restore a thing that never arrived, and a request
+the unit ignored rather than refused is caught by that read instead of
+looking like a success.
+
+Master parameters only, and that is the whole safety argument: every ID in
+`MASTER_PARAMETERS` is one p2ked already reads, read back from a unit and
+agreed with the dump (RESOLUTION_NOTES §10). Per-channel editing is refused
+with a reason -- see item 47.
+
+Exercised end to end against the demo device: an edit changes the value,
+the read-back agrees, the log holds `(385, 2, 0)`, and `z` sends the
+previous value back. `tests/test_masteredit.py` covers the gate, the range
+check, the refused read-back, the undo log and the probe (`make check`:
+323 passed, 1 skipped), and `--allow-write` arms the gate from the command
+line while the default stays locked.
+
+**Two things the apparatus needed that are in, now.** `--allow-write` is
+wired: `build_parser()` passes `allow_write=True` to `add_common_arguments`
+and `main()` threads it into the `EditGate`, so the docstrings' promise is
+true. And the undo keys are the browser's too: `P2kedApp` binds `z`/`Z` to
+real actions (`action_undo` / `action_undo_all` → `_undo_master_edits`), so
+undo works with the edit screen closed instead of the legend advertising
+keys that did nothing. One bug found on the way: Textual's modal screens cut
+the app's binding chain, so `w` was unreachable while the master editor was
+open -- the screen now binds it against the same gate object.
