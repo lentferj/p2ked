@@ -1306,3 +1306,52 @@ undo works with the edit screen closed instead of the legend advertising
 keys that did nothing. One bug found on the way: Textual's modal screens cut
 the app's binding chain, so `w` was unreachable while the master editor was
 open -- the screen now binds it against the same gate object.
+
+## 49. The modals you could not leave, and the edits you could not see — FIXED 2026-10-10
+
+**Status:** done, in `f78cef5` (382 passed, 1 skipped, 78.32% coverage). Found
+by driving the TUI, not by the tests -- which is the point of driving it.
+
+Nine defects, one commit: `escape`/`q` were bound to an `action_close` that
+did not exist on either modal (a modal also cuts the app's own `q`, so both
+screens were traps); a locked-gate or range refusal was written to the app's
+status bar, which the modal covers as its tinted backdrop, so a refusal
+looked like silence; a *successful* edit reached the unit but the "now" cell
+was never redrawn (`_values` was never updated and `refresh()` repaints
+nothing); enum parameters were typed as an index although `choices` already
+carried the names; there was no `+`/`-` nudge; the multi screen had no
+per-channel detail, so Enter did nothing and the refused-with-a-reason hint
+lived where nobody was looking; the MIDI channel was announced once, after
+a change, and never shown again; the demo routed all 32 channels to a send,
+so it reported "32 of 32 would not sound" over its own deliberately-enabled
+channels -- flatter than life, which is the one thing this fake is not
+allowed to be; and `z` said "nothing to undo" with a favourite toggled,
+because favourites were not in the undo timeline at all.
+
+What landed: `action_close` on all four modals; a status line *inside* the
+modal, where the refusals are said; the "now" cell and the note redrawn
+after a verified edit; rxved's shape of named-value picker for enum
+parameters; gated, range-clamped, undo-able `+`/`-`; a read-only channel
+detail (all nine parameters, the why-not reasons, the refusal's reason); the
+channel in the window's subtitle; demo channels routed per what they play;
+and one undo timeline (`EditChange | FavouriteChange`) so `z` reverses the
+most recent change of either kind -- the master edit through the wire, the
+favourite through the local store, no frame for it.
+
+## 50. The master FX block is not editable — OPEN
+
+**Status:** open, being built after 49. `MASTER_PARAMETERS` covers eleven
+general settings (mode, the multimode channels, transpose, tune, bend,
+tempo, FX *bypass*, device ID) and nothing from the 17-value master FX
+block the dump carries -- no algorithm, no FX A/B/C parameters, no FX
+amount. Reading them is solved (they are in the dump); writing one needs
+its parameter ID, and the IDs in `MASTER_BLOCKS` are unit-agreed
+(RESOLUTION_NOTES §10) but the labels and ranges are not yet transcribed
+for the edit screen the way §12 transcribed the general ones.
+
+**Not a safety question**, unlike the per-channel IDs of item 47: these are
+master parameters p2ked already reads, the same standard
+`MASTER_PARAMETERS` holds itself to. It is transcription and UI work: cite
+each label and range from the parameter tree, build the FX view on the
+master editor (gate, read-back, undo -- all of which the editor already
+does), and show named values where the FX parameters have them.
