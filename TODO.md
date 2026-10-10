@@ -1338,20 +1338,19 @@ and one undo timeline (`EditChange | FavouriteChange`) so `z` reverses the
 most recent change of either kind -- the master edit through the wire, the
 favourite through the local store, no frame for it.
 
-## 50. The master FX block is not editable — OPEN
+## 50. The master FX block is not editable — FIXED 2026-10-10
 
-**Status:** open, being built after 49. `MASTER_PARAMETERS` covers eleven
-general settings (mode, the multimode channels, transpose, tune, bend,
-tempo, FX *bypass*, device ID) and nothing from the 17-value master FX
-block the dump carries -- no algorithm, no FX A/B/C parameters, no FX
-amount. Reading them is solved (they are in the dump); writing one needs
-its parameter ID, and the IDs in `MASTER_BLOCKS` are unit-agreed
-(RESOLUTION_NOTES §10) but the labels and ranges are not yet transcribed
-for the edit screen the way §12 transcribed the general ones.
+**Status:** done, in `e16f14f`. `x` on the multi screen opens the FX editor
+on the master editor's own apparatus: the same gate, the same read-back
+after every send, the same undo.
 
-**Not a safety question**, unlike the per-channel IDs of item 47: these are
-master parameters p2ked already reads, the same standard
-`MASTER_PARAMETERS` holds itself to. It is transcription and UI work: cite
-each label and range from the parameter tree, build the FX view on the
-master editor (gate, read-back, undo -- all of which the editor already
-does), and show named values where the FX parameters have them.
+`FX_PARAMETERS` in `p2ked/masteredit.py` is the block transcribed --
+sixteen parameters, ids 513-528, every label, range and named list cited in
+§12 ("The master FX block: sixteen parameters, transcribed the same way"),
+which also records where the documents disagree. The two algorithm
+parameters are named lists (44 and 32 names), so they are picked rather than
+typed; the rest are ranges. The IDs are unit-agreed master-block IDs -- the
+§10 standard, and the module docstring claims no more than that. Same
+standing caveat as the general block: no unit has been asked which range
+its firmware enforces, so the first real FX edit is a hardware session like
+the first real master edit.
