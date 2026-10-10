@@ -150,6 +150,18 @@ known-first-party = ["p2k", "p2ked", "vinsynlib"]
     "PLR0917", # same, positionally constructed by `_rom()`
     "RUF022",  # __all__ not alphabetical
 ]
+"p2ked/masteredit.py" = [
+    "PLR0913", # _p() takes one positional per column of the table it builds
+    "PLR0917", # same, positionally: it is data, not behaviour
+]
+"p2ked/multi.py" = [
+    "RUF012",  # BINDINGS and DEFAULT_CSS are Textual class constants
+    "S110",    # a refresh after the screen closed: nothing to report to
+    "SIM105",  # contextlib.suppress would hide which table was refreshed
+]
+"p2ked/prompts.py" = [
+    "RUF012",  # BINDINGS is a Textual class constant
+]
 "p2ked/app.py" = [
     "B904",    # `raise SystemExit` in main() without `from`
     "C901",    # _fill_presets, _show_info, main
