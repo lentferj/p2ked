@@ -64,6 +64,7 @@ worse, silently ignores.
 
 from __future__ import annotations
 
+from collections.abc import Container
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 __all__ = [
@@ -153,6 +154,9 @@ class Command:
     PRESET_DUMP_REQUEST = 0x11
     SETUP_DUMP = 0x1C
     SETUP_DUMP_REQUEST = 0x1D
+    #: Copy Master Setup (spec v2.2 p34): one multisetup over another, the
+    #: only way to make a stored setup current so it can be read.
+    COPY_MASTER_SETUP = 0x2C
 
 
 class Parameter:
@@ -842,6 +846,21 @@ class TrailingBlock:
 class ChannelState:
     """One MIDI channel's slot in a setup."""
 
+    #: Declared for the type checker, which cannot see through
+    #: :func:`setattr` in ``__init__`` -- and which every caller that takes
+    #: a ``ChannelState`` and reads a field out of it needs. Annotations
+    #: only: assigning here would collide with the ``__slots__`` below.
+    channel: int
+    preset: int
+    volume: int
+    pan: int
+    mix_output: int
+    arp: int
+    enable: int
+    bank_map: int
+    receive_program_change: int
+    rom_id: int
+
     __slots__ = (
         "channel",
         "preset",
@@ -868,17 +887,71 @@ class ChannelState:
     def silent_because(self) -> Optional[str]:
         """Why this channel makes no sound, if a readable reason says so.
 
-        Ordered nearest-cause-first, like the sibling rxved's equivalent.
+        The first of :meth:`silence_reasons`, for callers that want one
+        sentence. Ordered nearest-cause-first, like the sibling rxved's
+        equivalent.
+
         Note what is *not* here: the MIDI Mode. In Omni or Poly the unit is
         not multitimbral at all and none of these fields matter -- that is
         the caller's to know and say, because it is a property of the unit
         and not of the channel.
         """
+        reasons = self.silence_reasons()
+        return reasons[0] if reasons else None
+
+    def silence_reasons(
+        self,
+        *,
+        multitimbral: bool = True,
+        fitted: Optional[Container[int]] = None,
+    ) -> List[str]:
+        """Every reason this channel makes no sound that the unit reports.
+
+        Ordered nearest-cause-first, as rxved's is: the reason a reader is
+        most likely to be able to act on comes first. ``multitimbral=False``
+        says the MIDI Mode is Omni or Poly, in which case **no** per-channel
+        reason applies -- the unit ignores the whole channel map and plays
+        one preset, so "channel 4 is disabled" would be true and useless.
+        The caller knows the mode and says so once, rather than every row.
+
+        ``fitted`` is the ROM IDs the unit reported as installed, so a
+        channel pointing at a ROM that is not in the machine can say so.
+        Without it that check is skipped rather than guessed at.
+
+        Every reason here is transcribed from the operator's manual, page
+        and command cited; see docs/RESOLUTION_NOTES.md §12. What is *not*
+        here is a reason the unit does not report: a cable, the submix jacks
+        being empty, or the monitor. p2ked does not claim those.
+        """
+        if not multitimbral:
+            return []
+        reasons: List[str] = []
         if not self.enable:
-            return "channel is disabled"
+            # "MIDI Enable lets you turn each MIDI channel on and off
+            # independently when in Multi mode" (p45). It also means the
+            # unit's own front-panel reading of this channel is off.
+            reasons.append("channel is disabled (MIDI Enable is off)")
+        if self.preset == 0 and not self.enable:
+            # An empty slot reads preset 0, which is what both an
+            # unprogrammed channel and a real preset 0 look like. Only
+            # worth saying when the channel is off anyway.
+            reasons.append("no preset assigned")
         if self.volume == 0:
-            return "volume is 0"
-        return None
+            reasons.append("volume is 0")
+        if self.rom_id and fitted is not None and self.rom_id not in fitted:
+            # The dump carries the ROM ID per channel; a channel aimed at a
+            # SIMM that is not fitted has nothing to play.
+            reasons.append(f"ROM {self.rom_id} is not fitted")
+        if self.mix_output >= 0:
+            # "Mix Output ... allows you to override the routing assignments
+            # made in each preset ... For each of the 32 MIDI channels, you
+            # can select Send 1-4, or Preset" (p38). -1 is "use preset";
+            # 0-3 are Send 1-4, and Sends 2 and 3 go to the rear submix
+            # jacks when a plug is in them -- which p2ked cannot see.
+            reasons.append(
+                f"routed to send {self.mix_output + 1}, not the preset's output"
+            )
+        return reasons
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (
@@ -1037,6 +1110,63 @@ class SetupDump:
 def setup_dump_request(device: int = BROADCAST_DEVICE) -> bytes:
     """Ask for the whole setup in one message. Read-only, makes no sound."""
     return frame(Command.SETUP_DUMP_REQUEST, device=device)
+
+
+#: The Setup Edit Buffer, as ``Copy Master Setup`` numbers it. Not a setup;
+#: the live one the unit is playing from.
+SETUP_EDIT_BUFFER = -1
+
+
+def copy_master_setup(
+    source: int, destination: int, *, device: int = BROADCAST_DEVICE
+) -> bytes:
+    """Copy one multisetup over another. **This changes the instrument.**
+
+    ``{F0h, 18h, 0Fh, dd, 55h, 2Ch, xx, xx, yy, yy, F7h}`` (spec v2.2 p34):
+    both numbers are 14-bit LSB-first, and **either the source or the
+    destination must be the edit buffer** (``-1``). The specification is
+    blunt about what it does -- "Copy destroys whatever Parameters existed
+    in the Destination location" -- which is why p2ked never sends this
+    without a backup and an armed, explicit confirmation.
+
+    What it buys is the whole point. A Setup Dump can only ever be read for
+    **the current** setup; to read setup 42 you have to make it current, and
+    the only way to do that is to copy it over the edit buffer. So browsing
+    multisetups is:
+
+        1. dump the current setup and hold it  (read; the backup)
+        2. copy setup 42 to the edit buffer    (this command)
+        3. request the setup dump             (read; now it is setup 42)
+        4. restore by sending the backup back, or by copying the
+           pre-copy setup back if it was never a stored location
+
+    Steps 2 and 4 both overwrite the live setup, which is why CLAUDE.md's
+    rules -- back up, arm then fire, verify by reading back -- are not
+    optional here. p2ked does the read side of this today; the write side
+    is TODO and this builder is what it will be built on.
+    """
+    payload = [
+        0x02,
+        *pack14_signed(source),
+        *pack14_signed(destination),
+    ]
+    return frame(Command.COPY_MASTER_SETUP, payload, device=device)
+
+
+def parse_copy_master_setup(packet: Packet) -> Tuple[int, int]:
+    """A Copy Master Setup as ``(source, destination)``. Both may be -1."""
+    if packet.command != Command.COPY_MASTER_SETUP:
+        raise ProtocolError(f"command {packet.command:#04x} is not Copy Master Setup")
+    data = packet.payload
+    if len(data) < 5:
+        raise ProtocolError(
+            f"copy message carries {len(data)} bytes, expected at least 5"
+        )
+    # data[0] is the byte-pair count, read rather than assumed.
+    return (
+        unpack14_signed(data[1], data[2]),
+        unpack14_signed(data[3], data[4]),
+    )
 
 
 def parse_setup_dump(packet: Packet) -> SetupDump:

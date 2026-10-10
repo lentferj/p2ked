@@ -686,6 +686,43 @@ class ProteusBridge:
 
         return m.parse_parameter(self._await(matches, timeout=timeout))[1]
 
+    def set_parameter(
+        self,
+        parameter_id: int,
+        value: int,
+        *,
+        timeout: Optional[float] = None,
+    ) -> None:
+        """Set one parameter. **This changes the instrument.**
+
+        Sent, then not verified: the write gate, the undo log and the
+        read-back that follows belong to the caller, because they are about
+        a session and a reader rather than about the wire. See
+        :mod:`p2ked.masteredit`.
+
+        Values are signed. An unsigned-only encoder would refuse every
+        negative offset the machine has, and -1 read back unsigned is 16383,
+        which no range check catches.
+        """
+        self._drain()
+        self._send(m.parameter_edit(parameter_id, value, device=self.device_id))
+
+    def copy_master_setup(
+        self, source: int, destination: int, *, timeout: Optional[float] = None
+    ) -> None:
+        """Copy one multisetup over another. **This changes the instrument.**
+
+        The specification is blunt -- "Copy destroys whatever Parameters
+        existed in the Destination location" -- and either the source or the
+        destination must be the Setup Edit Buffer (``-1``). This is the only
+        way to make a stored setup current, which is the only way to read
+        it, so it is the whole of multisetup browsing and needs the
+        backup-then-verify apparatus around it described in
+        :mod:`p2ked.masteredit`.
+        """
+        self._drain()
+        self._send(m.copy_master_setup(source, destination, device=self.device_id))
+
     def midi_mode(self, *, timeout: Optional[float] = None) -> int:
         """Omni, Poly or Multi. See :class:`p2k.messages.MidiMode`.
 
