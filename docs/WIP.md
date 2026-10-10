@@ -5,13 +5,16 @@ SPDX-FileCopyrightText: Copyright (C) 2026  p2ked contributors
 
 # WIP — the multi menu (rxved parity) and editing
 
-**State at hand-off, 2026-10-10: the tree is BROKEN and uncommitted.**
+**Closed at hand-off, 2026-10-10: every item below landed on `master`, and
+`make check` is green (323 passed, 1 skipped, 75.98% coverage).**
 
-Nothing in this list is on `master` yet. `make check` has not been run since
-the CLI edit below, and will fail. `master` is at `1f4940f` and works.
-
-The first job of the next session is *"run `make check`, fix the failures,
-commit in logical chunks, stop when green"* — not to implement anything new.
+The note below is kept as the record of what the work was. The first session
+picked the tree up BROKEN and uncommitted, ran `make check`, fixed the
+failures in the order listed, and committed in logical chunks; the "Not
+started" list followed: the edit-path tests (`tests/test_masteredit.py`),
+§12, CLAUDE.md, TODO items 9/47/48, the README, the DISCLAIMER, and this
+header. Two doc caveats the follow-up passes left stale are now true:
+`--allow-write` is wired, and `z`/`Z` undo from the browser.
 
 ---
 
