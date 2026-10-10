@@ -211,6 +211,47 @@ def _cmd_channels(device, args) -> None:
     except Exception:
         mode = None
     catalog = _catalog(args)
+
+    if getattr(args, "json", False):
+        import json
+
+        multitimbral = mode is None or msg.MidiMode.is_multitimbral(mode)
+        payload = {
+            "setup": dump.name,
+            "mode": None if mode is None else msg.MidiMode.name(mode),
+            "multitimbral": multitimbral,
+            "master": {
+                "clock_tempo": dump.clock_tempo,
+                "transpose": dump.transpose,
+                "bend_range": dump.bend_range,
+                "basic_channel": dump.basic_channel,
+                "fx_control_channel": dump.fx_control_channel,
+                "tempo_control_channel": dump.tempo_control_channel,
+                "device_id": dump.midi_id,
+            },
+            "channels": [
+                {
+                    "channel": entry.channel_display,
+                    "plays": _plays(entry, catalog),
+                    "preset": entry.preset,
+                    "rom_id": entry.rom_id,
+                    "volume": entry.volume,
+                    "pan": entry.pan,
+                    "mix_output": entry.mix_output,
+                    "arp": entry.arp,
+                    "enable": entry.enable,
+                    "bank_map": entry.bank_map,
+                    "receive_program_change": entry.receive_program_change,
+                    "silent_reasons": entry.silence_reasons(
+                        multitimbral=multitimbral, fitted=None
+                    ),
+                }
+                for entry in dump.channels
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
     print(f"setup {dump.name!r}   {dump.channel_count} channels")
     if mode is None:
         print("MIDI mode      could not be read")
@@ -224,41 +265,88 @@ def _cmd_channels(device, args) -> None:
                 "stored but not in effect"
             )
         )
+    print(_master_line(dump))
     print()
     rows = []
     for entry in dump.channels:
-        rom = (
-            roms.USER
-            if entry.rom_id == roms.USER_ROM_ID
-            else roms.rom_for_simm_id(entry.rom_id)
-        )
-        plays = f"ROM {entry.rom_id} preset {entry.preset}"
-        if rom is not None:
-            index, pc = divmod(entry.preset, roms.PRESETS_PER_BANK)
-            if index < len(rom.lsbs):
-                bank_id = f"{rom.id}-{rom.lsbs[index]}"
-                plays = (
-                    f"{rom.name} {entry.preset} {catalog.display_name(bank_id, pc)}"
-                ).rstrip()
         rows.append(
             [
                 str(entry.channel_display),
-                plays,
+                _plays(entry, catalog),
                 str(entry.volume),
                 str(entry.pan - 64),
-                str(entry.mix_output),
+                "use preset"
+                if entry.mix_output < 0
+                else f"send {entry.mix_output + 1}",
                 "on" if entry.receive_program_change else "OFF",
-                entry.silent_because or "",
+                str(entry.arp),
+                f"{_rom_name(entry.rom_id)} ({entry.rom_id})",
+                "; ".join(entry.silence_reasons(multitimbral=True, fitted=None)),
             ]
         )
-    print(_table(rows, ["ch", "plays", "vol", "pan", "out", "rxPC", ""]))
-    audible = [c.channel_display for c in dump.channels if c.silent_because is None]
+    print(
+        _table(
+            rows,
+            ["ch", "plays", "vol", "pan", "out", "rxPC", "arp", "ROM", "why not"],
+        )
+    )
+    audible = [
+        c.channel_display
+        for c in dump.channels
+        if not c.silence_reasons(multitimbral=True, fitted=None)
+    ]
     print()
     print(
         "Channels that would sound: "
         + (", ".join(map(str, audible)) if audible else "none")
     )
     print("Channels 17-32 are this family's second MIDI interface.")
+    print(
+        "A reason here is one the unit reported: a cable, an unplugged "
+        "submix jack and the monitor are not, and p2ked does not claim them."
+    )
+
+
+def _plays(entry, catalog) -> str:
+    """What a channel plays, named where the catalog can name it."""
+    rom = (
+        roms.USER
+        if entry.rom_id == roms.USER_ROM_ID
+        else roms.rom_for_simm_id(entry.rom_id)
+    )
+    plays = f"ROM {entry.rom_id} preset {entry.preset}"
+    if rom is not None:
+        index, pc = divmod(entry.preset, roms.PRESETS_PER_BANK)
+        if index < len(rom.lsbs):
+            bank_id = f"{rom.id}-{rom.lsbs[index]}"
+            named = catalog.display_name(bank_id, pc) if catalog else ""
+            plays = f"{rom.name} {entry.preset} {named}".rstrip()
+    return plays
+
+
+def _rom_name(rom_id: int) -> str:
+    for entry in roms.ROMS:
+        if entry.msb == rom_id:
+            return entry.name
+    return "unknown ROM"
+
+
+def _master_line(dump) -> str:
+    """The master parameters the channel map is played through, one line."""
+    parts = []
+
+    def part(label: str, value, fmt: str = "{}") -> None:
+        shown = fmt.format(value) if value is not None else "?"
+        parts.append(f"{label}={shown}")
+
+    part("tempo", dump.clock_tempo, "{} bpm")
+    part("transpose", dump.transpose, "{:+d}")
+    part("bend", dump.bend_range, "±{}")
+    part("basic ch", dump.basic_channel)
+    part("FX ch", dump.fx_control_channel)
+    part("tempo ch", dump.tempo_control_channel)
+    part("id", dump.midi_id)
+    return " · ".join(parts)
 
 
 def _cmd_names(device, args) -> None:
@@ -417,9 +505,14 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["config"],
         help="what the unit reports about itself: which ROMs are fitted",
     )
-    sub.add_parser(
+    sp = sub.add_parser(
         "channels",
         help="every MIDI channel: what it plays, and why it might not (makes no sound)",
+    )
+    sp.add_argument(
+        "--json",
+        action="store_true",
+        help="one JSON object instead of a table, for another program to read",
     )
     sp = sub.add_parser("names", help="read a bank's names (makes no sound)")
     sp.add_argument("bank")

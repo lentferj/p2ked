@@ -45,19 +45,27 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Header, Input, Label, Static
+from textual.widgets import DataTable, Header, Label, Static
 
 from p2k import catalog as cat
-from p2k import messages as params
 from p2k import roms
 from p2ked._report import say_connected, say_fallback, say_probing
+from p2ked.masteredit import (
+    MASTER_BY_ID,
+    MASTER_PARAMETERS,
+    EditGate,
+    EditLog,
+    MasterEditor,
+)
+from p2ked.multi import MasterEditScreen, MultiScreen
+from p2ked.prompts import PromptScreen
 from vinsynlib import cli as vincli
 from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
 from vinsynlib.ui.hints import KeyHints
@@ -70,7 +78,14 @@ from vinsynlib.ui.hints import KeyHints
 # below passes KEY_HINTS explicitly. The CSS selector is unchanged -- same
 # class name, so the stylesheet rule still matches.
 
-__all__ = ["P2kedApp", "main", "build_parser", "KEY_HINTS", "wrap_blocks"]
+__all__ = [
+    "P2kedApp",
+    "PromptScreen",
+    "main",
+    "build_parser",
+    "KEY_HINTS",
+    "wrap_blocks",
+]
 
 #: What the favourites view steps through, in order. Named after rxved's,
 #: deliberately: the same key should mean the same three things across these
@@ -108,13 +123,22 @@ KEY_HINTS = (
     "t tags",
     "n note",
     # `m` means channels in a browser everywhere in this family. Here that
-    # was already true: ChannelScreen shows what every MIDI channel plays.
+    # was already true: the multi screen shows what every MIDI channel plays.
     "m channels",
     # p2ked's own, plus the one key it borrows from rxved rather than the
     # family.
     "v favourites view",
     "C category",
     "a all ROMs",
+    # The write path, in the family's own words: these three are the
+    # `EDITOR_KEYS` entries p2ked now binds, spelled as the family spells
+    # them so a reader who has used rxved already knows what they do. They
+    # are in the legend because a write must be findable from the legend --
+    # a key that changes the unit and is documented nowhere is a key that
+    # gets pressed by accident.
+    "w write gate",
+    "z undo",
+    "Z undo all",
     "i device",
     "? help",
     "q quit",
@@ -150,193 +174,6 @@ class ReportScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
-class PromptScreen(ModalScreen[Optional[str]]):
-    """One line of text."""
-
-    DEFAULT_CSS = """
-    PromptScreen { align: center middle; }
-    PromptScreen > Vertical {
-        width: 70; height: auto; border: thick $accent;
-        background: $surface; padding: 1 2;
-    }
-    """
-
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def __init__(self, prompt: str, current: str = "") -> None:
-        super().__init__()
-        self._prompt = prompt
-        self._current = current
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(self._prompt)
-            yield Input(value=self._current, id="value")
-
-    def on_mount(self) -> None:
-        self.query_one("#value", Input).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class ChannelScreen(ModalScreen[None]):
-    """Every MIDI channel: what it plays, and why it might not.
-
-    The counterpart to the sibling rxved's multi-mode screen, and shaped by
-    two differences.
-
-    **Thirty-two channels, not sixteen.** A Proteus 2000 has two MIDI
-    interfaces. Both halves are shown, because a channel that answers on an
-    unwired interface is exactly the kind of thing somebody needs to see.
-
-    **Read-only, and silent.** One Setup Dump gets the lot; nothing is
-    selected and nothing sounds.
-
-    **The MIDI Mode comes first, above the table**, because it decides
-    whether anything below it applies: in Omni or Poly the unit is not
-    multitimbral and the per-channel settings are not in effect. Saying
-    "channel 3 is disabled" to somebody whose unit is in Omni would be true
-    and useless. It is read as a parameter (id 385) rather than out of the
-    dump, which needs no knowledge of the dump's master-block layout at all.
-    """
-
-    DEFAULT_CSS = """
-    ChannelScreen { align: center middle; }
-    ChannelScreen > Vertical {
-        width: 96; height: 90%; border: thick $accent;
-        background: $surface; padding: 1 2;
-    }
-    ChannelScreen DataTable { height: 1fr; }
-    ChannelScreen .note { height: auto; color: $text-muted; padding-top: 1; }
-    """
-
-    BINDINGS = [Binding("escape", "close", "Close"), Binding("q", "close", "Close")]
-
-    def __init__(self, dump, catalog, mode=None) -> None:
-        super().__init__()
-        self._dump = dump
-        self._catalog = catalog
-        #: ``None`` when it could not be read -- which is said, not hidden.
-        self._mode = mode
-
-    def compose(self) -> ComposeResult:
-        title = (
-            f"[b]Channels — setup “{self._dump.name}”[/b]"
-            if self._dump.name
-            else "[b]Channels[/b]"
-        )
-        if self._mode is None:
-            title += "  [dim](MIDI mode could not be read)[/dim]"
-        elif params.MidiMode.is_multitimbral(self._mode):
-            title += f"  MIDI mode [b]{params.MidiMode.name(self._mode)}[/b]"
-        else:
-            title += (
-                f"  [b]MIDI mode {params.MidiMode.name(self._mode)} — "
-                f"NOT multitimbral[/b]"
-            )
-        with Vertical():
-            yield Label(title)
-            yield DataTable(id="channel-table", cursor_type="row", zebra_stripes=True)
-            yield Static(self._report(), classes="note")
-            yield Static("[dim]esc / q to close[/dim]")
-
-    def on_mount(self) -> None:
-        table = self.query_one("#channel-table", DataTable)
-        for label, key in (
-            ("ch", "ch"),
-            ("plays", "plays"),
-            ("vol", "vol"),
-            ("pan", "pan"),
-            ("out", "out"),
-            ("rxPC", "rxpc"),
-            ("", "flag"),
-        ):
-            table.add_column(label, key=key)
-        for entry in self._dump.channels:
-            table.add_row(*self._row(entry), key=str(entry.channel))
-
-    def _plays(self, entry) -> str:
-        """What this channel is set to, named if p2ked can name it."""
-        rom = (
-            roms.USER
-            if entry.rom_id == roms.USER_ROM_ID
-            else roms.rom_for_simm_id(entry.rom_id)
-        )
-        if rom is None:
-            return f"[dim]ROM {entry.rom_id}, preset {entry.preset}[/dim]"
-        index, program_change = divmod(entry.preset, roms.PRESETS_PER_BANK)
-        if index >= len(rom.lsbs):
-            return f"[dim]{rom.name}, preset {entry.preset} (out of range)[/dim]"
-        bank_id = f"{rom.id}-{rom.lsbs[index]}"
-        name = self._catalog.display_name(bank_id, program_change)
-        return f"{rom.name} {entry.preset:>3}  {name}".rstrip()
-
-    def _row(self, entry):
-        why = entry.silent_because
-        return (
-            str(entry.channel_display),
-            self._plays(entry),
-            str(entry.volume) if entry.volume else "[b]0[/b]",
-            str(entry.pan - 64),
-            str(entry.mix_output),
-            "on" if entry.receive_program_change else "[b]OFF[/b]",
-            f"[b]{why}[/b]" if why else "",
-        )
-
-    def _report(self) -> List[str]:
-        return "\n".join(f"· {line}" for line in self._lines())
-
-    def _lines(self) -> List[str]:
-        out: List[str] = []
-        if self._mode is not None and not params.MidiMode.is_multitimbral(self._mode):
-            # First, and alone: in this mode nothing below is in effect, and
-            # listing per-channel faults would send somebody to fix a
-            # channel when the mode is the answer.
-            out.append(
-                f"This unit is in {params.MidiMode.name(self._mode).upper()} "
-                f"mode, which is NOT multitimbral. The channel settings "
-                f"below are stored but not in effect. Only in MULTI does a "
-                f"per-channel setting mean anything."
-            )
-            return out
-        audible = [c for c in self._dump.channels if c.silent_because is None]
-        if audible:
-            out.append(
-                "Channels that would sound: "
-                + ", ".join(str(c.channel_display) for c in audible)
-            )
-        else:
-            out.append("No channel on this unit would sound.")
-
-        deaf = [c for c in self._dump.channels if not c.receive_program_change]
-        if deaf:
-            out.append(
-                "Ignores Program Change on channel "
-                + ", ".join(str(c.channel_display) for c in deaf)
-                + " — a select aimed there does nothing."
-            )
-
-        out.append(
-            "This unit has two MIDI interfaces, so channels 17-32 are the "
-            "second one. They are real channels whether or not anything is "
-            "plugged into it."
-        )
-        if self._mode is None:
-            out.append(
-                "The MIDI Mode could not be read. In Omni or Poly none of "
-                "the above is in effect, so treat it as unknown rather than "
-                "assuming this unit is multitimbral."
-            )
-        return out
-
-    def action_close(self) -> None:
-        self.dismiss(None)
-
-
 class P2kedApp(App):
     """The browser."""
 
@@ -366,7 +203,7 @@ class P2kedApp(App):
         # taking Enter from the table and every other table key with it.
         # Checked from the legend side in tests/test_conformance.py.
         Binding("r", "read_names", "Read names"),
-        Binding("m", "channels", "Channels"),
+        Binding("m", "channels", "Multi"),
         Binding("slash", "search", "Search"),
         Binding("left_square_bracket", "channel_down", "Channel -"),
         Binding("right_square_bracket", "channel_up", "Channel +"),
@@ -381,7 +218,179 @@ class P2kedApp(App):
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
         Binding("q", "quit", "Quit"),
+        # The editor's gate, on the family's own key. Locked by default: a
+        # write needs an explicit act, and the legend shows which state it is
+        # in, so "why did my edit not send?" is answered on screen.
+        Binding("w", "toggle_write_gate", "Write gate"),
+        Binding("z", "undo", "Undo edit"),
+        Binding("Z", "undo_all", "Undo all edits"),
     ]
+
+    #: True while a worker owns the wire. Declared here, above the methods
+    #: that read it, because mypy infers an attribute's type from the first
+    #: assignment it has seen and this one is made at the end of
+    #: ``__init__``. See there for what the flag is for.
+    _busy: bool
+
+    # --- the write gate ------------------------------------------------------
+
+    @property
+    def _gate(self) -> EditGate:
+        """One gate per app, created on first use."""
+        if getattr(self, "_write_gate", None) is None:
+            self._write_gate = EditGate(armed=False)
+        return self._write_gate
+
+    @property
+    def _editor(self) -> MasterEditor:
+        """One editor per app: the gate above, and the log beside it."""
+        if getattr(self, "_master_editor", None) is None:
+            self._master_editor = MasterEditor(self._gate, EditLog())
+        return self._master_editor
+
+    def action_toggle_write_gate(self) -> None:
+        self._gate.toggle()
+        self.notify_status(self._gate.describe())
+
+    def action_edit_master(self) -> None:
+        """Open the master-parameter editor.
+
+        Reads first, because the editor shows what each value is now, and
+        because an edit without a read before it cannot be undone -- there
+        would be nothing to send back.
+        """
+        if self.device is None:
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._edit_master_worker()
+
+    @work(thread=True)
+    def _edit_master_worker(self) -> None:
+        """**MIDI only** -- every value is read here, the screen is built on
+        the main thread."""
+        values: Dict[int, Optional[int]] = {}
+        try:
+            with self._lock:
+                dump = self.device.read_setup()
+                for parameter in MASTER_PARAMETERS:
+                    try:
+                        values[parameter.parameter_id] = self.device.read_parameter(
+                            parameter.parameter_id
+                        )
+                    except Exception:
+                        values[parameter.parameter_id] = None
+        except Exception as exc:
+            self.call_from_thread(self.notify_status, f"multi: {exc}", refused=True)
+            self._busy = False
+            return
+        self.call_from_thread(self._show_master_edit, dump, values)
+
+    def _show_master_edit(self, dump, values) -> None:
+        self._busy = False
+        screen = MasterEditScreen(
+            dump,
+            values,
+            self._editor,
+            on_apply=self._apply_master_edit,
+            on_undo=self._undo_master_edits,
+        )
+        # Kept, so a worker that finishes after the screen closed still has
+        # somewhere to report -- and so the gate's state, which the screen
+        # shows, is the same one the edits went through.
+        self._edit_screen = screen
+        self.push_screen(screen)
+
+    def _apply_master_edit(self, parameter_id: int, value: int) -> None:
+        """Send one master edit, then read it back.
+
+        The whole thing is on a worker: a write and its verification are one
+        operation, and splitting them across threads would let another read
+        land between them.
+        """
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._apply_worker(parameter_id, value)
+
+    @work(thread=True)
+    def _apply_worker(self, parameter_id: int, value: int) -> None:
+        """Read, write, read again -- one operation on one thread.
+
+        A write and its verification are not split across threads: another
+        read landing between them would be read back as the write's result,
+        which is exactly the failure this machinery exists to catch.
+        """
+        failure: Optional[BaseException] = None
+        before: Optional[int] = None
+        after: Optional[int] = None
+        try:
+            with self._lock:
+                before = self.device.read_parameter(parameter_id)
+                self.device.set_parameter(parameter_id, value)
+                after = self.device.read_parameter(parameter_id)
+        except Exception as exc:
+            failure = exc
+        self.call_from_thread(
+            self._edit_applied, parameter_id, value, failure, before, after
+        )
+
+    def _edit_applied(self, parameter_id, value, failure, before, after) -> None:
+        """Report an edit, and log it only if the read-back agreed.
+
+        Three outcomes, not two: the operation could not be carried out at
+        all (``failure``), the unit refused (the read-back says something
+        else), and it worked. All three are said differently, because "the
+        value did not change" is a different thing to act on from "the wire
+        broke".
+        """
+        self._busy = False
+        parameter = MASTER_BY_ID.get(parameter_id)
+        if failure is not None:
+            label = parameter.label if parameter else f"parameter {parameter_id}"
+            ok, message = False, f"{label}: {failure}"
+        elif parameter is None:  # pragma: no cover - the table is fixed
+            ok, message = False, f"parameter {parameter_id} is not one p2ked edits"
+        else:
+            ok, message = self._editor.finish(
+                parameter, value, before=before, after=after
+            )
+        if getattr(self, "_edit_screen", None) is not None:
+            self._edit_screen.result(ok, message)
+        self.notify_status(message, refused=not ok)
+
+    def _undo_master_edits(self, count: int) -> None:
+        """Reverse the last ``count`` edits. Nothing read-only about it."""
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        plan = self._editor.undo_plan(count)
+        if not plan:
+            self.notify_status("nothing to undo")
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._undo_worker(plan)
+
+    @work(thread=True)
+    def _undo_worker(self, plan) -> None:
+        results: List[Tuple[int, bool]] = []
+        try:
+            with self._lock:
+                for parameter_id, value in plan:
+                    try:
+                        self.device.set_parameter(parameter_id, value)
+                        results.append((parameter_id, True))
+                    except Exception:
+                        results.append((parameter_id, False))
+        finally:
+            self.call_from_thread(self._edit_undone, results)
+
+    def _edit_undone(self, results) -> None:
+        self._busy = False
+        self.notify_status(self._editor.undo_report(results))
 
     def __init__(
         self,
@@ -1170,14 +1179,38 @@ class P2kedApp(App):
                     # screen says the mode is unknown rather than assuming.
                     mode = None
         except Exception as exc:
-            self.call_from_thread(self.notify_status, f"channels: {exc}", refused=True)
+            self.call_from_thread(self.notify_status, f"multi: {exc}", refused=True)
         else:
             self.call_from_thread(self._show_channels, dump, mode)
         finally:
             self._busy = False
 
     def _show_channels(self, dump, mode) -> None:
-        self.push_screen(ChannelScreen(dump, self.catalog, mode))
+        """Open the multi screen, wired back here so `r` can re-read.
+
+        The screen holds no device and starts no worker: a worker belongs to
+        the app, and one started by a screen would outlive the screen it was
+        opened from. ``on_refresh`` is the hand-off and re-runs this same
+        worker -- which is also why a refresh cannot interleave with the read
+        that opened the screen, since ``_busy`` is still set.
+        """
+        screen = MultiScreen(
+            dump,
+            self.catalog,
+            mode,
+            fitted=self.installed,
+            on_edit=self.action_edit_master,
+        )
+        screen.on_refresh = self._refresh_multi
+        self.push_screen(screen)
+
+    def _refresh_multi(self) -> None:
+        """Re-read the setup for the screen already open. Read-only."""
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._channels_worker()
 
     def action_search(self) -> None:
         def done(text) -> None:
