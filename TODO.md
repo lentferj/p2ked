@@ -1354,3 +1354,28 @@ typed; the rest are ranges. The IDs are unit-agreed master-block IDs -- the
 standing caveat as the general block: no unit has been asked which range
 its firmware enforces, so the first real FX edit is a hardware session like
 the first real master edit.
+
+## 51. The hardware suite exists; it has not met a unit — OPEN
+
+**Status:** open, and not closable from software: it needs a unit on the desk.
+`make test-hardware` is rxved's pattern, adapted — `-o addopts=""` because
+p2ked's addopts carry a `--cov` gate with `fail_under`, and a hardware-only
+run would fail by construction measuring coverage over the few tests that
+just ran. `tests/conftest.py` gates it on `--hardware` /
+`P2KED_HARDWARE=1`, so `make check` and CI skip the file by design rather
+than by accident, and a failure to connect is a skip naming every cause the
+manual gives, because this unit answers what it cannot serve with silence.
+
+It carries the three things the ordinary suite cannot: structural reads (the
+dump's declared counts against `MASTER_BLOCKS`; every master value agreed
+between the dump and its own parameter read -- §10's hand measurement made
+repeatable; the channel block's shape, and only the channel ranges both
+documents print), the probe of item 47 read-only with its answer printed for
+a human to record, and the first write p2ked will ever aim at a unit -- FX
+bypass, sent, read back, restored in a `finally`, audible for about a
+second.
+
+Two honesty rules are baked in. Nothing asserts a preset name -- E-MU's ROM
+contents are not this project's to redistribute -- and nothing asserts a
+range the documents disagree about (§12's "?" for a channel's ROM ID is left
+alone). What the suite asserts is only what the unit itself settles.

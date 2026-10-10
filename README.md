@@ -456,6 +456,7 @@ make check            # everything below; fails on the first error
 | `make typecheck` | `mypy` |
 | `make test` | `pytest -q` (fast, no coverage) |
 | `make coverage` | `pytest` with a term-missing report, enforcing `fail_under` |
+| `make test-hardware` | the same pytest against a real Proteus 2000 — opens MIDI ports, so **not** part of `check` |
 | `make audit` | `pip-audit`, `vulture`, `deptry`, `detect-secrets` |
 | `make check` | lint → format-check → typecheck → coverage → audit |
 
@@ -464,6 +465,34 @@ make check            # everything below; fails on the first error
 to filter `vinsynlib` out, when it was a sibling checkout pip could not
 resolve and the audit would fail resolving rather than audit anything. The
 pinned toolchain is audited in full.
+
+### The hardware suite
+
+Everything above runs against `p2ked/demo.py`, which is the point — fast,
+and it passes on a machine with no MIDI stack at all. Its limit is the one
+CLAUDE.md names: a demo agrees with whatever p2ked believes, so every offset
+below the API surface was only ever checked against p2ked's own
+transcription of E-MU's documents. `make test-hardware` is the other half,
+and it needs a real Proteus 2000 on a MIDI port:
+
+- **structural reads** — the dump's declared counts against the block table
+  p2ked builds; every master value agreed between the dump and its own
+  parameter read (RESOLUTION_NOTES §10's hand measurement, now repeatable);
+  the channel block's shape and the channel ranges both documents print.
+- **the probe** — `probe_channel_ids()`, read-only: TODO 47's answer, printed
+  for a human to record rather than asserted by a test.
+- **one write** — FX bypass, sent, read back and put back. Audible for about
+  a second (the effects drop out and come back); the apparatus around it —
+  gate, undo, read-back — is the app's and is tested in the ordinary suite.
+
+Not part of `make check`, and CI never passes the flag: only one session may
+drive the unit at a time. `--hardware`, or `P2KED_HARDWARE=1`, opens the
+ports; without them the file skips with the reason, and `-rs` shows it.
+`-o addopts=""` keeps the ordinary coverage gate from failing a run that
+only executes this file. Nothing in the suite asserts on a preset name —
+E-MU's ROM contents are not this project's to redistribute — and nothing
+selects a preset, which is the operation that stays behind its own
+confirmation in the app.
 
 ### Before pushing
 
