@@ -60,13 +60,14 @@ from p2k import catalog as cat
 from p2k import roms
 from p2ked._report import say_connected, say_fallback, say_probing
 from p2ked.masteredit import (
+    FX_PARAMETERS,
     MASTER_BY_ID,
     MASTER_PARAMETERS,
     EditGate,
     EditLog,
     MasterEditor,
 )
-from p2ked.multi import MasterEditScreen, MultiScreen
+from p2ked.multi import FXEditScreen, MasterEditScreen, MultiScreen
 from p2ked.prompts import PromptScreen
 from vinsynlib import cli as vincli
 from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
@@ -132,6 +133,12 @@ KEY_HINTS = (
     "v favourites view",
     "C category",
     "a all ROMs",
+    # The FX block, on `x`. It is in the legend because it is a key that
+    # changes the unit: `m` then `e` edits the general master parameters
+    # and `x` -- here, on the multi screen, or on the general editor --
+    # edits the sixteen FX ones. Declared to the family in
+    # tests/test_conformance.py's EXTRAS, the same way `m` and `v` are.
+    "x master FX",
     # The write path, in the family's own words: these three are the
     # `EDITOR_KEYS` entries p2ked now binds, spelled as the family spells
     # them so a reader who has used rxved already knows what they do. They
@@ -264,6 +271,13 @@ class P2kedApp(App):
         Binding("w", "toggle_write_gate", "Write gate"),
         Binding("z", "undo", "Undo edit"),
         Binding("Z", "undo_all", "Undo all edits"),
+        # The master FX block. Its own key rather than another row on the
+        # master editor: the two are different tables in the dump (spec
+        # p. 49) and the front panel keeps them on different screens too.
+        # Bound here as well as on the two edit screens, because a modal
+        # cuts the app's binding chain -- see the `x` binding on
+        # MasterEditScreen for the same problem `w` has there.
+        Binding("x", "edit_fx", "Master FX"),
     ]
 
     #: True while a worker owns the wire. Declared here, above the methods
@@ -385,15 +399,44 @@ class P2kedApp(App):
         self._busy = True  # main thread, before the spawn; see _busy
         self._edit_master_worker()
 
-    @work(thread=True)
-    def _edit_master_worker(self) -> None:
-        """**MIDI only** -- every value is read here, the screen is built on
-        the main thread."""
+    def action_edit_fx(self) -> None:
+        """Open the master FX editor: the two algorithms and their
+        parameters.
+
+        The same path as :meth:`action_edit_master` -- read first, for the
+        same two reasons -- over the FX block rather than the general one.
+        ``x`` here, on the multi screen and on the general editor, because a
+        modal screen cuts the app's binding chain and the legend promises
+        the key in the browser; see the ``x`` binding on
+        :class:`p2ked.multi.MasterEditScreen` for the same reasoning that
+        puts ``w`` there.
+        """
+        if self.device is None:
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._edit_fx_worker()
+
+    def _read_master_values(self, parameters):
+        """Read the setup, and one value per parameter in ``parameters``.
+
+        Extracted from the two edit workers rather than duplicated in them:
+        both screens need the same three things -- the dump, the current
+        value of every parameter they are about to offer, and one refusal
+        sentence when the read fails -- and two copies of that would be two
+        places to get the wrong ``_busy`` hand-off. Called *from* a worker,
+        so the wire is still touched on the worker's thread only.
+
+        ``None`` means the read failed, which is said on the app's own line
+        and leaves nothing to build a screen from.
+        """
         values: Dict[int, Optional[int]] = {}
         try:
             with self._lock:
                 dump = self.device.read_setup()
-                for parameter in MASTER_PARAMETERS:
+                for parameter in parameters:
                     try:
                         values[parameter.parameter_id] = self.device.read_parameter(
                             parameter.parameter_id
@@ -403,8 +446,28 @@ class P2kedApp(App):
         except Exception as exc:
             self.call_from_thread(self.notify_status, f"multi: {exc}", refused=True)
             self._busy = False
+            return None
+        return dump, values
+
+    @work(thread=True)
+    def _edit_master_worker(self) -> None:
+        """**MIDI only** -- every value is read here, the screen is built on
+        the main thread."""
+        read = self._read_master_values(MASTER_PARAMETERS)
+        if read is None:
             return
+        dump, values = read
         self.call_from_thread(self._show_master_edit, dump, values)
+
+    @work(thread=True)
+    def _edit_fx_worker(self) -> None:
+        """**MIDI only** -- every FX value is read here, the screen is built
+        on the main thread."""
+        read = self._read_master_values(FX_PARAMETERS)
+        if read is None:
+            return
+        dump, values = read
+        self.call_from_thread(self._show_fx_edit, dump, values)
 
     def _show_master_edit(self, dump, values) -> None:
         self._busy = False
@@ -414,10 +477,32 @@ class P2kedApp(App):
             self._editor,
             on_apply=self._apply_master_edit,
             on_undo=self._undo_master_edits,
+            on_edit_fx=self.action_edit_fx,
         )
         # Kept, so a worker that finishes after the screen closed still has
         # somewhere to report -- and so the gate's state, which the screen
         # shows, is the same one the edits went through.
+        self._edit_screen = screen
+        self.push_screen(screen)
+
+    def _show_fx_edit(self, dump, values) -> None:
+        """The FX block, behind the same gate and the same undo log.
+
+        ``on_edit_fx`` is not handed in: this screen *is* the FX view, so
+        the key that opens one has nothing to open.
+        """
+        self._busy = False
+        screen = FXEditScreen(
+            dump,
+            values,
+            self._editor,
+            on_apply=self._apply_master_edit,
+            on_undo=self._undo_master_edits,
+        )
+        # Kept for the reason the general editor's is kept, and it is the
+        # same attribute: whichever edit screen the app opened last is
+        # where a worker that outlives its screen reports, and ``say`` on a
+        # screen that is gone writes nowhere.
         self._edit_screen = screen
         self.push_screen(screen)
 
@@ -430,6 +515,12 @@ class P2kedApp(App):
         the wire: the screen offers the edit, but the app is what sends it,
         so a check that lived on the screen would be a check the next
         caller of this method could simply not make.
+
+        The lookup is :data:`p2ked.masteredit.MASTER_BY_ID`, which holds the
+        general table and the FX block together -- so a screen cannot offer
+        a parameter this method refuses, and the two cannot drift. An ID in
+        neither table is a number p2ked cannot name, and it is refused
+        rather than sent.
 
         A refusal says so and sends nothing. :meth:`MasterEditor.allow`
         answers both cases -- a locked gate and a value outside the
@@ -1450,6 +1541,10 @@ class P2kedApp(App):
         the app's binding chain, so ``z`` pressed here would otherwise be
         dead -- and this is the screen an edit made through ``e`` comes
         back to, which is where ``z`` gets pressed.
+
+        ``on_edit_fx`` is handed in for the same reason again: ``x`` here
+        opens the FX editor, which is the app's worker and the app's screen
+        to build.
         """
         screen = MultiScreen(
             dump,
@@ -1457,6 +1552,7 @@ class P2kedApp(App):
             mode,
             fitted=self.installed,
             on_edit=self.action_edit_master,
+            on_edit_fx=self.action_edit_fx,
             on_undo=self._undo_master_edits,
         )
         screen.on_refresh = self._refresh_multi

@@ -55,6 +55,7 @@ from p2ked.app import P2kedApp, build_parser
 from p2ked.demo import DemoDevice
 from p2ked.masteredit import (
     CHANNEL_EDIT_IDS,
+    FX_PARAMETERS,
     MASTER_BY_ID,
     MASTER_PARAMETERS,
     EditGate,
@@ -63,6 +64,7 @@ from p2ked.masteredit import (
 )
 from p2ked.multi import (
     CHANNEL_EDIT_HINT,
+    FXEditScreen,
     MasterEditScreen,
     MultiScreen,
     ValuePickerScreen,
@@ -831,6 +833,243 @@ class TestTheMasterEditScreen:
             assert said[-1] == ("clock tempo = 300", False)
             screen.result(False, "transpose did not take 5")
             assert said[-1] == ("transpose did not take 5", True)
+
+
+class TestTheMasterFxBlock:
+    """The sixteen FX parameters, on the same path as the eleven general
+    ones -- and what is transcribed rather than read.
+
+    Two claims are pinned here and they are different kinds of claim. The
+    **IDs** are unit-agreed: 513-528 is the dump's own master effects block,
+    which RESOLUTION_NOTES §10 established by reading each value back from a
+    unit and agreeing it with the dump. The **labels, ranges and names** are
+    not: they are transcribed from the manuals with a page cite on each one
+    (RESOLUTION_NOTES §12), and the two algorithms' named values are the
+    operation manual's own numbering. A suite passing here says the
+    transcription is internally consistent, which is a different thing from
+    saying it is what a unit stores.
+
+    What is also pinned is the one thing the FX block does *not* do: FX B
+    delay (523) keeps no named values, because the two documents disagree
+    about what they would be and guessing would put a plausible-looking
+    list in front of somebody who then sends it.
+    """
+
+    def _screen(self, values=None):
+        return MasterEditScreen(
+            DemoDevice().read_setup(),
+            {} if values is None else values,
+            MasterEditor(),
+        )
+
+    def test_the_table_is_the_dump_s_own_effects_block(self):
+        """Sixteen parameters, in the dump's order, and nothing invented.
+
+        The block is the unit's, not the document's, so the test reads it
+        out of :data:`p2k.messages.MASTER_BLOCKS` rather than out of a list
+        of numbers written here -- a second list could agree with itself.
+        """
+        block = dict(m.MASTER_BLOCKS)["master effects"]
+        assert len(block) == 16
+        assert tuple(p.parameter_id for p in FX_PARAMETERS) == block
+        assert [p.parameter_id for p in FX_PARAMETERS] == list(range(513, 529))
+
+    def test_every_fx_parameter_is_one_the_dump_carries(self):
+        """The same check the general table gets, for the same reason: a
+        range narrower than the unit's own value would refuse an edit the
+        unit was already in."""
+        dump = DemoDevice().read_setup()
+        for parameter in FX_PARAMETERS:
+            assert parameter.parameter_id in dump.master, parameter.label
+            value = dump.parameter(parameter.parameter_id)
+            assert parameter.low <= value <= parameter.high, parameter.label
+
+    def test_the_fake_agrees_with_itself_about_the_fx_values(self):
+        """An edit is verified against a read-back and displayed from one;
+        a fake whose two answers disagreed would hide a failure in the
+        difference between them."""
+        device = DemoDevice()
+        dump = device.read_setup()
+        for parameter in FX_PARAMETERS:
+            assert device.read_parameter(parameter.parameter_id) == dump.parameter(
+                parameter.parameter_id
+            ), parameter.label
+
+    def test_the_two_algorithms_are_enumerations_numbered_from_one(self):
+        """``base`` is 1 for both, and that is the whole of the off-by-one.
+
+        The specification gives each a min of 1 (spec p. 49) and the manual
+        numbers its effect types from 1 -- the A list on OM p. 41, the B list
+        on OM p. 43 -- so the first name is the value at ``low``. A picker
+        that assumed names start at zero would offer a blank row and then
+        send one too few.
+        """
+        a = MASTER_BY_ID[513]
+        b = MASTER_BY_ID[520]
+        assert (a.base, b.base) == (1, 1)
+        assert (a.low, len(a.choices)) == (1, 44)
+        assert (b.low, len(b.choices)) == (1, 32)
+        assert a.choices[0] == "Room 1"
+        assert a.choices[-1] == "DelayVerb 9"
+        assert b.choices[0] == "Chorus 1"
+        assert b.choices[-1] == "Distorted Double"
+
+    def test_every_other_fx_parameter_is_a_plain_range(self):
+        """Fourteen plain ranges and two enumerations, and the enumerations
+        are the algorithms -- a named value appearing on a parameter the
+        documents give only min/max for would be a guess with a list."""
+        named = [p for p in FX_PARAMETERS if p.choices]
+        assert [p.parameter_id for p in named] == [513, 520]
+        assert [p.label for p in named] == ["FX A algorithm", "FX B algorithm"]
+
+    def test_fx_b_delay_keeps_no_named_values(self):
+        """The disagreement, refused rather than smoothed over.
+
+        The parameter tree lists note values ahead of "0ms - 635ms in 5ms
+        increments" (paramtree, MASTER BUTTON 11); the operation manual says
+        only "The Delay value range is from 0ms to 635ms" (OM p. 146) and
+        its screens show a plain number of milliseconds. Two documents, two
+        answers, and a picker built on the wrong one would send a time
+        nobody asked for. So the range is transcribed and the raw value is
+        sent.
+        """
+        delay = MASTER_BY_ID[523]
+        assert delay.choices == ()
+        assert (delay.low, delay.high) == (0, 127)
+        assert "paramtree" in delay.note
+        assert "635" in delay.note
+
+    def test_the_fx_block_is_on_the_one_lookup_the_app_checks(self):
+        """``MASTER_BY_ID`` holds both tables, which is what puts the FX
+        parameters on the edit path: the app refuses an ID absent from it,
+        so a screen cannot offer what the app will not send."""
+        for parameter in FX_PARAMETERS:
+            assert MASTER_BY_ID[parameter.parameter_id] is parameter
+        for parameter in MASTER_PARAMETERS:
+            assert MASTER_BY_ID[parameter.parameter_id] is parameter
+        # And one that is in neither -- the arpeggiator block, which p2ked
+        # reads and does not edit -- is still refused.
+        assert m.Parameter.MASTER_ARP_STATUS not in MASTER_BY_ID
+
+    async def test_an_fx_edit_reaches_the_unit_and_is_read_back(self, app):
+        """The whole path, on an FX parameter: the write goes out, the value
+        comes back, and the log records it -- so ``z`` has something to
+        reverse."""
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(514, 60)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(514, 60)]
+            assert app._editor.log.pending == 1
+            assert said[-1] == ("FX A decay = 60", False)
+
+    async def test_a_locked_gate_refuses_an_fx_edit(self, app):
+        """Nothing is sent, and the sentence names the parameter rather
+        than the bare number."""
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._apply_master_edit(521, 90)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == []
+            message, refused = said[-1]
+            assert "FX B feedback not sent" in message
+            assert "the write gate is locked" in message
+            assert refused
+
+    async def test_a_value_outside_an_fx_range_is_refused_and_nothing_is_sent(
+        self, app
+    ):
+        """The range check is the client-side half of a documented rule:
+        "Values recieved that are outside the min/max range will be clipped
+        to within that range" (spec p. 41). An algorithm of 45 is not
+        refused by the unit -- it arrives as 44, which is a write that
+        looks like it worked."""
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(513, 45)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == []
+            message, refused = said[-1]
+            assert "FX A algorithm must be 1-44, and 45 is not" in message
+            assert refused
+
+    async def test_a_read_back_that_disagrees_is_not_logged_for_an_fx_edit(self, app):
+        """The unit that ignores what it cannot serve is exactly this case,
+        and it is indistinguishable from a success until something reads the
+        value again -- which is why an FX edit goes through the same
+        read-back a general one does, and why one that did not take is not
+        undoable.
+        """
+        said = _record(app)
+
+        class Deaf(DemoDevice):
+            def set_parameter(self, parameter_id, value, *, timeout=None):
+                self.handle(
+                    m.parameter_edit(parameter_id, value, device=self.device_id)
+                )
+
+        app.device = Deaf()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(514, 60)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.received, "the edit was never sent; the check is vacuous"
+            assert app._editor.log.pending == 0
+            message, refused = said[-1]
+            assert "FX A decay did not take 60" in message
+            assert "still reports 0" in message
+            assert refused
+
+    async def test_undo_sends_the_previous_fx_value(self, app):
+        """The value the unit had before the edit, read back off the log --
+        not the one after it, because a write that failed to land has
+        nothing to read."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(514, 60)
+            await _wait_for(pilot, lambda: not app._busy)
+            app._undo_master_edits(1)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(514, 60), (514, 0)]
+            assert app._editor.log.pending == 0
+
+    async def test_an_fx_enumeration_picks_by_index_not_by_name(self, app):
+        """``Room 3`` is the value 3, not the third row of the list -- the
+        arithmetic the ``base`` field exists for, checked on the picker
+        that draws it."""
+        applied = []
+        screen = FXEditScreen(
+            DemoDevice().read_setup(),
+            {513: 1},
+            MasterEditor(),
+            on_apply=lambda parameter_id, value: applied.append((parameter_id, value)),
+        )
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            table = screen.query_one("#fx-table", DataTable)
+            assert table.cursor_row == 0
+            table.focus()
+            await pilot.press("enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ValuePickerScreen))
+            picker = app.screen
+            choices = picker.query_one("#choices", DataTable)
+            assert choices.row_count == 44
+            # The current value, 1, is under the cursor and marked.
+            assert choices.cursor_row == 0
+            assert choices.get_row("1") == ["[b]Room 1[/b]"]
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert applied == [(513, 3)]
 
 
 class TestUndoCoversBothKindsOfChange:

@@ -37,7 +37,7 @@ which and where each reason was transcribed from.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, cast
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -48,9 +48,10 @@ from textual.widgets import DataTable, Label, Static
 from p2k import messages as params
 from p2k import roms
 from p2ked.masteredit import (
-    MASTER_BY_ID,
+    FX_PARAMETERS,
     MASTER_PARAMETERS,
     MasterEditor,
+    MasterParameter,
 )
 from p2ked.prompts import PromptScreen
 
@@ -59,7 +60,9 @@ if TYPE_CHECKING:  # pragma: no cover - importing it at runtime is a cycle
 
 __all__ = [
     "CHANNEL_EDIT_HINT",
+    "FX_EDIT_HINT",
     "ChannelDetailScreen",
+    "FXEditScreen",
     "MasterEditScreen",
     "MultiScreen",
     "ValuePickerScreen",
@@ -92,6 +95,28 @@ CHANNEL_EDIT_HINT = (
     "document to hand lists them -- so p2ked will not write to a number it "
     "invented. See docs/TODO item 47 for the read-only probe that "
     "establishes them on a real unit."
+)
+
+#: What sits under the FX table instead of :data:`CHANNEL_EDIT_HINT`,
+#: because the questions a reader has here are different ones: where the FX
+#: *bypass* went, and what the two enumerations are.
+#:
+#: The bypass is the sharp edge. It is called "FX MODE" on the front panel
+#: (paramtree, MASTER BUTTON 5) and it is **not** in this block -- the dump
+#: carries it in the general block at id 258 -- so somebody who came here to
+#: turn the effects off has to be told which screen that is on, or they
+#: will conclude it cannot be done.
+FX_EDIT_HINT = (
+    "The master FX block: ids 513-528, the dump's own "
+    "(RESOLUTION_NOTES §10).\n"
+    "\n"
+    "The two algorithms are enumerations: 44 and 32 named values, numbered "
+    "from 1 in the manual's own order (OM p. 41, p. 43) -- a transcription, "
+    "not a reading from this unit. Enter opens the list.\n"
+    "\n"
+    "FX B delay reads 0-127 on the wire and 0 ms to 635 ms on the unit's "
+    "own display (OM p. 146). FX bypass is not here: the dump puts it in the "
+    "general block at id 258, on the master-parameter screen."
 )
 
 
@@ -137,8 +162,9 @@ class MultiScreen(ModalScreen[None]):
     """Every MIDI channel, and the master settings they are played through.
 
     **Read-only, and silent.** One Setup Dump gets the lot; nothing is
-    selected and nothing sounds. ``e`` is the door to the edit path, and it
-    is the only key here that can reach one -- see
+    selected and nothing sounds. ``e`` is the door to the edit path over the
+    general master parameters and ``x`` to the one over the master FX
+    block, and they are the only keys here that can reach one -- see
     :mod:`p2ked.masteredit`.
     """
 
@@ -158,6 +184,14 @@ class MultiScreen(ModalScreen[None]):
         Binding("q", "close", "Close"),
         Binding("r", "refresh", "Re-read"),
         Binding("e", "edit", "Edit", show=False),
+        # `x` is the FX block, for the same reason `e` is the general one:
+        # they are two different tables in the dump (spec p. 49 puts the
+        # master effects right after the master general parameters), and a
+        # reader looking for a reverb should not have to find it in a list
+        # of MIDI modes. Shown in the legend and in this screen's footer,
+        # because a key that changes the unit and is documented nowhere is
+        # a key that gets pressed by accident.
+        Binding("x", "edit_fx", "Master FX", show=False),
         # `z` / `Z` are the app's own, and this screen has to serve them
         # itself for the reason the master editor serves `w` itself: a
         # modal screen cuts the app's binding chain, so an app-level
@@ -177,6 +211,7 @@ class MultiScreen(ModalScreen[None]):
         *,
         fitted: Optional[Dict[int, bool]] = None,
         on_edit: Optional[Callable[[], None]] = None,
+        on_edit_fx: Optional[Callable[[], None]] = None,
         on_undo: Optional[Callable[[Optional[int]], None]] = None,
     ) -> None:
         super().__init__()
@@ -186,6 +221,10 @@ class MultiScreen(ModalScreen[None]):
         self._mode = mode
         self._fitted = fitted
         self._on_edit = on_edit
+        #: The app's FX editor, handed in for the reason ``on_edit`` is:
+        #: a screen owns no worker, and the FX screen needs values read off
+        #: one before it can show them.
+        self._on_edit_fx = on_edit_fx
         #: The app's undo, handed in for the same reason ``on_edit`` is:
         #: a screen owns no worker, and ``z`` reverses on one.
         self._on_undo = on_undo
@@ -315,7 +354,7 @@ class MultiScreen(ModalScreen[None]):
             yield DataTable(id="multi-table", cursor_type="row", zebra_stripes=True)
             yield Static(self._report(), classes="note")
             yield Static(
-                "[dim]r re-read · e edit · enter channel detail · "
+                "[dim]r re-read · e edit · x master FX · enter channel detail · "
                 "z undo · esc / q to close[/dim]"
             )
 
@@ -369,6 +408,17 @@ class MultiScreen(ModalScreen[None]):
     def action_edit(self) -> None:
         if self._on_edit is not None:
             self._on_edit()
+
+    def action_edit_fx(self) -> None:
+        """``x``: the master FX block, the other half of the edit path.
+
+        ``e`` opens the general parameters and this opens the sixteen FX
+        ones, and both go through the same gate, the same undo log and the
+        same read-back -- the app is handed the call, because a screen owns
+        no worker and this screen opens nothing else either.
+        """
+        if self._on_edit_fx is not None:
+            self._on_edit_fx()
 
     def action_undo(self) -> None:
         """``z``: the app's own undo, from the screen an edit returns to.
@@ -426,14 +476,22 @@ class MasterEditScreen(ModalScreen[None]):
     answerable from where the question is asked.
 
     What is offered is only what p2ked can name a parameter ID for: the
-    master parameters, whose IDs were read back from a unit and agreed with
-    the dump. Per-channel editing is refused with a reason; see
+    general master parameters, whose IDs were read back from a unit and
+    agreed with the dump. Per-channel editing is refused with a reason; see
     :data:`CHANNEL_EDIT_HINT`.
 
     Each edit is read before, sent, and read after, on one worker. The
     read-back is not a formality: a Proteus ignores a request it cannot
     serve rather than refusing it, so a silent failure looks exactly like a
     success until something reads the value again.
+
+    **It is parameterised over the table it shows**, rather than written
+    twice for the two master blocks the dump carries. The FX block is
+    sixteen more parameters behind the *same* gate, the same undo log and
+    the same read-back, and a second copy of this screen would be a second
+    place for ``_draw`` to forget to redraw a cell and a second place for
+    the range check to drift. See :class:`FXEditScreen`, which is those
+    arguments fixed for the FX block.
     """
 
     DEFAULT_CSS = """
@@ -446,6 +504,27 @@ class MasterEditScreen(ModalScreen[None]):
     MasterEditScreen .note { height: auto; color: $text-muted; padding-top: 1; }
     MasterEditScreen .status { height: auto; color: $text; padding-top: 1; }
     """
+
+    #: The footer line inside the panel, one per screen: the FX screen has
+    #: no ``x`` to advertise, for the reason its BINDINGS drop the key.
+    HINTS = (
+        "[dim]w gate · x FX · enter edit · + / - nudge · z undo · "
+        "Z undo all · esc / q to close[/dim]"
+    )
+
+    #: The table's DOM id, one per screen class: a CSS rule or a query that
+    #: names ``#master-table`` must not reach the FX screen's table, and the
+    #: two are on screen at different times anyway.
+    TABLE_ID = "master-table"
+
+    #: How many named values the ``range`` cell spells out before it says
+    #: how many there are instead. The general block's enumerations are two
+    #: or three names and read fine in a row; the FX algorithms are
+    #: forty-four and thirty-two, and a row holding them would widen the
+    #: table past the screen for the sake of a list the picker already
+    #: shows. The row names them when they fit and counts them when they do
+    #: not, rather than dropping the fact that they exist.
+    NAMED_IN_A_ROW = 4
 
     BINDINGS = [
         Binding("escape", "close", "Close"),
@@ -461,6 +540,12 @@ class MasterEditScreen(ModalScreen[None]):
         # same object the app's own key toggles and the same one its edits
         # go through, so the two cannot disagree about which is open.
         Binding("w", "toggle_write_gate", "Write gate"),
+        # `x` opens the FX block, for the same reason `w` is bound here: a
+        # modal cuts the app's binding chain, so the app's own `x` -- the
+        # one the legend promises -- is dead the moment this screen is up.
+        # Without this one, the only way from here to the FX block would be
+        # to close the screen that is one key away from it.
+        Binding("x", "edit_fx", "Master FX"),
         # `+` / `-` step the value under the cursor. Not a second edit
         # path: they call the same `on_apply`, so the gate, the range
         # check, the undo log and the read-back are the ones an edit
@@ -477,6 +562,10 @@ class MasterEditScreen(ModalScreen[None]):
         values: Dict[int, Optional[int]],
         editor: MasterEditor,
         *,
+        parameters: Tuple[MasterParameter, ...] = MASTER_PARAMETERS,
+        title: str = "Multi — master parameters",
+        note: str = CHANNEL_EDIT_HINT,
+        on_edit_fx: Optional[Callable[[], None]] = None,
         on_apply: Optional[Callable[[int, int], None]] = None,
         on_undo: Optional[Callable[[Optional[int]], None]] = None,
     ) -> None:
@@ -484,6 +573,21 @@ class MasterEditScreen(ModalScreen[None]):
         self._dump = dump
         self._values = values
         self._editor = editor
+        #: The table this screen shows, and the same one by ID. A redraw
+        #: looks a row up in the set the screen was *built* from rather
+        #: than in whichever set the app happens to have handy, so a screen
+        #: cannot end up drawing a parameter it was not showing.
+        self._parameters = parameters
+        self._by_id = {p.parameter_id: p for p in parameters}
+        self._title = title
+        #: The paragraph under the table: the general screen says why the
+        #: per-channel parameters are not offered, and the FX one says
+        #: where the FX bypass went. Both answer the question the reader
+        #: has at that table.
+        self._note = note
+        #: The app's FX editor, for the reason ``on_apply`` is: a screen
+        #: owns no worker and no device.
+        self._on_edit_fx = on_edit_fx
         self._on_apply = on_apply
         self._on_undo = on_undo
 
@@ -498,10 +602,24 @@ class MasterEditScreen(ModalScreen[None]):
         if value is None:
             return "?"
         if parameter.choices:
-            if 0 <= value < len(parameter.choices):
-                return parameter.choices[value]
+            # Counted from ``base``, not from zero: the two FX algorithms
+            # run 1-44 and 1-32, so the first name is the value 1 and there
+            # is nothing at 0 to spell.
+            offset = value - parameter.base
+            if 0 <= offset < len(parameter.choices):
+                return parameter.choices[offset]
             return f"unknown ({value})"
         return str(value)
+
+    def _span(self, parameter) -> str:
+        """What the ``range`` cell says."""
+        if parameter.choices:
+            if len(parameter.choices) <= self.NAMED_IN_A_ROW:
+                return " / ".join(parameter.choices)
+            return (
+                f"{parameter.low} - {parameter.high} ({len(parameter.choices)} named)"
+            )
+        return f"{parameter.low} - {parameter.high}"
 
     def _report(self) -> str:
         lines = [
@@ -514,7 +632,7 @@ class MasterEditScreen(ModalScreen[None]):
             "",
             f"{self._editor.log.pending} edit(s) undoable with z.",
             "",
-            CHANNEL_EDIT_HINT,
+            self._note,
         ]
         return "\n".join(lines)
 
@@ -522,8 +640,8 @@ class MasterEditScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("[b]Multi — master parameters[/b]")
-            yield DataTable(id="master-table", cursor_type="row", zebra_stripes=True)
+            yield Label(f"[b]{self._title}[/b]")
+            yield DataTable(id=self.TABLE_ID, cursor_type="row", zebra_stripes=True)
             yield Static(self._report(), classes="note")
             # The screen's own status line. Without it everything the
             # screens in here say -- a refusal, a result, an undo report
@@ -531,28 +649,21 @@ class MasterEditScreen(ModalScreen[None]):
             # backdrop behind this modal. This is where the user is
             # looking, so this is where it goes.
             yield Static("", classes="status")
-            yield Static(
-                "[dim]w gate · enter edit · + / - nudge · z undo · "
-                "Z undo all · esc / q to close[/dim]"
-            )
+            yield Static(self.HINTS)
 
     def on_mount(self) -> None:
-        table = self.query_one("#master-table", DataTable)
+        table = self.query_one(f"#{self.TABLE_ID}", DataTable)
         for label, key in (
             ("parameter", "param"),
             ("now", "now"),
             ("range", "range"),
         ):
             table.add_column(label, key=key)
-        for parameter in MASTER_PARAMETERS:
-            if parameter.choices:
-                span = " / ".join(parameter.choices)
-            else:
-                span = f"{parameter.low} - {parameter.high}"
+        for parameter in self._parameters:
             table.add_row(
                 parameter.label,
                 self._shown(parameter),
-                span,
+                self._span(parameter),
                 key=str(parameter.parameter_id),
             )
 
@@ -564,8 +675,8 @@ class MasterEditScreen(ModalScreen[None]):
         browser has no App-level Enter at all.
         """
         row = event.data_table.cursor_row
-        if 0 <= row < len(MASTER_PARAMETERS):
-            self._offer(MASTER_PARAMETERS[row])
+        if 0 <= row < len(self._parameters):
+            self._offer(self._parameters[row])
 
     def _offer(self, parameter) -> None:
         """Offer one edit, in the shape the parameter asks for.
@@ -586,6 +697,7 @@ class MasterEditScreen(ModalScreen[None]):
                     parameter.label,
                     list(parameter.choices),
                     self._values.get(parameter.parameter_id),
+                    base=parameter.base,
                 ),
                 self._picked(on_apply, parameter),
             )
@@ -658,6 +770,18 @@ class MasterEditScreen(ModalScreen[None]):
         """``-``: one less."""
         self._nudge(-1)
 
+    def action_edit_fx(self) -> None:
+        """``x``: the master FX block, on this screen's own key.
+
+        Same reason ``w`` is bound here: a modal screen's bindings win over
+        the app's, so the app's own ``x`` -- the one the legend promises --
+        never arrives while this screen is up. The FX editor it opens reads
+        its values on the app's worker, which is why the call is handed in
+        rather than made here: a screen owns no device.
+        """
+        if self._on_edit_fx is not None:
+            self._on_edit_fx()
+
     def _nudge(self, by: int) -> None:
         """Step the cursor row's value by ``by``, clamped to its range.
 
@@ -671,10 +795,10 @@ class MasterEditScreen(ModalScreen[None]):
         on_apply = self._on_apply
         if on_apply is None:
             return
-        row = self.query_one("#master-table", DataTable).cursor_row
-        if not 0 <= row < len(MASTER_PARAMETERS):
+        row = self.query_one(f"#{self.TABLE_ID}", DataTable).cursor_row
+        if not 0 <= row < len(self._parameters):
             return
-        parameter = MASTER_PARAMETERS[row]
+        parameter = self._parameters[row]
         current = self._values.get(parameter.parameter_id)
         if current is None:
             _say(
@@ -775,16 +899,91 @@ class MasterEditScreen(ModalScreen[None]):
         started from has closed, and ``_edit_screen`` is kept precisely so
         that such a worker still has somewhere to report.
         """
-        parameter = MASTER_BY_ID.get(parameter_id)
+        parameter = self._by_id.get(parameter_id)
         if parameter is None:  # pragma: no cover - the table is fixed
             return
         try:
-            self.query_one("#master-table", DataTable).update_cell(
+            self.query_one(f"#{self.TABLE_ID}", DataTable).update_cell(
                 str(parameter_id), "now", self._shown(parameter)
             )
             self.query_one(".note", Static).update(self._report())
         except Exception:  # pragma: no cover - the screen closed underneath
             return
+
+
+class FXEditScreen(MasterEditScreen):
+    """The master FX block: the two algorithms, their parameters, the sends.
+
+    Its own screen rather than sixteen more rows on the general one,
+    because they are two different tables in the dump and because a reader
+    who has come to ask "why is there no reverb" wants the effects, not a
+    longer list to scroll -- and because the front panel keeps them on
+    separate screens too (OM pp. 40-43).
+
+    Nothing behind it is new. One write gate, one undo log, one read-back,
+    the same gate's state on screen, the same in-modal status line, the
+    same picker for an enumeration -- the apparatus is the general editor's
+    and only the table and the title are arguments to it. ``x`` opens this
+    screen, from the browser, from the multi screen and from the general
+    editor, for the reason ``w`` is bound on all three.
+
+    What the IDs are: the dump's own master effects block, 513-528, which
+    RESOLUTION_NOTES §10 established by reading each value back from a unit
+    and agreeing it with the dump. What the labels, ranges and named values
+    are: transcribed from the manuals with a page cite on each one
+    (RESOLUTION_NOTES §12) -- the same split the general table makes, said
+    here because the FX block is the newer of the two and the algorithm
+    names are the part with the most words in it.
+    """
+
+    DEFAULT_CSS = """
+    FXEditScreen { align: center middle; }
+    FXEditScreen > Vertical {
+        width: 96; height: 80%; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    FXEditScreen DataTable { height: 1fr; }
+    FXEditScreen .note { height: auto; color: $text-muted; padding-top: 1; }
+    FXEditScreen .status { height: auto; color: $text; padding-top: 1; }
+    """
+
+    #: Its own id, so a rule or a query naming the general editor's table
+    #: cannot reach this one.
+    TABLE_ID = "fx-table"
+
+    #: No ``x`` in the footer either, for the reason it is not in the
+    #: bindings: there is no FX screen to open from here.
+    HINTS = (
+        "[dim]w gate · enter edit · + / - nudge · z undo · "
+        "Z undo all · esc / q to close[/dim]"
+    )
+
+    #: No ``x`` here: this screen *is* the FX view, so the key that opens
+    #: it has nothing left to open. A binding that reopened the screen it
+    #: is already on would be a key that looks live and does nothing --
+    #: which is the failure ``action_close``'s docstring describes from the
+    #: other side. The rest of the parent's bindings stand as they are.
+    BINDINGS = [b for b in MasterEditScreen.BINDINGS if getattr(b, "key", "") != "x"]
+
+    def __init__(
+        self,
+        dump: params.SetupDump,
+        values: Dict[int, Optional[int]],
+        editor: MasterEditor,
+        *,
+        on_apply: Optional[Callable[[int, int], None]] = None,
+        on_undo: Optional[Callable[[Optional[int]], None]] = None,
+    ) -> None:
+        super().__init__(
+            dump,
+            values,
+            editor,
+            parameters=FX_PARAMETERS,
+            title="Multi — master FX",
+            note=FX_EDIT_HINT,
+            on_apply=on_apply,
+            on_undo=on_undo,
+        )
 
 
 class ValuePickerScreen(ModalScreen[Optional[int]]):
@@ -831,12 +1030,20 @@ class ValuePickerScreen(ModalScreen[Optional[int]]):
         label: str,
         choices: List[str],
         current: Optional[int] = None,
+        *,
+        base: int = 0,
     ) -> None:
         super().__init__()
         self._label = label
         #: In the order the unit numbers them, so the index this screen
         #: answers with is the value the unit stores.
         self._choices = list(choices)
+        #: The value the first of :attr:`_choices` is numbered by, from
+        #: :attr:`MasterParameter.base`. 0 for every enumeration in the
+        #: general block; 1 for the two FX algorithms, whose ranges start
+        #: at 1 (spec p. 49) -- so ``Room 1`` is the value 1 and a picker
+        #: that assumed otherwise would answer one too few.
+        self._base = base
         #: The index now showing, marked in the list and put under the
         #: cursor. ``None`` when it could not be read.
         self._current = current
@@ -852,21 +1059,34 @@ class ValuePickerScreen(ModalScreen[Optional[int]]):
     def _named(self, index: Optional[int]) -> str:
         if index is None:
             return "?"
-        if 0 <= index < len(self._choices):
-            return self._choices[index]
+        # Counted from ``base``, because the FX algorithms' names start at
+        # the value 1 and there is no name at 0 to give back.
+        offset = index - self._base
+        if 0 <= offset < len(self._choices):
+            return self._choices[offset]
         return f"unknown ({index})"
+
+    def _row_of(self, value: int) -> int:
+        """The list row a value sits on."""
+        return value - self._base
+
+    def _value_of(self, row: int) -> int:
+        """The value a list row answers with: what the unit stores."""
+        return self._base + row
 
     def on_mount(self) -> None:
         table = self.query_one("#choices", DataTable)
         table.add_column("value", key="value")
-        for index, name in enumerate(self._choices):
+        for row, name in enumerate(self._choices):
             table.add_row(
-                f"[b]{name}[/b]" if index == self._current else name,
-                key=str(index),
+                f"[b]{name}[/b]" if self._value_of(row) == self._current else name,
+                key=str(self._value_of(row)),
             )
         table.focus()
-        if self._current is not None and 0 <= self._current < len(self._choices):
-            table.move_cursor(row=self._current)
+        if self._current is not None:
+            row = self._row_of(self._current)
+            if 0 <= row < len(self._choices):
+                table.move_cursor(row=row)
 
     def on_data_table_row_selected(self, event) -> None:
         """Enter on a row picks it -- a message, not a binding, for the
@@ -879,11 +1099,11 @@ class ValuePickerScreen(ModalScreen[Optional[int]]):
         self.dismiss(None)
 
     def action_pick(self) -> None:
-        """``enter``: dismiss with the index under the cursor."""
+        """``enter``: dismiss with the value under the cursor."""
         table = self.query_one("#choices", DataTable)
         row = table.cursor_row
         if 0 <= row < len(self._choices):
-            self.dismiss(row)
+            self.dismiss(self._value_of(row))
 
 
 class ChannelDetailScreen(ModalScreen[None]):

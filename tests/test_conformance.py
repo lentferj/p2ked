@@ -31,11 +31,17 @@ from vinsynlib import conformance
 #: rxved's key borrowed for the reason given below. The last three are the
 #: family's own ``EDITOR_KEYS`` for the write path, declared here because
 #: p2ked binds them and a legend is a promise about which keys work.
+#:
+#: `x master FX` is in that set for the same reason: it is p2ked's own key
+#: (the family has no FX block to edit), it is bound at App level *and* on
+#: both edit screens, and a legend that promised it only in the browser
+#: would be a legend the multi screen's footer contradicts.
 EXTRAS = (
     "m channels",
     "v favourites view",
     "C category",
     "a all ROMs",
+    "x master FX",
     "w write gate",
     "z undo",
     "Z undo all",

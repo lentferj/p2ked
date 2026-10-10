@@ -1272,11 +1272,117 @@ step. Nothing is at stake — it is not in the dump and p2ked does not write it 
 but it is the same shape as the transpose disagreement and it is why a range
 should never be taken from one document alone.
 
+### The master FX block: sixteen parameters, transcribed the same way
+
+**2026-10-10.** TODO 50 was the FX half. The general table above had eleven
+parameters; the dump's master effects block — sixteen values — was read and not
+writeable, and the edit screen had no way to show it. It is transcribed now, and
+the shape of the transcription is the general one's: an **ID** that came from a
+unit (§10), a **label and range** that came from the manuals, and a page cite on
+every number.
+
+**The block is the unit's, and the words are the documents'.** Ids 513-528 are
+the dump's own master effects block, which §10 established by reading each value
+back from a unit and agreeing it with the dump. What no unit supplied is the name
+of each value or its range: those come from the specification's parameter table
+(spec p. 49), the operation manual's Master menu pages (OM pp. 41-43) and its
+Effects chapter (OM pp. 145-146), and the parameter tree's `MASTER BUTTON` items
+5-12 and `EDIT BUTTON` 34-38.
+
+| id | spec p. 49 name | min | max | what the other documents say | p2ked |
+|---:|---|---:|---:|---|---|
+| 513 | MASTER_FX_A_ALGORITHM | 1 | 44 | "There are 44 “A” effects" (OM p. 145); the numbered list, Room 1 to DelayVerb 9 (OM p. 41, again at OM p. 121); "select effect 1-44" (paramtree, EDIT BUTTON 34) | 1-44, 44 named |
+| 514 | MASTER_FX_A_DECAY | 0 | 90 | "The Decay value range is from 0 through 90" (OM p. 146); 0-90 (paramtree, MASTER BUTTON 8) | 0-90 |
+| 515 | MASTER_FX_A_HFDAMP | 0 | 127 | "The value range for High Frequency Damping is from 0 through 127" (OM p. 146); 0-127 (paramtree, MASTER BUTTON 8) | 0-127 |
+| 516 | MASTER_FXB_SEND_FXA | 0 | 127 | "FxB>FxA … 001" (OM p. 42); 0-127 (paramtree, MASTER BUTTON 8) | 0-127 |
+| 517 | MASTER_FX_A_MIX_SEND 1 | 0 | 100 | "FXA SEND AMOUNTS 1:100% 2: 50% 3: 10% 4: 0%" (OM p. 42); 0-100% (paramtree, MASTER BUTTON 9) | 0-100 |
+| 518 | MASTER_FX_A_MIX_SEND 2 | 0 | 100 | as above | 0-100 |
+| 519 | MASTER_FX_A_MIX_SEND 3 | 0 | 100 | as above | 0-100 |
+| 520 | MASTER_FX_B_ALGORITHM | 1 | 32 | "There are … 32 “B” effects" (OM p. 145); the numbered list, Chorus 1 to Distorted Double (OM p. 43, again at OM p. 122); "select effect 1-32" (paramtree, EDIT BUTTON 37) | 1-32, 32 named |
+| 521 | MASTER_FX_B_FEEDBACK | 0 | 127 | "The Feedback value range is from 0 to 127" (OM p. 146); 0-127 (paramtree, MASTER BUTTON 11) | 0-127 |
+| 522 | MASTER_FX_B_LFO_RATE | 0 | 127 | "The LFO Rate value range is from 0 to 127" (OM p. 146); 0-127 (paramtree, MASTER BUTTON 11) | 0-127 |
+| 523 | MASTER_FX_B_DELAY | 0 | 127 | "The Delay value range is from 0ms to 635ms" (OM p. 146); see below | 0-127 |
+| 524 | MASTER_FX_B_MIX_SEND 1 | 0 | 100 | "FXB SEND AMOUNTS 1:100% …" (OM p. 43); 0-100% (paramtree, MASTER BUTTON 12) | 0-100 |
+| 525 | MASTER_FX_B_MIX_SEND 2 | 0 | 100 | as above | 0-100 |
+| 526 | MASTER_FX_B_MIX_SEND 3 | 0 | 100 | as above | 0-100 |
+| 527 | MASTER_FX_A_MIX_SEND 4 | 0 | 100 | the fourth FXA send (OM p. 42; paramtree, MASTER BUTTON 9) | 0-100 |
+| 528 | MASTER_FX_B_MIX_SEND 4 | 0 | 100 | the fourth FXB send (OM p. 43; paramtree, MASTER BUTTON 12) | 0-100 |
+
+**Sixteen, not seventeen.** The brief for this work called the block "the
+17-value FX section". It is sixteen: 513-528 inclusive, which is the
+specification's own count — "Number of Master Effects Parameters (16)" (spec
+p. 48) — and the dump's declared count (§10). The seventeenth value is id 512,
+which the specification prints `(RESERVED)` (spec p. 49) and §10 established the
+unit does not send at all. Counting it would have produced a table with a
+parameter in it that no dump carries and no page names.
+
+**The block's order is the dump's, and the front panel's is different.**
+`FX_PARAMETERS` follows 513-528, which is the specification's table order (spec
+p. 49) and `MASTER_BLOCKS`'s order. The unit's own screens list each processor's
+four send amounts together (OM pp. 42-43; paramtree, MASTER BUTTON 9, 12); the
+dump carries sends 1-3 of each processor in the middle of the block and both
+fourth sends at the end. So the two orders disagree about where the fourth send
+sits, and a reader looking for "FXA send 4" beside 1, 2 and 3 on the front
+panel's screen will not find it. The dump wins, because a value read by ID is a
+value *of* that ID: the ID is the protocol's own name for the number, and the
+front panel's grouping is a screen layout rather than a statement about the
+wire.
+
+**The two algorithms are the block's only enumerations, and they are numbered
+from 1.** The specification gives both a min of 1 (spec p. 49); the operation
+manual numbers its two lists from 1 — the A list on OM p. 41, the B list on
+OM p. 43 — and the tree says "select effect 1-44" and "1-32" (paramtree, EDIT
+BUTTON 34, 37). So `MasterParameter.base` is 1 for those two rows and 0 for
+the other fourteen — an off-by-one that would have made the
+picker offer a blank row and then send one value too few. The corroboration is
+indirect and worth writing down: the *preset's* FXA algorithm screen carries an
+extra choice, "Master Effect A", meaning "use the master setting" (OM p. 149),
+which is exactly the slot a 0 would occupy in the same numbering. That is an
+inference from the document's list, not a read-back: **nobody has read id 513
+and compared the number with the name on the unit's display.**
+
+**FX B delay is the one value whose units are not its own number, and the two
+documents do not agree.** The operation manual says only "The Delay value range
+is from 0ms to 635ms" (OM p. 146), and its own screens display a plain number of
+milliseconds — "200ms" (OM p. 123), "145ms" (OM p. 149), "635ms" (OM p. 148). 127
+× 5 ms is 635 ms exactly, which *fits* a 5 ms step, but no document prints a
+step. The parameter tree disagrees with both readings and puts them in one line:
+"(1/4d, 1/2t, 1/4, 1/8d, 1/4t, 1/8, 1/16d, 1/8t, 1/16, 1/32d, 1/16t, 1/32 or
+0ms - 635ms in 5ms increments)" (paramtree, MASTER BUTTON 11; the same line at
+EDIT BUTTON 38) — twelve note values *and* a millisecond range, with no rule for
+where one stops and the other starts. p2ked keeps the raw 0-127 and gives the
+parameter no named values: a picker built on the tree's list would send a time
+nobody asked for, and a conversion built on the 5 ms step would be arithmetic
+the manual does not print. It is the one range in this block a hardware session
+should settle, and it costs four writes: write 0, 1, 12 and 127 to id 523,
+reading each one back.
+
+**The general block's FX bypass is not in this block.** The front panel's
+"FX MODE" (paramtree, MASTER BUTTON 5) — "bypassed or enabled" — is id 258, in
+the master general block, and it is already in the general table above with its
+own disagreement recorded. The FX screen says so in its note, because a reader
+who opened it to turn the effects off would otherwise conclude that cannot be
+done.
+
+**What the FX block does not settle that the general one does not either.**
+None of these sixteen ranges has been checked against a unit. Unlike the general
+block, though, the two E-MU documents *agree* on all sixteen of them, so there is
+no internal disagreement to report — and no evidence either. The FX block also
+carries no parameter the specification leaves unnamed, where the general block
+carries three (270, 279 and 660, §10).
+
 What §12 does **not** settle, and says so:
 
 - The nine per-channel parameter IDs' *names* beyond spec p. 41's table. ARP and
   BANK_MAP have no front-panel screen in the operation manual and no entry in
   the parameter tree, and the specification offers no explanation of either.
+- **Whether 513's value 1 is "Room 1" and 520's value 1 is "Chorus 1".** Two
+  documents agree on the *count* (44 and 32, spec p. 49; OM p. 145; paramtree,
+  EDIT BUTTON 34, 37) and the ordering is the manual's own list — but nobody has
+  read either parameter back and compared the number with the name on the
+  screen. It is one read on a unit, and the cheapest check in this section.
+- **What FX B delay's 0-127 is worth in milliseconds**, and whether the
+  parameter tree's twelve note values exist anywhere on the wire. See above.
 - Whether any of the documented ranges is what this firmware enforces. Every
   disagreement above is between documents; the unit has not been asked. That is
   the hardware session's job, and it is the difference between a transcription

@@ -38,12 +38,14 @@ from textual.widgets import DataTable, Static
 
 from p2k import catalog as cat
 from p2k import messages as m
-from p2ked.app import P2kedApp
+from p2ked.app import KEY_HINTS, P2kedApp
 from p2ked.demo import DemoDevice
-from p2ked.masteredit import MASTER_PARAMETERS, MasterEditor
+from p2ked.masteredit import FX_PARAMETERS, MASTER_PARAMETERS, MasterEditor
 from p2ked.multi import (
     CHANNEL_EDIT_HINT,
+    FX_EDIT_HINT,
     ChannelDetailScreen,
+    FXEditScreen,
     MasterEditScreen,
     MultiScreen,
     ValuePickerScreen,
@@ -708,6 +710,291 @@ class TestThePlusAndMinusNudge:
             await _wait_for(pilot, lambda: not app._busy)
             assert app.device.set_log == [(m.Parameter.MIDI_MODE, 1)]
             assert table.get_row(str(m.Parameter.MIDI_MODE))[1] == "poly"
+
+
+class TestTheFxEditScreen:
+    """``x``: the master FX block, on the apparatus the general editor
+    already built.
+
+    Three doors, one key. ``x`` is bound on the app, on the multi screen and
+    on the general editor, because a modal screen cuts the app's binding
+    chain -- the same reason ``w`` is bound on the edit screen itself -- and
+    because a legend that promised the key only in the browser would be
+    contradicted by the footer of the screen the reader is standing on.
+
+    Everything behind the door is the general editor's: one gate, one undo
+    log, one read-back. The tests here are the ones that would catch the FX
+    block having quietly grown a second copy of any of it -- a locked gate
+    that sends, an edit that does not move the cell, an undo that sends the
+    new value back instead of the old one.
+    """
+
+    #: The FX A algorithm row: an enumeration numbered from 1, which is the
+    #: row whose value and whose row do not agree.
+    ALGORITHM_ROW = 0
+    #: FX A decay: a plain range, and the one the nudge tests step.
+    DECAY_ROW = 1
+
+    async def _open_fx(self, app, pilot, *, from_browser=False):
+        if not from_browser:
+            await pilot.press("m")
+            await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
+        await pilot.press("x")
+        await _wait_for(pilot, lambda: isinstance(app.screen, FXEditScreen))
+        return app.screen
+
+    async def test_x_opens_the_fx_editor_from_the_browser(self, app):
+        """The legend promises the key in the browser, so it works there --
+        and it reads the values first, because the screen shows what each
+        one is now."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            assert isinstance(screen, FXEditScreen)
+            # The values came off the wire, so an edit from here has
+            # something to undo back to.
+            assert screen._values[513] == 1
+            assert screen._values[514] == 0
+
+    async def test_x_opens_it_from_the_multi_screen(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot)
+            assert isinstance(screen, FXEditScreen)
+            # Pushed over the multi screen, so closing it comes back here.
+            assert isinstance(screen.app.screen_stack[-2], MultiScreen)
+
+    async def test_x_opens_it_from_the_master_editor(self, app):
+        """``e`` then ``x``: the two blocks are one key apart, and the
+        general editor binds ``x`` itself because a modal cuts the app's
+        chain."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("m")
+            await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
+            await pilot.press("e")
+            await _wait_for(pilot, lambda: isinstance(app.screen, MasterEditScreen))
+            await pilot.press("x")
+            await _wait_for(pilot, lambda: isinstance(app.screen, FXEditScreen))
+            assert isinstance(app.screen.app.screen_stack[-2], MasterEditScreen)
+
+    async def test_the_fx_screen_does_not_bind_x(self, app):
+        """A key that reopened the screen it is already on is a key that
+        looks live and does nothing -- the invisible kind of failure
+        ``action_close``'s docstring describes from the other side."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            before = len(app.screen_stack)
+            await pilot.press("x")
+            await pilot.pause()
+            assert isinstance(app.screen, FXEditScreen)
+            assert app.screen is screen
+            assert len(app.screen_stack) == before
+
+    async def test_it_lists_every_fx_parameter_with_its_range_and_its_value(self, app):
+        """All sixteen, in the dump's order, with the transcribed range
+        beside each one."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            table = screen.query_one("#fx-table", DataTable)
+            assert [row.key.value for row in table.rows.values()] == [
+                str(parameter.parameter_id) for parameter in FX_PARAMETERS
+            ]
+            assert [column.key.value for column in table.columns.values()] == [
+                "param",
+                "now",
+                "range",
+            ]
+            assert list(table.get_row("514")) == ["FX A decay", "0", "0 - 90"]
+            assert list(table.get_row("517")) == ["FX A send 1", "0", "0 - 100"]
+            # An enumeration's value is spelled as the manual spells it,
+            # and its row says how many names there are rather than
+            # printing forty-four of them.
+            assert list(table.get_row("513")) == [
+                "FX A algorithm",
+                "Room 1",
+                "1 - 44 (44 named)",
+            ]
+            assert list(table.get_row("520")) == [
+                "FX B algorithm",
+                "Chorus 1",
+                "1 - 32 (32 named)",
+            ]
+
+    async def test_a_value_the_enumeration_does_not_hold_is_not_spelled(self, app):
+        """0 is below the algorithms' range, so it is not the first name
+        shifted along by one -- it is said as what it is."""
+        screen = FXEditScreen(DemoDevice().read_setup(), {513: 0}, MasterEditor())
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            table = screen.query_one("#fx-table", DataTable)
+            assert table.get_row("513")[1] == "unknown (0)"
+
+    async def test_it_says_where_the_fx_bypass_is(self, app):
+        """The bypass is in the general block, and a reader who came here to
+        turn the effects off has to be told which screen that is on."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            note = _text(screen.query_one(".note", Static))
+            assert FX_EDIT_HINT in note
+            assert "id 258" in note
+            assert "0 ms to 635 ms" in note
+            # The general screen's hint is not this one's.
+            assert CHANNEL_EDIT_HINT not in note
+
+    async def test_the_gate_is_the_app_s_own_and_its_state_is_on_screen(self, app):
+        """The same object the browser's ``w`` toggles, so the screen cannot
+        show "armed" while the app refuses the edit."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            assert screen._editor is app._editor
+            assert "write gate locked" in _text(screen.query_one(".note", Static))
+            await pilot.press("w")
+            await pilot.pause()
+            assert app._gate.armed is True
+            assert "write gate ARMED" in _text(screen.query_one(".note", Static))
+
+    async def test_a_successful_fx_edit_moves_the_now_cell(self, app):
+        """The nudge is another door into the same path, so the gate
+        refuses it, the range check sees it, the log records it and the
+        read-back verifies it -- and the row says what the unit now has."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            table = screen.query_one("#fx-table", DataTable)
+            table.focus()
+            table.move_cursor(row=self.DECAY_ROW)
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.press("plus")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(514, 1)]
+            assert table.get_row("514")[1] == "1"
+            assert screen._values[514] == 1
+            assert "1 edit(s) undoable with z." in _text(
+                screen.query_one(".note", Static)
+            )
+
+    async def test_a_locked_gate_refuses_in_the_fx_screen(self, app):
+        """Refused on the modal's own status line, and nothing is sent."""
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            table = screen.query_one("#fx-table", DataTable)
+            table.focus()
+            table.move_cursor(row=self.DECAY_ROW)
+            await pilot.press("plus")
+            await pilot.pause()
+            assert app.device.set_log == []
+            status = _text(screen.query_one(".status", Static))
+            assert "FX A decay not sent" in status
+            assert "the write gate is locked" in status
+            assert status.startswith("refused · ")
+            _message, refused = said[-1]
+            assert refused
+
+    async def test_enter_on_an_algorithm_opens_the_picker(self, app):
+        """Forty-four names in the manual's own order, with the current
+        value on the cursor and marked in the list."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            table = screen.query_one("#fx-table", DataTable)
+            table.focus()
+            table.move_cursor(row=self.ALGORITHM_ROW)
+            await pilot.press("enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ValuePickerScreen))
+            picker = app.screen
+            choices = picker.query_one("#choices", DataTable)
+            assert choices.row_count == 44
+            # The demo reads the algorithm as 1, and value 1 is "Room 1" --
+            # row 0, not row 1.
+            assert choices.cursor_row == 0
+            assert "now Room 1" in _text(picker.query_one("Label"))
+            assert choices.get_row("1") == ["[b]Room 1[/b]"]
+            assert choices.get_row("44") == ["DelayVerb 9"]
+            assert not isinstance(app.screen, PromptScreen)
+
+    async def test_a_picked_fx_reaches_the_unit_and_is_drawn(self, app):
+        """Picker to wire to cell: the picker is a way *in* to the edit
+        path, not a way around it."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            table = screen.query_one("#fx-table", DataTable)
+            table.focus()
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.press("enter")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ValuePickerScreen))
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("enter")
+            await _wait_for(
+                pilot, lambda: not isinstance(app.screen, ValuePickerScreen)
+            )
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(513, 3)]
+            assert table.get_row("513")[1] == "Room 3"
+
+    async def test_undo_of_an_fx_edit_sends_the_previous_value(self, app):
+        """``z`` from the screen the edit was made on, sending back what the
+        unit had before it -- and the row says so."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await self._open_fx(app, pilot, from_browser=True)
+            table = screen.query_one("#fx-table", DataTable)
+            table.focus()
+            table.move_cursor(row=self.DECAY_ROW)
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.press("plus")
+            await _wait_for(pilot, lambda: not app._busy)
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.set_log == [(514, 1), (514, 0)]
+            assert table.get_row("514")[1] == "0"
+            assert app._editor.log.pending == 0
+
+    async def test_escape_and_q_close_the_fx_editor(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await self._open_fx(app, pilot, from_browser=True)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, FXEditScreen)
+            assert app._running is True
+            await self._open_fx(app, pilot, from_browser=True)
+            await pilot.press("q")
+            await _wait_for(pilot, lambda: not isinstance(app.screen, FXEditScreen))
+            assert app._running is True, "q quit the program; it is bound to quit"
+
+    async def test_the_multi_screen_footer_says_the_fx_key(self, app):
+        """A key nobody is told about is a key nobody presses."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_multi(app, pilot)
+            hints = [_text(h) for h in screen.query(Static)]
+            assert any("x master FX" in text for text in hints)
+
+    def test_the_legend_promises_the_key_the_app_binds(self):
+        """The legend is a promise about which keys work, so it names one
+        the app actually binds -- declared to the family as an extra in
+        tests/test_conformance.py, the way ``m channels`` is.
+
+        No pilot: this is about what the app *declares*, and the three
+        screens that serve the key are checked above by pressing it.
+        """
+        assert "x master FX" in KEY_HINTS
+        assert [(b.key, b.action) for b in P2kedApp.BINDINGS if b.key == "x"] == [
+            ("x", "edit_fx")
+        ]
 
 
 class TestTheChannelDetailScreen:
