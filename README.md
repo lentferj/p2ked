@@ -178,8 +178,12 @@ whether anything is plugged into the second interface**, and none of the
 reasons mention the cable, an unplugged submix jack or the monitor, because
 the unit does not report them.
 
-`r` re-reads the setup from inside the screen. `e` is the door to the one
-write path in p2ked, and the only key here that can reach one.
+`r` re-reads the setup from inside the screen. `enter` on a row opens that
+channel's **detail** — all nine parameters, the why-not reasons, and the
+reason per-channel editing is refused. `e` is the door to the one write path
+in p2ked, and the only key here that can reach one. The MIDI channel
+selections go out on sits in the window's subtitle for as long as the window
+is open, not only for the moment it changes.
 
 Note the word: **"multi" means two things on this machine.** Multi is one of
 three MIDI *modes* (Omni / Poly / Multi). A *Multisetup* is something else —
@@ -193,9 +197,13 @@ is the first of those. Browsing Multisetups is not built yet.
 a channel map is played through: MIDI mode and whether an external one is
 accepted, the basic, FX and tempo control channels, transpose, fine tune,
 bend range, clock tempo, FX bypass and the SysEx device ID. `enter` on a row
-asks for the value and names the range with it. The value is checked before
-anything is sent, because a Proteus **clips** an out-of-range value rather
-than refusing it — a typo would otherwise land as a plausible, silent change.
+offers that edit: a parameter with named values — the MIDI mode is omni /
+poly / multi — opens the picker and ⏎ picks; a plain range gets a prompt
+that names the range with it. `+` and `-` nudge the row under the cursor by
+one, clamped to the range, and go through the same gate as an edit. The
+value is checked before anything is sent, because a Proteus **clips** an
+out-of-range value rather than refusing it — a typo would otherwise land as
+a plausible, silent change.
 
 Everything here is behind a write gate, the family's editor shape rather
 than something this tool invented:
@@ -214,7 +222,9 @@ than something this tool invented:
 - **Only a verified edit is undoable.** `z` sends the previous value back and
   `Z` all of them, newest first. An edit the read-back did not confirm is not
   in the log, because nothing landed to restore — and that is the reason
-  "undid 2 edits" can be fewer than the number of edits attempted.
+  "undid 2 edits" can be fewer than the number of edits attempted. A
+  favourite toggle is a change too: it sits in the same timeline, and `z`
+  flips the slot back in the local database — no frame goes out for it.
 
 Both undo keys work from the browser as well, not only from the edit screen:
 an edit is made *through* the screen and undone *after* it closes, so the app
@@ -325,8 +335,8 @@ this one alone. `--config PATH` names a different file entirely.
 | `f` | mark or unmark the preset under the cursor — **this writes the favourites database** |
 | `v` | step the favourites view: all presets → this bank's favourites → every favourite (reads only) |
 | `w` | write gate — **locked by default**; nothing is sent while it is |
-| `z` | undo the last master edit — sends the previous value back |
-| `Z` | undo every master edit made this session |
+| `z` | undo the last change: the last master edit, or the last favourite toggle |
+| `Z` | undo every change made this session |
 | `i` | device identity and which ROMs are fitted |
 | `?` / `q` | help / quit |
 
