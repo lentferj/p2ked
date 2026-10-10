@@ -46,7 +46,7 @@ import argparse
 import sys
 import threading
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Protocol, Sequence, Tuple, cast
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -63,9 +63,14 @@ from p2ked.masteredit import (
     FX_PARAMETERS,
     MASTER_BY_ID,
     MASTER_PARAMETERS,
+    SOUND_FIELD,
+    ChannelChange,
     EditGate,
     EditLog,
     MasterEditor,
+    channel_values,
+    fields_of,
+    mutate_channel,
 )
 from p2ked.multi import FXEditScreen, MasterEditScreen, MultiScreen
 from p2ked.prompts import PromptScreen
@@ -188,8 +193,26 @@ class FavouriteChange:
     was_favourite: bool
 
 
-#: What ``z`` can reverse. See :class:`EditChange` for why it is one list.
-Change = EditChange | FavouriteChange
+class _Sayer(Protocol):
+    """What a screen that can carry an edit sentence looks like.
+
+    Structural rather than a class name, because the sentence has more than
+    one place it can land: the master editor is a modal with its own status
+    line, and a per-channel edit is offered on the multi screen, which will
+    grow one when the UI does. Both answer the same two arguments, so both
+    match, and neither has to be imported here to be found.
+    """
+
+    def say(self, message: str, *, refused: bool = False) -> None:
+        """One sentence on this screen's own status line."""
+        ...
+
+
+#: What ``z`` can reverse. See :class:`EditChange` for why it is one list --
+#: and :class:`p2ked.masteredit.ChannelChange` for the entry that carries its
+#: own data, because undoing one of those is a whole-dump write rather than
+#: one parameter ID and value.
+Change = EditChange | FavouriteChange | ChannelChange
 
 
 class ReportScreen(ModalScreen[None]):
@@ -349,8 +372,8 @@ class P2kedApp(App):
         """``Z``: every change there is, of either kind, newest first."""
         self._undo_master_edits(None)
 
-    def _saying_screen(self) -> Optional[MasterEditScreen]:
-        """The modal an edit sentence belongs to, if one is open.
+    def _saying_screen(self) -> Optional[_Sayer]:
+        """The screen an edit sentence belongs to, if one is open.
 
         Two ways to be the right screen, and the live one wins. A worker
         that finishes after its screen closed still reports to the screen
@@ -359,11 +382,33 @@ class P2kedApp(App):
         asked for. But a screen underneath a PromptScreen, or one a
         caller pushed by hand, is not recorded there, and it is the one
         the user is looking at all the same.
+
+        That last case is the per-channel one: a channel edit is offered on
+        the multi screen, which owns no status line yet and is not an edit
+        screen. A screen that grows a ``say`` of its own --
+        :meth:`p2ked.multi.MasterEditScreen.say` is the shape to copy -- is
+        the live one and is answered first, so the sentence lands where the
+        user is looking. Until then the fallback is unchanged.
         """
         top = self.screen
         if isinstance(top, MasterEditScreen):
             return top
+        if callable(getattr(top, "say", None)):
+            return cast(_Sayer, top)
         return getattr(self, "_edit_screen", None)
+
+    def _hook_screen(self, name: str):
+        """The live screen to call a channel hook on, or ``None``.
+
+        The same question :meth:`_saying_screen` answers, asked for a second
+        reason: a screen that only redraws a row might carry no ``say`` of its
+        own -- so it would not be the screen a sentence belongs to and it is
+        still the one the user is looking at. The recorded edit screen is
+        deliberately absent here, because a hook that outlives its screen is
+        a redraw into a table nobody is showing.
+        """
+        top = self.screen
+        return top if callable(getattr(top, name, None)) else None
 
     def _say_edit(self, message: str, *, refused: bool = False) -> None:
         """One sentence about an edit, where the user is looking.
@@ -603,22 +648,227 @@ class P2kedApp(App):
         else:
             self._say_edit(message, refused=not ok)
 
+    # --- the per-channel write path ---------------------------------------
+
+    def action_edit_channel(self, channel: int, field: str, value: int) -> None:
+        """Set one of a channel's nine values. **This changes the unit.**
+
+        The UI's door into the per-channel write path. Deliberately tiny:
+        the gate and the range are checked here, on the main thread and
+        before anything is spawned -- the same shape as
+        :meth:`_apply_master_edit`, and for the same reason. This is the
+        last place an edit can be stopped before it reaches the wire, so a
+        check that lived on the screen would be a check the next caller of
+        this method could simply not make.
+
+        **No parameter ID is involved, and none is invented.** The write is
+        the whole Setup Dump: the unit "receive[s] and understand[s] the old
+        setup dump" (spec p. 29), so p2ked reads the live dump, changes this
+        one field and sends the dump back -- which means every other byte on
+        the frame is the byte the unit just sent. Then it reads again and
+        verifies this one field. See
+        :func:`p2ked.masteredit.mutate_channel` for the mutation, and
+        :data:`p2ked.masteredit.CHANNEL_EDIT_HINT` for the sentence the
+        screen shows about all of this.
+
+        ``field`` is one of the nine the dump carries -- ``preset``,
+        ``volume``, ``pan``, ``mix_output``, ``arp``, ``enable``,
+        ``bank_map``, ``receive_program_change``, ``rom_id`` -- and ``value``
+        is the signed value the wire uses, so a mix output of -1 is ``-1``
+        and not 3. A field outside that set, or a value outside its
+        transcribed range, is refused and sends nothing.
+
+        ``channel`` is 0-based, the wire's own numbering -- the one
+        :attr:`p2k.messages.ChannelState.channel` and
+        :meth:`p2k.messages.SetupDump.channel` use, so the multi screen's row
+        index is the same number. Whether this setup has that many channels
+        is a fact about the dump, which is the worker's to read; a channel it
+        does not have is refused there, before anything is sent.
+        """
+        if self.device is None:
+            return
+        refusal = self._editor.allow_channel_field(channel, field, value)
+        if refusal is not None:
+            self._say_edit(refusal, refused=True)
+            return
+        self._start_channel_edit(channel, field, {field: value})
+
+    def action_channel_sound(
+        self, channel: int, rom_id: int, preset: int, bank_map: int
+    ) -> None:
+        """Aim a channel at a sound. **This changes the unit.**
+
+        One operation, not three: the unit takes ``rom_id``, ``preset`` and
+        ``bank_map`` together, so they are ranged together
+        (:meth:`p2ked.masteredit.MasterEditor.allow_channel_sound`), written
+        together in one dump, verified together, and undone together as one
+        entry. Three ``z`` presses that each restored a third of a sound
+        would not put back the sound anybody had.
+
+        Everything else is :meth:`action_edit_channel`'s: one dump write, the
+        gate, the read-back, the undo timeline.
+        """
+        if self.device is None:
+            return
+        refusal = self._editor.allow_channel_sound(
+            channel, rom_id=rom_id, preset=preset, bank_map=bank_map
+        )
+        if refusal is not None:
+            self._say_edit(refusal, refused=True)
+            return
+        self._start_channel_edit(
+            channel,
+            SOUND_FIELD,
+            {"rom_id": rom_id, "preset": preset, "bank_map": bank_map},
+        )
+
+    def _start_channel_edit(
+        self, channel: int, field: str, values: Dict[str, int]
+    ) -> None:
+        """Refuse because the wire is busy, or put the edit on a worker.
+
+        No MIDI in here: the gate and the range have already been answered
+        on the main thread, and ``_busy`` is the last thing to say before a
+        worker is spawned.
+        """
+        if self._busy:
+            self._say_edit("busy", refused=True)
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._channel_edit_worker(channel, field, values)
+
+    @work(thread=True)
+    def _channel_edit_worker(
+        self, channel: int, field: str, values: Dict[str, int]
+    ) -> None:
+        """Read the dump, change one channel, send the dump, read it back.
+
+        **MIDI only** -- one operation on one thread, for the reason
+        :meth:`_apply_worker` is: a write and its verification must not be
+        split across threads, because another read landing between them
+        would be read back as this write's result.
+
+        The dump is the whole mechanism. It is read live, so the frame sent
+        back carries the unit's own bytes for everything but this one field;
+        :meth:`p2k.bridge.ProteusBridge.send_setup_dump` encodes it with
+        :func:`p2k.messages.encode_setup_dump`, which refuses a dump it
+        cannot reproduce rather than inventing what it could not read; and it
+        is read again afterwards, so what is verified is the field the unit
+        now holds rather than the field that was sent.
+
+        ``refusal`` comes back rather than being raised, because the checks
+        that need a dump in hand -- has the setup that many channels, can it
+        be written back at all -- are a reader's question, not a failure of
+        the program.
+        """
+        failure: Optional[BaseException] = None
+        refusal: Optional[str] = None
+        before: Optional[Tuple[int, ...]] = None
+        after: Optional[Tuple[int, ...]] = None
+        sent = tuple(values[name] for name in fields_of(field))
+        try:
+            with self._lock:
+                dump = self.device.read_setup()
+                refusal = self._editor.decline_channel(dump, channel, values)
+                if refusal is None:
+                    before = channel_values(dump, channel, fields_of(field))
+                    written = mutate_channel(dump, channel, values)
+                    self.device.send_setup_dump(written)
+                    after = channel_values(
+                        self.device.read_setup(), channel, fields_of(field)
+                    )
+        except Exception as exc:
+            failure = exc
+        self.call_from_thread(
+            self._channel_edited,
+            channel=channel,
+            field=field,
+            sent=sent,
+            refusal=refusal,
+            failure=failure,
+            before=before,
+            after=after,
+        )
+
+    def _channel_edited(
+        self,
+        *,
+        channel: int,
+        field: str,
+        sent: Tuple[int, ...],
+        refusal: Optional[str],
+        failure: Optional[BaseException],
+        before: Optional[Tuple[int, ...]],
+        after: Optional[Tuple[int, ...]],
+    ) -> None:
+        """Report a per-channel edit, and log it only if it read back.
+
+        The same three outcomes :meth:`_edit_applied` has -- a refusal, an
+        operation that could not be carried out, and a success -- said
+        differently, because "the field did not change" and "the wire broke"
+        are different things to act on.
+        """
+        self._busy = False
+        if refusal is not None:
+            self._say_edit(refusal, refused=True)
+            return
+        if before is None:  # pragma: no cover - decline_channel checks it
+            before = sent
+        change = self._as_change(channel, field, before, sent)
+        if failure is not None:
+            ok, message = False, f"{change.label} = {change.spelled}: {failure}"
+        else:
+            ok, message = self._editor.finish_channel(change, after)
+        if ok:
+            # Now undoable, and on the shared timeline so `z` knows it came
+            # *after* any favourite toggle and *before* any other edit. The
+            # ChannelChange *is* the entry: it carries the channel, the
+            # field and the previous value, which is what an undo of a
+            # whole-dump write needs and what an empty EditChange could not
+            # hold. See EditChange.
+            self._changes.append(change)
+        screen = self._hook_screen("channel_result")
+        if screen is not None:
+            # The screen's own hook for a screen that shows a channel row --
+            # the multi screen's is the UI's to write, and until it exists
+            # the sentence below is the whole of the answer. The signature:
+            # channel_result(ok, message, change).
+            screen.channel_result(ok, message, change)
+        self._say_edit(message, refused=not ok)
+
+    @staticmethod
+    def _as_change(
+        channel: int, field: str, before: Tuple[int, ...], after: Tuple[int, ...]
+    ) -> ChannelChange:
+        """The record: a bare value for one field, a triple for a sound.
+
+        The shape :class:`p2ked.masteredit.ChannelChange` documents, and the
+        reason it is not always a tuple is that a ``z`` report has to read
+        as words -- "channel 6 volume = 90" -- while a sound is three values
+        the unit takes together and a report has to say so.
+        """
+        if len(before) == 1:
+            return ChannelChange(channel, field, before[0], after[0])
+        return ChannelChange(channel, field, tuple(before), tuple(after))
+
     def _undo_master_edits(self, count: Optional[int] = None) -> None:
         """Reverse the last ``count`` changes. Nothing read-only about it.
 
         ``None`` means every change there is, which is what ``Z`` asks for.
 
-        **Two kinds, one timeline.** A master edit is reversed by sending
-        the value it replaced back over the wire, on a worker; a favourite
-        toggle is reversed in the local favourites store and **goes nowhere
-        near the device**. ``z`` reverses whichever came last, so the
-        entries are kept in the order they happened rather than one log per
-        kind -- see :class:`EditChange`.
+        **Three kinds, one timeline.** A master edit is reversed by sending
+        the value it replaced back over the wire, on a worker; a per-channel
+        edit is reversed by re-reading the dump, putting that one field back
+        and sending the *dump* back; and a favourite toggle is reversed in
+        the local favourites store and **goes nowhere near the device**.
+        ``z`` reverses whichever came last, so the entries are kept in the
+        order they happened rather than one log per kind -- see
+        :class:`EditChange` and :class:`ChannelChange`.
 
         Each entry leaves the timeline as it is undone, so an undo that
-        fails halfway cannot be replayed by the next press. The editor's
-        own log loses the same entries at the same time, which is what
-        keeps "N undoable with z" on the edit screen true.
+        fails halfway cannot be replayed by the next press. The editor's own
+        logs lose the same entries at the same time, which is what keeps
+        "N undoable with z" on the edit screen true.
         """
         if self._busy:
             self._say_edit("busy", refused=True)
@@ -638,13 +888,20 @@ class P2kedApp(App):
         for change in favourites:
             self._undo_favourite(change)
         edits = sum(1 for c in taken if isinstance(c, EditChange))
-        if edits:
+        # Off the timeline, which is the authority: a ChannelChange carries
+        # its own channel, field and previous value, so undoing one needs
+        # nothing looked up. The editor's channel log loses the same count,
+        # so the two cannot disagree about what is left to undo.
+        channels = [c for c in reversed(taken) if isinstance(c, ChannelChange)]
+        if channels:
+            self._editor.channel_undo_plan(len(channels))
+        if edits or channels:
             # Still off the editor's log: undo_plan is what `z` has always
             # read the value to send from, and taking them off there as
             # well as off the timeline is what leaves the two agreeing.
             plan = self._editor.undo_plan(edits)
             self._busy = True  # main thread, before the spawn; see _busy
-            self._undo_worker(plan, len(favourites))
+            self._undo_worker(plan, channels, len(favourites))
 
     def _undo_favourite(self, change: FavouriteChange) -> None:
         """Put one ``f`` press back. **Sends nothing: no MIDI here.**
@@ -664,8 +921,23 @@ class P2kedApp(App):
             self._refill_keeping_place()
 
     @work(thread=True)
-    def _undo_worker(self, plan, favourites: int = 0) -> None:
+    def _undo_worker(self, plan, channels=(), favourites: int = 0) -> None:
+        """Send everything ``z`` asked for back. **MIDI only.**
+
+        Two verbs because the two kinds of edit are two shapes of write: a
+        master parameter is one ID and one value, a per-channel one is a
+        whole dump with the previous field put back. Each kind is newest
+        first, and each is verified on its own before it is claimed.
+
+        A channel undo reads the dump again rather than reusing the one from
+        when the edit was made: the unit may have been edited by hand in
+        between, and the old value belongs in the channel the unit reports
+        now. Anything that fails -- a read, an encode, a send, or a read-back
+        that disagrees -- is a ``False`` for that one entry and does not stop
+        the rest.
+        """
         results: List[Tuple[int, bool]] = []
+        undone: List[Tuple[ChannelChange, bool]] = []
         try:
             with self._lock:
                 for parameter_id, value in plan:
@@ -674,10 +946,35 @@ class P2kedApp(App):
                         results.append((parameter_id, True))
                     except Exception:
                         results.append((parameter_id, False))
+                for change in channels:
+                    undone.append((change, self._restore_channel(change)))
         finally:
-            self.call_from_thread(self._edit_undone, results, favourites, plan)
+            self.call_from_thread(self._edit_undone, results, favourites, plan, undone)
 
-    def _edit_undone(self, results, favourites: int = 0, plan=()) -> None:
+    def _restore_channel(self, change: ChannelChange) -> bool:
+        """Put one per-channel edit back. True only if the unit took it.
+
+        The caller holds ``self._lock`` (an RLock, so taking it again would
+        be harmless) -- the whole undo is one operation on one thread.
+
+        ``False`` for a send that raised **and** for a read-back that
+        disagrees. The entry has already left the timeline, so an undo that
+        did not land must not be reported as one that did: the report names
+        it, and ``z`` pressed again will not silently try the same thing a
+        second time.
+        """
+        try:
+            dump = self.device.read_setup()
+            written = mutate_channel(dump, change.channel, change.restore)
+            self.device.send_setup_dump(written)
+            after = channel_values(
+                self.device.read_setup(), change.channel, change.fields
+            )
+        except Exception:
+            return False
+        return after is not None and tuple(after) == change.restore_values
+
+    def _edit_undone(self, results, favourites: int = 0, plan=(), undone=()) -> None:
         self._busy = False
         screen = self._saying_screen()
         if screen is not None:
@@ -686,24 +983,41 @@ class P2kedApp(App):
             # reading a value `z` just sent away is the same lie a stale
             # edit cell was.
             screen.undone(plan, results)
-        self._say_edit(self._undo_sentence(results, favourites))
+        screen = self._hook_screen("channel_undone")
+        if screen is not None:
+            # The per-channel half of the same redraw: a screen showing a
+            # channel row answers channel_undone([(change, ok), ...]). The
+            # multi screen's is the UI's to write; until it exists the
+            # sentence below is the whole of the answer.
+            screen.channel_undone(undone)
+        self._say_edit(self._undo_sentence(results, favourites, undone))
 
-    def _undo_sentence(self, results, favourites: int) -> str:
-        """One sentence over both kinds of undo.
+    def _undo_sentence(
+        self,
+        results,
+        favourites: int,
+        undone: Sequence[Tuple[ChannelChange, bool]] = (),
+    ) -> str:
+        """One sentence over the three kinds of undo.
 
-        With no favourite undone this is the editor's own report, verbatim
-        -- "undid 1 edit", "undid 1; the unit rejected 1 (parameters 259)"
-        -- because that wording is what the MIDI half is pinned to. A
-        favourite is named separately, and it is listed first because it is
-        what was undone first: it needed no wire.
+        A favourite is named first because it was undone first and needed no
+        wire. With no per-channel undo at all this is the editor's own
+        report, verbatim -- "undid 1 edit", "undid 1; the unit rejected 1
+        (parameters 259)" -- because that wording is what the MIDI half is
+        pinned to; the per-channel half adds its own, naming the channel and
+        the field rather than a parameter ID.
         """
-        if not favourites:
-            return self._editor.undo_report(results)
-        said = f"undid {favourites} favourite{'s' if favourites != 1 else ''}"
-        edits = self._editor.undo_report(results)
-        if edits == "nothing to undo":
-            return said
-        return f"{said}; {edits}"
+        parts = []
+        if favourites:
+            parts.append(
+                f"undid {favourites} favourite{'s' if favourites != 1 else ''}"
+            )
+        if results or not undone:
+            parts.append(self._editor.undo_report(results))
+        channels = self._editor.channel_undo_report(list(undone)) if undone else ""
+        if channels:
+            parts.append(channels)
+        return "; ".join(parts)
 
     def __init__(
         self,

@@ -151,6 +151,16 @@ class DemoDevice:
         #: has no way to act on the copy -- so the call is recorded rather
         #: than performed, which is the part a test can assert.
         self.copy_log: List[Tuple[int, int]] = []
+        #: Every setup dump the fake was handed, in order. Unlike
+        #: :attr:`copy_log` this one *is* performed: a fake that recorded a
+        #: whole-setup write and carried on answering its own original dump
+        #: would make every read-back agree with a write that never
+        #: happened, which is the one thing the read-back exists to catch.
+        self.dump_log: List[m.SetupDump] = []
+        #: The frame :meth:`read_setup` now answers. Starts as the one this
+        #: fake builds; a :meth:`send_setup_dump` replaces it, which is what
+        #: makes the fake's own state observable after a write.
+        self._dump_frame = self._setup_dump_frame()
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -259,6 +269,15 @@ class DemoDevice:
     }
 
     def _setup_reply(self) -> bytes:
+        """The frame :meth:`read_setup` answers with.
+
+        Whatever the fake was last given, or the one it built: a
+        :meth:`send_setup_dump` replaces it, which is what makes a read-back
+        after a whole-setup write say anything at all.
+        """
+        return self._dump_frame
+
+    def _setup_dump_frame(self) -> bytes:
         """A setup dump shaped like the real one.
 
         The master blocks are laid out by :data:`p2k.messages.MASTER_BLOCKS`,
@@ -493,8 +512,38 @@ class DemoDevice:
         return self.read_parameter(m.Parameter.MIDI_MODE)
 
     def read_setup(self, *, timeout: Optional[float] = None) -> m.SetupDump:
+        """The whole multi/channel setup in one message. Silent.
+
+        Read out of :attr:`_dump_frame`, which is the frame this fake
+        built until a :meth:`send_setup_dump` replaced it -- so what the fake
+        answers after a write is the setup it was just given, which is the
+        only way a read-back can verify anything here.
+        """
         reply = self.handle(m.setup_dump_request(device=self.device_id))
         return m.parse_setup_dump(m.parse(reply))
+
+    def send_setup_dump(
+        self, dump: m.SetupDump, *, timeout: Optional[float] = None
+    ) -> None:
+        """Take a whole setup. **This changes the fake.**
+
+        Same contract as :meth:`p2k.bridge.ProteusBridge.send_setup_dump`,
+        and for a stronger reason there than anywhere else: a demo that took
+        a whole-setup write and then answered its *next* read with the
+        original dump would make every verify step agree, including the ones
+        that should fail. So the frame is encoded by the same
+        :func:`p2k.messages.encode_setup_dump` the real path uses, put
+        through :meth:`handle`, and kept as what the fake now reports.
+
+        The frame also lands in :attr:`received` like everything else, so a
+        test can see that a *dump write* went out rather than a parameter
+        edit.
+        """
+        self._tick()
+        frame = m.encode_setup_dump(dump, device=self.device_id)
+        self.handle(frame)
+        self.dump_log.append(dump)
+        self._dump_frame = frame
 
     def hardware_config(self, *, timeout: Optional[float] = None) -> m.HardwareConfig:
         reply = self.handle(m.config_request(device=self.device_id))

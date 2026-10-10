@@ -707,6 +707,42 @@ class ProteusBridge:
         self._drain()
         self._send(m.parameter_edit(parameter_id, value, device=self.device_id))
 
+    def send_setup_dump(
+        self, dump: m.SetupDump, *, timeout: Optional[float] = None
+    ) -> None:
+        """Write a whole setup. **This changes the instrument.**
+
+        The route a per-channel edit takes. The specification says a command
+        station "receive[s] and understand[s] the old setup dump" and will
+        "transmit one if explicitly requested" (spec p. 29), so the unit
+        takes ``1Ch`` back -- and a Setup Dump covers "all settings selected
+        by the Master Menu and settings made on the Preset Select screen"
+        (spec p. 26), which means this replaces a whole setup, not one
+        field. What makes that safe is that the caller re-encodes a dump the
+        unit just sent: read, mutate, send, read again -- see
+        :mod:`p2ked.masteredit`.
+
+        **One frame, not a stream.** ``_send`` hands the whole thing to
+        ``rtmidi``'s ``send_message`` in one call, which is what a unit that
+        answers with a ~1 KB dump of its own must already be able to accept;
+        there is no chunking here and no size cap to hit, because there is
+        nothing in this path that splits or truncates. ``SEND_GAP`` follows
+        it, as after every other message, so the read-back request the caller
+        sends next is not shoulder-to-shoulder with this one. A 32-channel
+        setup is a 977-byte frame: a size, not a limit, and the only thing
+        worth reporting about it is that nothing here trims one.
+
+        Sent, then not verified: the write gate, the read-back and the undo
+        log belong to the caller, as for :meth:`set_parameter`.
+
+        The frame carries this bridge's own device ID, which is what
+        :func:`p2k.messages.encode_setup_dump`'s required ``device`` is for:
+        a message that replaces a whole setup should not go to every unit on
+        the cable because a caller forgot an argument.
+        """
+        self._drain()
+        self._send(m.encode_setup_dump(dump, device=self.device_id))
+
     def copy_master_setup(
         self, source: int, destination: int, *, timeout: Optional[float] = None
     ) -> None:
