@@ -851,3 +851,433 @@ narrower one, which is the one the evidence supports.
 - Whether a different unit, firmware or interface has the same 18 ms answer,
   or returns the sentinel everywhere, or can go briefly unresponsive.
 - Writing. Still nothing was written, still out of scope.
+---
+
+## §12 — The transcription, with page cites
+
+**2026-10-10.** `p2ked/masteredit.py` carries a table of master-parameter ranges
+and labels whose docstring cites "RESOLUTION_NOTES §12" for them, and §12 did not
+exist. This is it: the four things the edit path rests on, transcribed from the
+manuals with a page cite on every number. None of it came from a unit and none
+of it needed one — these are facts the documents state outright. Where two
+documents disagree, or where a number in the code is an inference rather than a
+transcription, that is said rather than smoothed over.
+
+§1 already ranked the sources and it has not changed: the specification wins on
+the wire format, the instrument-definition files are the only source for ROM
+names, and the hardware outranks both. This section adds a third document, and
+the first thing to say about it is that it is **not** E-MU's.
+
+### How to re-check any cite in this section
+
+**The specification** (`sysex.txt`, "Proteus 2000, Audity 2000, Proteus 2500,
+XL-7, MP-7, PX-7, PK-6, MK-6, XK-6, Vintage Keys, Vintage Pro, Halo — System
+Exclusive Specification, Version 2.2"). Every page carries its number in the
+footer: odd pages end `Proteus Family MIDI SysEx Specification <n>`, even pages
+end `<n> E-MU Systems`. Cited as *spec p. n*.
+
+**The operation manual** (`p2000.txt`, "Proteus 2000 Operation Manual", FI634
+Rev. D). Same arrangement: `Proteus 2000 Operation Manual   <n>` and
+`<n> E-mu Systems`. Cited as *OM p. n*.
+
+**The parameter tree** (`paramtree.txt`, "PROTEUS 2000 PARAMETER TREE version
+2.26"). No pages, no footers, no table of contents — a numbered list under three
+headings, `MASTER BUTTON` items 1–34, `EDIT BUTTON` 1–52, `MULTI BUTTON` 1–17.
+Heading plus item number is the only stable locator. Cited as
+*paramtree, MULTI BUTTON 3*.
+
+And that third file's own line 3 reads "Compiled by Benny Skyn". It is a
+third-party summary, so §1's ranking says nothing about it and it cannot
+outrank anything. It is worth having because it is front-panel shaped — one
+numbered item per screen, which is how the machine is actually operated — but
+where it disagrees with E-MU's own two documents it is one person's reading and
+it loses.
+
+### The nine per-channel parameters
+
+The specification lists them as individual parameter IDs (spec p. 41) and again,
+positionally, in the dump's contents (spec p. 27). In ID order, which is the
+order §8 confirmed from the unit's values:
+
+| # | ID | spec p. 41 name | min | max | documented values |
+|---:|---:|---|---:|---:|---|
+| 1 | 130 | MULTIMODE_PRESET | 0 | 895 | — |
+| 2 | 131 | MULTIMODE_VOLUME | 0 | 127 | — |
+| 3 | 132 | MULTIMODE_PAN | 0 | 127 | 64L–63R displayed |
+| 4 | 133 | MULTIMODE_MIX_OUTPUT | -1 | 2 | -1 = Preset, 0 = Main, 1 = Submix1, 2 = Submix2 |
+| 5 | 134 | MULTIMODE_ARP | -2 | 1 | -2 = off, -1 = on, 0 = P (Preset Arp), 1 = G (Global Arp) |
+| 6 | 135 | MULTIMODE_CHANNEL_ENABLE | 0 | 1 | — |
+| 7 | 136 | MULTIMODE_BANK_MAP | 0 | 6 | — |
+| 8 | 137 | MULTIMODE_RCV_PROG_CHANGE | 0 | 1 | — |
+| 9 | 138 | ROM ID | ? | ? | — |
+
+Reading or setting one requires `MULTIMODE_CHANNEL_SELECT` first, and that is
+id **129**, min 0, max 15 (spec p. 41). Two things about it, both documented and
+both awkward:
+
+- **129's documented range does not reach the machine's channels.** The unit
+  takes 01A–16A and 01B–16B, "32 channels can be used simultaneously"
+  (OM p. 30, p. 34; "01A-16A, 01B-16B" OM p. 26; "channel 16B: On" OM p. 45;
+  "a total of 32 MIDI channels" OM p. 80). The selector's 0–15 covers the first
+  port only, so the upper sixteen channels are not addressable by the documented
+  selector at all.
+- It is **stateful**, which is what §8 already warned about: a value read
+  without setting the channel belongs to whichever channel was selected last.
+
+**Eight of the nine ranges are transcribed exactly where p2ked has them.**
+`CHANNEL_PARAMETERS` in `p2k/messages.py` carries 0–895, 0–127, 0–127, -1–2,
+-2–1, 0–1, 0–6, 0–1 and 0–127. The first eight are spec p. 41 verbatim. The
+ninth is not: id 138's range is printed `min = ?; max = ?` (spec p. 41), so
+0–127 is the code's inference. It is a reasonable one — a Bank Select MSB is
+seven bits (§2, §3) and every SIMM ID a unit has reported is 0–127 (§7) — but it
+is an inference, and it sits in a table that otherwise looks transcribed.
+
+**And the ninth value's documented range is stale by 129.** id 130 tops out at
+895 (spec p. 41); Composer holds 1024 presets (§11), so the top 129 of them
+cannot be named by a per-channel preset number inside the documented range.
+Nothing has written one, so whether the unit clips or accepts is unknown — but
+the specification does say what happens to an out-of-range value: "Values
+recieved that are outside the min/max range will be clipped to within that
+range" (spec p. 41). If the spec is right the write is silently truncated,
+which is a worse failure than a refusal.
+
+**Two of the nine have the thinnest documentation, and it is worth knowing
+which.** The operation manual's list of what a Multimode Map carries, per
+channel, is: "Preset, Volume, & Pan", "Mix Output", "Multimode Channel Enable",
+"Multimode Bank Map", "Multimode Receive Program Change" (OM p. 51). That is
+seven of the nine. Missing are **MULTIMODE_ARP** (134) and **Preset ROM ID**
+(138). The specification's dump prose (spec p. 27) names seven too, and a
+*different* seven: it includes "Multimode Preset ROM ID" and puts ARP and
+BANK_MAP where it writes `(reserved)`.
+
+So the two *lists of the dump's contents* — the specification's prose and the
+operation manual's transmit screen — name eight of the nine between them, and
+their union is everything except ARP. The specification's parameter-ID table
+(spec p. 41) names all nine, which is where p2ked's order comes from. The unit's
+header says nine parameters per channel (§8), and all nine are present. **The
+disagreement is about naming, not about layout** — the two `(reserved)` slots in
+the spec's prose sit exactly where the parameter-ID list puts ARP (5th) and
+BANK_MAP (7th), which is the same reading §8 confirmed from the unit's values.
+What nobody has published is what ARP means on the wire beyond the four values
+above, or what BANK_MAP maps between.
+
+### The master blocks, and their counts
+
+The dump's own header declares its layout and the specification's example spells
+out what each declared count means (spec p. 28). Transcribed, with the byte
+width the same example allots each block:
+
+| field | spec p. 28's words | value given | bytes allotted |
+|---|---|---:|---:|
+| aa | Number of Master General Parameters | 11 | 22 (Master General) |
+| bb | Number of Master MIDI Parameters | 22 | 44 (Master MIDI) |
+| cc | Number of Master Effects Parameters | 16 | 32 (Master Effects) |
+| dd | Number of Reserved Parameters | 0 | 40 (Reserved) |
+| xx | Number of Non Channel Parameters | — | 6 |
+| yy | Number of MIDI Channels | — | 576, with zz |
+| zz | Number of Parameters per Channel | — | 576, with yy |
+
+then a 16-byte ASCII setup name, then the blocks in that order. Three of the
+seven counts are left blank in the example and have to be derived: 6 bytes at two
+bytes per value is 3 non-channel parameters, and 576 bytes is 32 channels × 9
+parameters. Both derivations agree with the prose list just above the example —
+"(\*Parameters for each of 32 MIDI channels\*)" followed by nine entries
+(spec p. 27).
+
+**The example contradicts itself in two places, and §8 has already said the
+first of them.** It declares 0 reserved parameters and then allots them 40 data
+bytes — twenty values' worth. Its declared counts sum to 52; its own byte widths
+imply 72. And the published counts give the header arithmetic §10 performs the
+wrong answer entirely:
+
+    30 + 2 x (11 + 22 + 16 + 0 + 3) = 134      <- the published counts
+    30 + 2 x (20 + 22 + 16 + 21 + 3) = 194     <- what the unit declares (§10)
+
+134 is nowhere in the dump. §8's search for the one offset at which all 288
+channel values fall in range found exactly one, at 194.
+
+**The published example totals 750 payload bytes; the unit sends 970 (§8).** The
+220-byte difference is fully accounted for:
+
+| | spec p. 28 | unit (§10) | difference |
+|---|---:|---:|---:|
+| master general | 22 B (11) | 40 B (20) | +18 B (+9 values) |
+| master MIDI | 44 B (22) | 44 B (22) | 0 |
+| master effects | 32 B (16) | 32 B (16) | 0 |
+| reserved | 40 B (0 declared) | 42 B (21) | +2 B (+1 value) |
+| non-channel | 6 B (3) | 6 B (3) | 0 |
+| channels | 576 B | 576 B | 0 |
+| the two trailing sub-blocks | not mentioned | 100 + 100 B | +200 B |
+| **total** | **750 B** | **970 B** | **+220 B** |
+
+18 + 2 + 200 = 220. Nothing is left over.
+
+**Where the specification's prose and its example disagree about the "reserved"
+block, the prose is right, and §10 says so from the unit.** The prose list of the
+dump's contents puts the word "Arpeggiator" at exactly the position the example
+calls reserved (spec p. 27) — between the master effects and the three
+non-channel parameters, under the heading "(\*Independant of MIDI Channel\*)".
+§10 read the 42 bytes there as 21 individually-verified arpeggiator parameters,
+IDs 641–661. Note also that the specification's own section heading for the
+message is "Setup Dump" (spec p. 26), the frame's command line calls it
+"Command::Multimode Map Dump" (spec p. 28), and the operation manual calls the
+same transmission "Multimode Map" (OM p. 51). Three documented names for one
+message; `Command.SETUP_DUMP` is the section heading.
+
+**The reserved-omission rule is derivable from the specification's own parameter
+tables, and it predicts all five counts.** §10 found the rule on the unit: the
+IDs the specification marks "(reserved)" are simply not sent. Run it forward,
+from the document alone, and it gives every count the unit reports:
+
+| block | ID span in the spec's parameter list | leading `(RESERVED)` | other `(reserved)` | span minus those | unit reports (§10) |
+|---|---|---:|---|---:|---:|
+| master general | 256–279 (spec pp. 43–46, 52) | 256 | 261, 262, 263 | 20 | 20 |
+| master MIDI | 384–409 (spec pp. 47–48) | 384 | 387, 389, 390 | 22 | 22 |
+| master effects | 512–528 (spec p. 49) | 512 | — | 16 | 16 |
+| master arpeggiator | 640–661 (spec pp. 49–50) | 640 | — | 21 | 21 |
+| non-channel | 139–141 (spec p. 42) | — | — | 3 | 3 |
+
+Five for five, from a rule the document never states in as many words. That is
+the licence §10 already relies on, arrived at from the other side.
+
+Two extents are *not* derivable and should not be pretended to be:
+
+- The general block's span is 256–279 because the spec's Master Parameters
+  section runs 256–269 (spec pp. 43–46) and the BEATS "normal single items"
+  271–278 sit in the same high-byte group (spec p. 52). That the block stops at
+  279 rather than running on into the spec's Local Controller Parameters at 280
+  (spec p. 46) is an inference — and 270 and 279 have no row in the
+  specification at all, which is §10's "three IDs with no published name" for
+  the general block.
+- The MIDI block's span is 384–409, but the spec's Master MIDI Parameters
+  section runs on to 422 (spec pp. 47–48). The unit does not send 410–422, and
+  the document gives no reason. §10 records that 410 is readable on the unit and
+  appears nowhere in the dump.
+
+**The general block is the one place where the parameter tables are broader than
+the dump's documented contents, and the unit sides with the tables.** The
+document's eleven general parameters (spec p. 26) map to IDs 257, 258, 259, 260,
+264, 265, 266, 267, 268, 269 (spec pp. 43–46) — ten of them — plus "Master Demo
+Mode Enable", which has a line in the prose list and no row in any ID table. The
+unit's twenty (§10) add 271–278, which the specification does document as
+parameters but not as part of the dump (spec p. 52). §10's hypothesis that 270
+or 279 is the unnamed "Master Demo Mode Enable" remains exactly that.
+
+### Copy Master Setup
+
+Command `2Ch` (spec p. 33). The frame, from the specification's own example
+(spec p. 34):
+
+    {F0h, 18h, 0Fh, dd, 55h, 2Ch, xx, xx, yy, yy, F7h}
+    xx, xx = Source Master Setup Number (-1 = Setup Edit Buffer) LSB first
+    yy, yy = Destination Master Setup (-1 = Setup Edit Buffer) LSB first
+
+"Either the Source or Destination MUST be the Setup Edit Buffer."
+"Copy destroys whatever Parameters existed in the Destination location."
+
+Three things follow, all of them documented:
+
+1. **There is no way to copy one stored setup over another.** One end must be
+   -1, the edit buffer, which is not a stored location.
+2. **The only way to make a stored setup current is to destroy the live one.**
+   Combined with "Only the current setup can be dumped. If other setups need to
+   be dumped, the "Copy Setup" command must be used first to make them
+   "current"" (spec p. 26), this is the whole of multisetup browsing: dump to
+   back up, copy N over the edit buffer, dump again, restore.
+3. **-1 is 14-bit two's complement, and the specification spells the encoding
+   out** (spec p. 79): "In the case of a 14-bit number this is equivalent to
+   adding 16384 to the original negative value", then `msb = value DIV 128`,
+   `lsb = value MOD 128`, transmitted lsb first. So -1 + 16384 = 16383 → lsb
+   7F, msb 7F, and the edit buffer is `7F 7F` on the wire.
+
+Worth noticing about p. 79 while transcribing it: the appendix computes the
+"msb" first and transmits it *second*. Its own worked example is parameter 257 →
+"2 in Hex = 02 = msb", "1 in Hex = 01 = lsb", "Parameter number would be
+transmitted as 01 02" (spec p. 79). The byte order therefore agrees with
+"Parameter ID (LSB first)" (spec p. 6) — but the formula's naming is exactly the
+trap §2 warns about, and the example is the thing to copy rather than the
+formula. The same page carries the one rule the wire format depends on and
+§2's decoder relies on: "Status Bit MUST be "0" in MIDI data bytes" (spec p. 79).
+
+**Nothing else about this command is documented.** There is no count byte in the
+example, no checksum byte, and no reply. The handshaking commands — ACK `7Fh`,
+NAK `7Eh`, CANCEL `7Dh`, WAIT `7Ch`, EOF `7Bh` (spec pp. 31–32) — are introduced
+under "Dump Handshaking Messages" and belong to the multi-packet preset dumps,
+not to a five-byte copy. And §2's point stands: the checksum is "1 Byte XOR(1's
+complement) of the sum of the DATA bytes in the message. \*Only used in certain
+messages. A checksum value of 7Fh means 'ignore checksum'" (spec p. 5) —
+"certain" is doing a lot of work, and the copy examples carry none. A p2ked that
+sends this has no documented way to learn whether it worked, which is one more
+reason the read-back in `masteredit.py` is the right shape.
+
+**How many setups there are: the E-MU documents agree and the parameter tree
+does not.** "There are 128 setups numbered 0-127" (OM p. 31); "Proteus 2000
+contains 128 Multisetup locations. These are all User locations which you can
+use to store your own Multisetups" (OM p. 32). The parameter tree's
+`RESTORE MULTISETUP` reads "0-63 or 0-127 (user programmable)" (paramtree,
+MULTI BUTTON 3). The tree is hedging; the operation manual is not, twice.
+p2ked's 0–127 is the documented one.
+
+**Restoring a setup over MIDI** is `cc00 = 80, cc32 = 00` then a Program Change
+(OM p. 31, p. 32) — and restoring *loads* it, replacing the live channel
+configuration, which §9 already established is what makes browsing by name
+destructive.
+
+**What a setup holds, and the two documents differ by one item.** The operation
+manual: "Preset/Volume/Pan assignments for each of the 32 MIDI channels", the
+"Multisetup Name", and "ALL MASTER MENU PARAMETERS except…" the "MIDI Program
+Change->Preset map" and the "User Key Tuning Tables" (OM p. 31). The
+specification: "all settings selected by the Master Menu and settings made on the
+Preset Select screen, with the exception of the program/preset map and tuning
+tables (these can be dumped seperately)" (spec p. 26). The master menu's own
+transmit screen names a third exception the specification does not: "Current
+Multisetup — Transmits all parameters in the Master menu except Tuning Tables,
+Program/Preset Map and Viewing Angle" (OM p. 51). The unit agrees with the
+operation manual there: the general block contains nothing below id 257, so
+`LCD_VIEW_ANGLE` (id 1, spec p. 41) is not in the dump (§10).
+
+### Parameter Value Edit
+
+Command `01h`. The frame, byte by byte, from the specification's own example
+(spec p. 6):
+
+    {F0h, 18h, 0Fh, dd, 55h, 01h, 02h, <xx, xx, yy, yy>, F7h}
+       01h = Command::Parameter Value Edit
+       02h = Byte count (number of Byte pairs)
+       xx, xx = Parameter ID (LSB first)
+       yy, yy = Parameter Data
+
+"This command is used to change the value of one or more parameters." The count
+is a count of *pairs*, not bytes: the example's single edit is count `02h` — one
+pair for the ID, one for the value — and the count byte itself is not counted.
+`p2k/messages.parameter_edit` sends `[0x02, id_lsb, id_msb, value_lsb,
+value_msb]`, which is that frame exactly. Multi-parameter edits are one
+`<xx, xx, yy, yy>` group per parameter, back to back (spec p. 6).
+
+**The documented size limits.** "Please try to avoid sending messages with more
+than 244 Data Bytes, or 41 Parameter Edits" (spec p. 6). The matching request
+(`02h`) allows "more than 246 Data Bytes, or 123 Parameter IDs" (spec p. 6) —
+note the request's higher allowance, and note that both are phrased as advice
+rather than as a hard limit. 244 bytes is 122 pairs, so the 41-edit figure is
+the binding one.
+
+**Request and edit are the same message in opposite directions.** "The response
+is a complete Parameter Value Edit SYSEX message for each parameter" (spec p. 6).
+One frame format, one parser, and a value read by ID has no address to get
+wrong. That is §9's whole point about `MIDI_MODE`, and it is why the write path
+can be read back with the same command it sent.
+
+**Three documented behaviours the edit screen has to respect:**
+
+- **Out-of-range values are clipped, not refused.** "Values recieved that are
+  outside the min/max range will be clipped to within that range" (spec p. 41).
+  A client-side range check is therefore not a convenience; it is the only thing
+  standing between a typo and a silently different value.
+- **ROM data cannot be written.** "Preset information for ROM Presets may be
+  requested, but cannot be changed. Any message trying to change ROM data will be
+  ignored" (spec p. 41). Master parameters are not preset data, so this does not
+  block the edit path, but it is the sentence that explains the asymmetry — and
+  the reason a write's failure mode is silence.
+- **There is a documented way to ask a parameter's range before writing it.**
+  `Parameter Min/Max /Default Value` (`03h`) carries the minimum, maximum,
+  default, and a trailing byte that is "Read Only (0 = Read/Write, 1 = Read
+  Only, values above 1 reserved)", and it is the reply to `04h` (spec p. 7).
+  Nothing in p2ked sends `04h`, and it is the obvious read-only companion to
+  `probe_channel_ids`: an ID that does not exist should not answer, and one that
+  is read-only should say so rather than accept the write and then be ignored.
+
+**The documented error route does not work on this unit.** `Error Message`
+(`70h`) is specified with `xx, xx` = "Command that failed to execute" and
+`yy, yy` = "Sub-Command that failed to execute (if relevant, otherwise 0), or
+Parameter ID that failed to Request or Update(invalid ID)" (spec p. 40). On the
+strength of that, a bad parameter ID should come back named. §7 found the unit
+ignores a request it cannot serve instead. So `probe_channel_ids` must treat
+silence as ambiguous — a bad ID or a slow unit — and cannot lean on a documented
+reply to tell the two apart.
+
+**Pacing is a documented parameter, not a constant.** `MIDI_SYSEX_DELAY`
+(id 405) is "min = 0; max = 8000 (milliseconds)" and is described as "Delay
+between SysEx messages in multi-message dumps" (spec p. 47); the operation
+manual's screen for it ranges "from 0 through 8000 milliseconds" and warns that
+a value of zero "allows full speed MIDI transfer" (OM p. 51), and the parameter
+tree agrees at "0-8000 milliseconds" (paramtree, MASTER BUTTON 29). A 970-byte
+setup dump sent back, or forty-one parameter edits in one message, is exactly
+what it is for — so the delay belongs on the wire-side of the edit gate rather
+than in a sender constant.
+
+### What is transcribed, and what the code has inferred
+
+`p2ked/masteredit.py`'s docstring says its ranges are "transcribed from the
+operator's manual's parameter tree (version 2.26) and the Master menu pages it
+documents", and that "where the two disagree the manual's parameter tree wins,
+because it is E-MU's own summary of what the unit stores". The first half is true
+of most of the table. The second half is wrong on its own terms: the parameter
+tree is not an E-MU document (paramtree, line 3), so it cannot be E-MU's own
+summary, and where it disagrees with E-MU's own two documents it is a third-party
+reading. The table itself, against all three documents:
+
+| parameter | spec | OM | paramtree | p2ked |
+|---|---|---|---|---|
+| MIDI mode | 0–2, 0 = omni 1 = poly 2 = multi (p. 47) | Omni/Poly/Multi (p. 44) | omni, poly or multi (13) | 0–2 |
+| MIDI mode change | 0–1 (p. 47) | accepted or ignored (p. 44) | ignored or accepted (13) | 0–1 |
+| multimode basic channel | 0–15 (p. 42) | 01A–16A, 01B–16B (p. 26) | — | 0–32 |
+| FX control channel | -1–15, -1 = Master FX, 0–15 = Channels 1–16 (p. 42) | "use master settings" for all 32 channels, or "preset on channel 1A" (p. 40) | 1-16A or 1-16B (6) | 0–32 |
+| tempo control channel | 0–15, 0–15 = Channels 1–16 (p. 42) | Tempo Controller# / CHAN, 16A (p. 48) | 1-16A or 1-16B (22) | 0–32 |
+| transpose | -12 to +12, with the note-name table (p. 44) | "± 24 semitones" (p. 36) | +/- 24 (1) | -24 to +24 |
+| fine tune | -63 to +63 (p. 44) | "± 1 semitone in 1/64th semitone increments" (p. 36) | +/- 63 (1) | -63 to 63 |
+| bend range | 0–12 (p. 44) | "±12 semitones or one octave in each direction" (p. 36) | +/- 12 semitones (2) | 0–12 |
+| clock tempo | 0–500, 0 = external, 1–500 = bpm (p. 43) | "1 through 300 beats per minute" or "use MIDI clock" (p. 54) | use MIDI or 1-300 bpm (33) | 0–300 |
+| FX bypass | 0–1 (p. 43) | bypassed or enabled (p. 40) | bypassed or enabled (5) | 0–1 |
+| sysEx device ID | 0–126 (p. 47) | 000 (p. 44) | 0-126 (14) | 0–126 |
+
+Six of the eleven match the specification's own min/max exactly — MIDI mode
+0–2, MIDI mode change 0–1, fine tune -63 to 63, bend range 0–12, FX bypass 0–1
+and the SysEx device ID 0–126 — and the parameter tree agrees with all six
+(paramtree, MASTER BUTTON 13, 1, 2, 5, 14). The other five are where the
+documents part company, and the disagreements are worth writing down because two
+of them can silently truncate a write:
+
+- **transpose.** The specification says -12 to +12 and prints the whole
+  note-name table to prove it (spec p. 44); the operation manual says
+  "± 24 semitones" (OM p. 36) and the parameter tree agrees (paramtree,
+  MASTER BUTTON 1). p2ked uses ± 24. If the specification is the correct one, a
+  transpose of +24 arrives as +12 (spec p. 41's clipping rule) — a write that
+  looks like it worked. That is worth one cheap check on a unit: read id 259,
+  write +24, read it back.
+- **clock tempo.** The specification says 0–500 (spec p. 43); the operation
+  manual and the parameter tree both say 1–300 (OM p. 54; paramtree, MASTER
+  BUTTON 33). p2ked uses 300, siding with the two documents that agree with each
+  other. The specification's 500 is the outlier here, as it was for the dump
+  layout.
+- **the three channel parameters.** The specification gives all three 0–15
+  (spec p. 42); the operation manual documents 32 channels for all three
+  (OM p. 26, p. 40, p. 48). p2ked gives 0–32, which matches neither. Given that
+  basic channel 8 is the unit's channel 9 (§9), the wire numbering is 0-based and
+  32 channels is 0–31, so the top value is off by one — and 32 is a number no
+  document offers.
+- **FX bypass's two labels.** Neither E-MU document says which number is which:
+  the specification gives only min 0 max 1 (spec p. 43) and the operation manual
+  shows a screen reading "enabled" (OM p. 40). The parameter tree lists
+  "bypassed or enabled" (paramtree, MASTER BUTTON 5), and by that file's own
+  convention — "13. MIDI MODE / omni, poly or multi" maps to 0, 1, 2 in order —
+  0 is bypassed. p2ked's choices tuple reads `("on", "bypassed")`, i.e. 0 is on.
+  That is the opposite of the only document that lists them in order, and it is
+  an unforced guess in a table that looks transcribed.
+
+**And one more that is not in the table at all.** `LCD_VIEW_ANGLE` is id 1,
+"min = -7; max = +8" (spec p. 41); the operation manual says the angle "is
+adjustable from +7 to -8" (OM p. 54) and the parameter tree says "-8 to +7"
+(paramtree, MASTER BUTTON 34). The two disagree about which end owns the extra
+step. Nothing is at stake — it is not in the dump and p2ked does not write it —
+but it is the same shape as the transpose disagreement and it is why a range
+should never be taken from one document alone.
+
+What §12 does **not** settle, and says so:
+
+- The nine per-channel parameter IDs' *names* beyond spec p. 41's table. ARP and
+  BANK_MAP have no front-panel screen in the operation manual and no entry in
+  the parameter tree, and the specification offers no explanation of either.
+- Whether any of the documented ranges is what this firmware enforces. Every
+  disagreement above is between documents; the unit has not been asked. That is
+  the hardware session's job, and it is the difference between a transcription
+  and a fact.
