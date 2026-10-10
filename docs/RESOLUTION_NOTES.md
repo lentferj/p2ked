@@ -1387,3 +1387,48 @@ What §12 does **not** settle, and says so:
   disagreement above is between documents; the unit has not been asked. That is
   the hardware session's job, and it is the difference between a transcription
   and a fact.
+
+### The dump is a writable message too
+
+**2026-10-10.** p2ked has read a Setup Dump since §8 and has never written one.
+`encode_setup_dump(dump, *, device)` in `p2k/messages.py` is now the inverse of
+`parse_setup_dump`, byte for byte, and it exists for one reason: the next
+feature is a per-channel edit, and the dump is the only route to a per-channel
+value that no document numbers. Two things are worth writing down before anyone
+sends one, and the first is what the specification actually licenses.
+
+**The sentence that licenses it.** "The generic dump replaces the setup dump
+(command 1Ch) as the new dump format sent by the command stations" ... "The
+command stations still receive and understand the old setup dump and will
+transmit one if explicitly requested to do so via sysex" (spec p. 29, under
+"Generic Dump Request"). Read plainly: a command station *sends* `61h` now and
+*receives* `1Ch` still. That is the whole authority for the encoder — a receive
+path is documented, in the one document that describes the message, and nothing
+more. The frame to send is the specification's own example,
+`{F0h, 18h, 0Fh, dd, 55h, 1Ch, aa, aa, ... F7h}` (spec p. 28), which carries no
+checksum byte anywhere in it.
+
+**Caveat one: an incoming dump replaces the whole setup.** What a Setup Dump
+covers is "all settings selected by the Master Menu and settings made on the
+Preset Select screen, with the exception of the program/preset map and tuning
+tables" (spec p. 26). So there is no such thing as sending one field: a
+per-channel edit is a whole-setup write whose other bytes are the ones the unit
+sent a moment ago. That is stronger than it sounds — the round trip is
+byte-for-byte, so an edit moves the two bytes of the edited field and nothing
+else (`TestSetupDumpEncoder.test_an_edit_changes_only_the_bytes_it_should`,
+tests/test_messages.py) — and weaker than it sounds: the write carries the
+setup *as p2ked decoded it*, and a dump p2ked could not fully decode is refused
+rather than written back with 0 in the gaps. The two things a dump does not
+carry, the program/preset map and the tuning tables, are untouched either way.
+
+**Caveat two: no unit has received one from p2ked.** Every other claim in this
+section is a transcription from a document. This one is a documented receive
+path p2ked has never exercised, in a project whose documented error route does
+not work on this unit (§7): a message the unit cannot serve is ignored rather
+than refused, so the failure mode is silence and the only verification is the
+unit's own answer. `make test-hardware` should therefore send back an
+*unmodified* dump — the one `read_setup` just returned, re-encoded and nothing
+else — and compare it with what came in. That is the first verification, and it
+is the least that can be written and still exercise the path: it replaces the
+live setup with a copy of itself. Until it has happened, `encode_setup_dump` is
+a builder nothing has called on a cable.

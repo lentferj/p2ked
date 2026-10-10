@@ -27,6 +27,7 @@ not enforced, a sign that is lost.
 import pytest
 
 from p2k import messages as m
+from p2ked.demo import DemoDevice
 
 
 class TestFourteenBit:
@@ -443,3 +444,457 @@ class TestSetupDumpLayout:
         assert dump.trailing == ()
         assert dump.undecoded == ()
         assert len(dump.master) == sum(len(ids) for _label, ids in m.MASTER_BLOCKS)
+
+
+class TestSetupDumpEncoder:
+    """Writing a setup back, and the round trip that proves it can be.
+
+    **What the round trip establishes is self-consistency, not
+    correctness**, like every other test in this file. What it does
+    establish is narrow and still worth having: a parser and an encoder
+    that agree with each other, and a re-encode that produces the
+    identical bytes. That is what the next feature rests on -- read a
+    dump, change one per-channel value, write the whole setup back -- and
+    a dump that came back one value different would be a setup silently
+    corrupted by an edit, with nothing on the cable to say so.
+
+    Nothing here has been near a unit. An incoming Setup Dump is a
+    documented receive path -- "The command stations still receive and
+    understand the old setup dump and will transmit one if explicitly
+    requested to do so via sysex" (spec p. 29) -- and p2ked has never sent
+    one. docs/RESOLUTION_NOTES.md §12 records both that and the two
+    caveats that follow from it.
+    """
+
+    #: Neither 0 nor the broadcast ID, so a message that forgot to address
+    #: itself does not pass by luck.
+    DEVICE = 0x0B
+
+    #: Invented master values, and deliberately not all zero: a flat
+    #: payload leaves the parser's structural search with nothing to
+    #: discriminate between offsets, and it rightly refuses such a dump.
+    #: The negative ones do most of the discriminating -- a negative value
+    #: is out of range for eight of the nine per-channel parameters, so
+    #: the master region cannot masquerade as a channel block. It is also
+    #: what a unit somebody has played looks like: a transpose, a fine
+    #: tune and two BEATS channels, all off centre.
+    FILLER = {
+        139: 8,
+        140: 8,
+        257: 120,
+        259: -24,
+        260: -63,
+        264: 2,
+        272: -1,
+        273: -1,
+        385: 2,
+        513: 1,
+        520: 1,
+    }
+
+    #: The two self-describing sub-blocks a real dump ends with, carrying
+    #: the values the unit reports: ascending trigger keys with latch off,
+    #: then parts using the trigger velocity, no transpose, in groups of
+    #: four. ``row_values`` may be a callable of the row number.
+    BEATS = ((24, 2, (36, 0)), (16, 3, lambda part: (-1, 0, part // 4 + 1)))
+
+    #: The same two blocks with the parts carrying nothing but zeros: an
+    #: untouched BEATS part. Only the keys have to stay real, and that is
+    #: the parser's doing rather than this test's -- a trailing region
+    #: that is entirely in range makes the channel block ambiguous, so
+    #: the parser refuses the dump rather than picking an offset. See
+    #: test_a_trailing_region_entirely_in_range_is_not_locatable.
+    QUIET_BEATS = ((24, 2, (36, 0)), (16, 3, (0, 0, 1)))
+
+    #: A shape p2ked does not recognise. It is decoded, reported as
+    #: unidentified, and has to come back exactly as it went.
+    UNIDENTIFIED = ((3, 2, (5, 0)),)
+
+    # --- building dumps -----------------------------------------------------
+
+    def _master(self, **overrides):
+        """All 82 master values, with a few invented ones on top."""
+        values = {pid: 0 for _label, ids in m.MASTER_BLOCKS for pid in ids}
+        values.update(self.FILLER)
+        values.update(overrides)
+        return values
+
+    def _dump(
+        self,
+        *,
+        name="Invented Setup",
+        channels=32,
+        channel_values=None,
+        master=None,
+        trailing=BEATS,
+    ):
+        """A whole setup, built the way the demo builds one, then parsed.
+
+        Parsed rather than assembled by hand on purpose: a dump that has
+        been through the parser carries the real ``offset``,
+        ``header_counts`` and ``undecoded``, so the round-trip comparison
+        is against everything the object holds and not only the parts the
+        encoder happens to write.
+        """
+        values = self._master()
+        values.update(master or {})
+        data = []
+        counts = tuple(len(ids) for _label, ids in m.MASTER_BLOCKS)
+        for count in counts + (channels, len(m.CHANNEL_PARAMETERS)):
+            data.extend(m.pack14(count))
+        data.extend(m.encode_name(name))
+        for _label, ids in m.MASTER_BLOCKS:
+            for parameter_id in ids:
+                data.extend(m.pack14_signed(values[parameter_id]))
+        # The preset spread covers the whole documented range and passes
+        # 127 early, which is what keeps the parser from finding a second
+        # offset for the channel block -- see TestSetupDumpLayout.
+        step = 895 // max(1, channels - 1)
+        for channel in range(channels):
+            fields = {
+                "preset": channel * step,
+                "volume": 127,
+                "pan": 64,
+                "mix_output": 1,
+                "arp": 0,
+                "enable": 1,
+                "bank_map": 0,
+                "receive_program_change": 1,
+                "rom_id": 0,
+            }
+            fields.update((channel_values or {}).get(channel, {}))
+            for field, _low, _high in m.CHANNEL_PARAMETERS:
+                data.extend(m.pack14_signed(fields[field]))
+        data.extend(self._trailing_bytes(trailing))
+        return m.parse_setup_dump(m.parse(m.frame(m.Command.SETUP_DUMP, data)))
+
+    @staticmethod
+    def _trailing_bytes(blocks):
+        data = []
+        for rows, width, row_values in blocks:
+            data.extend(m.pack14(rows))
+            data.extend(m.pack14(width))
+            for row in range(rows):
+                values = row_values(row) if callable(row_values) else row_values
+                for value in values:
+                    data.extend(m.pack14_signed(value))
+        return data
+
+    # --- the round trip -----------------------------------------------------
+
+    def _round_trip(self, dump, device=None):
+        """Encode a dump, parse it back, and assert it survived.
+
+        Both directions are checked. The parsed copy describes the same
+        setup, field for field; and encoding *that* copy produces the
+        identical bytes again. The second is the stronger claim, and the
+        one an editor relies on when it changes one value and writes the
+        whole setup back.
+        """
+        device = self.DEVICE if device is None else device
+        wire = m.encode_setup_dump(dump, device=device)
+        again = m.parse_setup_dump(m.parse(wire))
+        assert m.encode_setup_dump(again, device=device) == wire
+        self._assert_same_dump(dump, again)
+        return wire
+
+    def _assert_same_dump(self, dump, again):
+        """Every field, including the ones the parser derived from the wire.
+
+        ``offset`` and ``payload_size`` are in here because they are
+        derived from the layout: an encoder that moved the channel block
+        by one byte would leave every value intact and both of these
+        different, which is the shape of a corruption no range check
+        catches.
+        """
+        assert again.name == dump.name
+        assert again.channel_count == dump.channel_count
+        assert again.parameters_per_channel == dump.parameters_per_channel
+        assert again.header_counts == dump.header_counts
+        assert again.offset == dump.offset
+        assert again.payload_size == dump.payload_size
+        assert again.master == dump.master
+        assert again.undecoded == dump.undecoded
+        assert len(again.channels) == len(dump.channels)
+        for channel, kept in zip(dump.channels, again.channels):
+            assert kept.channel == channel.channel
+            for field, _low, _high in m.CHANNEL_PARAMETERS:
+                assert getattr(kept, field) == getattr(channel, field)
+        assert len(again.trailing) == len(dump.trailing)
+        for block, kept in zip(dump.trailing, again.trailing):
+            assert kept.label == block.label
+            assert kept.offset == block.offset
+            assert kept.rows == block.rows
+            assert kept.parameter_ids == block.parameter_ids
+
+    def test_an_unmodified_dump_round_trips(self):
+        self._round_trip(self._dump())
+
+    def test_the_demo_devices_own_dump_round_trips(self):
+        """The fake's frame, reproduced from the dump it built.
+
+        The demo's ``_setup_reply`` and this encoder are two
+        implementations of one layout -- which is why the byte-for-byte
+        agreement is a consistency check and not evidence about the unit.
+        """
+        demo = DemoDevice()
+        dump = demo.read_setup()
+        wire = self._round_trip(dump, device=demo.device_id)
+        assert wire == demo._setup_reply()
+
+    # --- the frame ----------------------------------------------------------
+
+    def test_the_frame_is_the_specifications_shape(self):
+        """``{F0h, 18h, 0Fh, dd, 55h, 1Ch, ...}``, and no checksum byte.
+
+        The example for command ``1Ch`` (spec p. 28) ends in ``F7h`` with
+        no checksum, so the payload is exactly the dump's bytes -- and a
+        checksum byte appended here would be read back as data.
+        """
+        wire = self._round_trip(self._dump())
+        assert wire[:6] == bytes([0xF0, 0x18, 0x0F, self.DEVICE, 0x55, 0x1C])
+        assert wire[-1] == 0xF7
+        payload = wire[6:-1]
+        assert all(byte <= 0x7F for byte in payload)
+
+        counts = [len(ids) for _label, ids in m.MASTER_BLOCKS]
+        declared = [m.unpack14(payload[i], payload[i + 1]) for i in range(0, 10, 2)]
+        assert declared == counts
+        assert m.unpack14(payload[10], payload[11]) == 32
+        assert m.unpack14(payload[12], payload[13]) == len(m.CHANNEL_PARAMETERS)
+        assert m.decode_name(payload[14 : 14 + m.NAME_LEN]) == "Invented Setup"
+
+        master_bytes = 2 * sum(counts)
+        channel_bytes = 2 * 32 * len(m.CHANNEL_PARAMETERS)
+        trailing_bytes = len(self._trailing_bytes(self.BEATS))
+        # The header's own arithmetic lands on the channel block, which is
+        # what makes the master values' positions legitimate at all.
+        assert m.parse_setup_dump(m.parse(wire)).offset == 30 + master_bytes
+        assert len(payload) == 30 + master_bytes + channel_bytes + trailing_bytes
+        assert trailing_bytes == 200  # the two BEATS sub-blocks, as §10 found them
+
+    def test_the_device_id_is_the_one_asked_for(self):
+        wire = m.encode_setup_dump(self._dump(), device=0x42)
+        assert m.parse(wire).device == 0x42
+
+    def test_a_device_id_out_of_range_is_refused_not_masked(self):
+        for value in (-1, 0x80, 200):
+            with pytest.raises(m.ProtocolError):
+                m.encode_setup_dump(self._dump(), device=value)
+
+    # --- the edges ----------------------------------------------------------
+
+    def test_a_channel_value_at_each_range_extreme_round_trips(self):
+        """Every low and every high, not a sample of them.
+
+        An extreme is where an encoder is tempted to clip, and a clipped
+        value is a setup that is nearly the one the unit just sent.
+        """
+        for field, low, high in m.CHANNEL_PARAMETERS:
+            for value in (low, high):
+                dump = self._dump(channel_values={3: {field: value}})
+                assert getattr(dump.channel(3), field) == value
+                self._round_trip(dump)
+
+    def test_a_name_shorter_than_name_len_round_trips(self):
+        for name in ("Hi", "", " " * 16, "N" * m.NAME_LEN):
+            dump = self._dump(name=name)
+            assert dump.name == name.rstrip()
+            wire = self._round_trip(dump)
+            payload = m.parse(wire).payload
+            assert payload[14 : 14 + m.NAME_LEN] == bytes(m.encode_name(name))
+
+    def test_negative_master_values_round_trip(self):
+        """Signed because the parser signed them.
+
+        Transpose and fine tune are negative on any unit somebody has
+        played, and -8192 is the widest value the encoding carries -- an
+        encoder that packed these unsigned would send 16383 back.
+        """
+        dump = self._dump(master={270: -8192})
+        assert dump.transpose == -24
+        assert dump.tune == -63
+        assert dump.master[270] == -8192
+        wire = self._round_trip(dump)
+        assert m.parse_setup_dump(m.parse(wire)).master[270] == -8192
+
+    def test_a_master_value_that_does_not_fit_is_refused(self):
+        """-8193 is not a 14-bit two's complement value. It is not sent."""
+        with pytest.raises(m.ProtocolError):
+            m.encode_setup_dump(self._dump(master={260: -8193}), device=self.DEVICE)
+
+    def test_the_beats_blocks_come_back(self):
+        dump = self._dump()
+        labels = [block.label for block in dump.trailing]
+        assert labels == ["BEATS triggers", "BEATS parts"]
+        self._round_trip(dump)
+
+    def test_the_beats_blocks_round_trip_when_the_parts_carry_nothing(self):
+        """A part nobody has touched reads as zeros, and is written as them."""
+        dump = self._dump(trailing=self.QUIET_BEATS)
+        parts = dump.trailing_block("BEATS parts")
+        assert parts.rows[0] == (0, 0, 1)
+        self._round_trip(dump)
+
+    def test_a_dump_with_no_trailing_blocks_round_trips(self):
+        dump = self._dump(trailing=())
+        assert dump.trailing == ()
+        wire = self._round_trip(dump)
+        payload = m.parse(wire).payload
+        master_bytes = 2 * sum(len(ids) for _label, ids in m.MASTER_BLOCKS)
+        expected = 30 + master_bytes + 2 * 32 * len(m.CHANNEL_PARAMETERS)
+        assert len(payload) == expected
+
+    def test_an_unidentified_trailing_block_round_trips(self):
+        """A shape p2ked cannot name is still written back unchanged.
+
+        Dropping it would be the one edit nobody asked for.
+        """
+        dump = self._dump(trailing=self.UNIDENTIFIED)
+        block = dump.trailing[0]
+        assert not block.identified
+        assert block.rows == ((5, 0), (5, 0), (5, 0))
+        self._round_trip(dump)
+
+    def test_a_trailing_region_entirely_in_range_is_not_locatable(self):
+        """Why the tests above cannot use an all-zero trailing region.
+
+        The parser finds the channel block by looking for the one offset
+        at which every value in range fits, and a block of zeros supplies
+        no value that rules an offset out -- so a dump whose trailing
+        region is entirely in range is *ambiguous* and is refused. That
+        refusal is the right answer, and it is also the answer before the
+        encoder is involved at all.
+        """
+        dump = self._dump(trailing=())
+        # Rebuild the same dump with an all-zero trailing region.
+        blocks = ((24, 2, (0, 0)), (16, 3, (0, 0, 0)))
+        payload = list(m.parse(m.encode_setup_dump(dump, device=self.DEVICE)).payload)
+        payload.extend(self._trailing_bytes(blocks))
+        with pytest.raises(m.ProtocolError) as refused:
+            m.parse_setup_dump(m.parse(m.frame(m.Command.SETUP_DUMP, payload)))
+        assert "ambiguous" in str(refused.value)
+
+    def test_fewer_channels_round_trip(self):
+        for channels in (16, 8):
+            dump = self._dump(channels=channels)
+            assert len(dump.channels) == channels
+            self._round_trip(dump)
+
+    # --- the thing this exists for ------------------------------------------
+
+    def test_an_edit_changes_only_the_bytes_it_should(self):
+        """One field edited, every other byte identical.
+
+        This is the per-channel edit the encoder was written for, and the
+        property that makes it safe: a whole setup is written back, but
+        the bytes that move are the two belonging to the edited field and
+        nothing else.
+        """
+        demo = DemoDevice()
+        dump = demo.read_setup()
+        assert dump.channel(5).volume == 0  # the demo's silent channel
+        before = m.encode_setup_dump(dump, device=demo.device_id)
+
+        dump.channel(5).volume = 100
+        after = m.encode_setup_dump(dump, device=demo.device_id)
+
+        old = list(m.parse(before).payload)
+        new = list(m.parse(after).payload)
+        assert len(new) == len(old)
+        changed = [index for index, (a, b) in enumerate(zip(new, old)) if a != b]
+
+        slot = [name for name, _low, _high in m.CHANNEL_PARAMETERS].index("volume")
+        start = dump.offset + (5 * dump.parameters_per_channel + slot) * 2
+        assert changed, "the edit moved no bytes at all"
+        assert all(start <= index < start + 2 for index in changed)
+        assert m.unpack14_signed(new[start], new[start + 1]) == 100
+
+        edited = m.parse_setup_dump(m.parse(after))
+        original = m.parse_setup_dump(m.parse(before))
+        assert edited.channel(5).volume == 100
+        for channel in edited.channels:
+            if channel.channel != 5:
+                kept = original.channel(channel.channel)
+                for field, _low, _high in m.CHANNEL_PARAMETERS:
+                    assert getattr(channel, field) == getattr(kept, field)
+        assert edited.master == original.master
+        assert edited.name == original.name
+        assert [b.rows for b in edited.trailing] == [b.rows for b in original.trailing]
+
+    # --- what it refuses ----------------------------------------------------
+
+    def test_a_setup_that_was_not_fully_decoded_is_refused(self):
+        """The bytes p2ked could not read cannot be written back.
+
+        They would be dropped, which is exactly the silent change this
+        module refuses everywhere else.
+        """
+        dump = self._dump()
+        dump.undecoded = ("2 bytes at 770 are not a self-describing block",)
+        with pytest.raises(m.ProtocolError) as refused:
+            m.encode_setup_dump(dump, device=self.DEVICE)
+        assert "not fully decoded" in str(refused.value)
+
+    def test_a_setup_missing_a_master_value_is_refused(self):
+        """Writing 0 in its place would be a change nobody made."""
+        dump = self._dump()
+        del dump.master[m.Parameter.MASTER_TRANSPOSE]
+        with pytest.raises(m.ProtocolError) as refused:
+            m.encode_setup_dump(dump, device=self.DEVICE)
+        assert "no value for master parameter" in str(refused.value)
+
+    def test_a_setup_declaring_other_block_counts_is_refused(self):
+        """A block carrying a different number of values shifts the rest."""
+        dump = self._dump()
+        counts = list(dump.header_counts)
+        counts[1] += 1
+        dump.header_counts = tuple(counts)
+        with pytest.raises(m.ProtocolError) as refused:
+            m.encode_setup_dump(dump, device=self.DEVICE)
+        assert "block counts" in str(refused.value)
+
+    def test_a_setup_whose_channels_do_not_match_its_header_is_refused(self):
+        dump = self._dump()
+        dump.channels = dump.channels[:-1]
+        with pytest.raises(m.ProtocolError) as refused:
+            m.encode_setup_dump(dump, device=self.DEVICE)
+        assert "declares" in str(refused.value)
+
+    def test_a_setup_with_an_unknowable_parameter_count_is_refused(self):
+        dump = self._dump()
+        dump.parameters_per_channel = 8
+        with pytest.raises(m.ProtocolError) as refused:
+            m.encode_setup_dump(dump, device=self.DEVICE)
+        assert "parameters per channel" in str(refused.value)
+
+    def test_a_trailing_block_with_no_rows_is_refused(self):
+        """Its width is not recoverable from nothing."""
+        dump = self._dump()
+        dump.trailing = dump.trailing + (m.TrailingBlock("nowhere", 0, [], ()),)
+        with pytest.raises(m.ProtocolError) as refused:
+            m.encode_setup_dump(dump, device=self.DEVICE)
+        assert "no rows" in str(refused.value)
+
+    def test_a_setup_with_an_impossible_channel_count_is_refused(self):
+        """Zero, and one more than the family has, are both refusals."""
+        dump = self._dump()
+        for count in (0, 65):
+            dump.channel_count = count
+            dump.channels = [m.ChannelState(number) for number in range(count)]
+            with pytest.raises(m.ProtocolError) as refused:
+                m.encode_setup_dump(dump, device=self.DEVICE)
+            assert "not a number this family has" in str(refused.value)
+
+    def test_a_trailing_block_whose_rows_disagree_is_refused(self):
+        """It cannot describe its own width, so it cannot be written."""
+        dump = self._dump()
+        dump.trailing = dump.trailing + (
+            m.TrailingBlock("crooked", 0, [(1, 0), (2, 0, 0)], ()),
+        )
+        with pytest.raises(m.ProtocolError) as refused:
+            m.encode_setup_dump(dump, device=self.DEVICE)
+        assert "differing widths" in str(refused.value)
+
+    def test_it_is_exported(self):
+        assert "encode_setup_dump" in m.__all__

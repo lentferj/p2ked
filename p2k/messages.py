@@ -28,6 +28,11 @@ good as one reading of one document -- the sibling rxved project shipped an
 ID conversion that was wrong for months because the failure mode was
 silence. DISCLAIMER.md says which is which.
 
+**The Setup Dump now has a writer too**, :func:`encode_setup_dump`, and no
+unit has received one. What the specification says about receiving a setup
+dump, and the two caveats that follow, are in docs/RESOLUTION_NOTES.md §12;
+the first verification is sending an unmodified one back and reading it again.
+
 Frame::
 
     F0 18 0F <dev> 55 <command> [<sub>] [data ...] [checksum] F7
@@ -78,6 +83,7 @@ __all__ = [
     "TrailingBlock",
     "setup_dump_request",
     "parse_setup_dump",
+    "encode_setup_dump",
     "SYSEX_END",
     "EMU_ID",
     "PROTEUS_ID",
@@ -1367,6 +1373,147 @@ def _parse_trailing_blocks(
                 f"the trailing blocks, too few to be one."
             )
     return tuple(blocks), tuple(notes)
+
+
+def encode_setup_dump(dump: SetupDump, *, device: int) -> bytes:
+    """Write a whole setup back. **This changes the instrument.**
+
+    The exact inverse of :func:`parse_setup_dump`, and byte-for-byte is the
+    only property worth having: a dump that comes back different from the
+    one that went in has had a value moved, and nothing on the cable would
+    say so. What is written is
+
+    * the seven header counts, in the order the parser reads them -- the
+      five block counts from bytes 0-9, then the channel count, then the
+      parameters per channel;
+    * the 16-byte setup name, through :func:`encode_name`;
+    * the master blocks in :data:`MASTER_BLOCKS` order, every value
+      :func:`pack14_signed`'d because the parser sign-extended it;
+    * the channel block in :data:`CHANNEL_PARAMETERS` order, likewise
+      signed;
+    * then the trailing sub-blocks, each declaring its own row count and
+      row width exactly as the parser read them.
+
+    The frame is the specification's own example for command ``1Ch``,
+    ``{F0h, 18h, 0Fh, dd, 55h, 1Ch, aa, aa, ... F7h}`` (spec p. 28), which
+    carries no checksum byte -- so this builder, like every other here,
+    hands the payload to :func:`frame` and invents nothing.
+
+    **It refuses a dump it cannot reproduce.** A setup whose bytes p2ked
+    could not fully decode, or whose per-channel values are not the nine it
+    knows, or whose header declares block counts that do not match
+    :data:`MASTER_BLOCKS`, is not written: the alternative is a plausible
+    number nobody chose, which is the failure mode this module is built to
+    refuse. What it does *not* check is the per-channel ranges -- the
+    parser's structural search has already enforced them by construction,
+    since it cannot find the channel block at all unless every value in it
+    is in range.
+
+    ``device`` is required, where every other builder here defaults it to
+    :data:`BROADCAST_DEVICE`: a message that replaces a whole setup should
+    not go to every unit on the cable because a caller forgot an argument.
+    """
+    if dump.undecoded:
+        raise ProtocolError(
+            "this setup was not fully decoded, so writing it back would "
+            "drop what p2ked could not read: " + "; ".join(dump.undecoded)
+        )
+    if len(dump.channels) != dump.channel_count:
+        raise ProtocolError(
+            f"this setup declares {dump.channel_count} MIDI channels and "
+            f"carries {len(dump.channels)}; its header would not describe "
+            f"the block that follows it."
+        )
+    if not 0 < dump.channel_count <= 64:
+        raise ProtocolError(
+            f"this setup has {dump.channel_count} MIDI channels, which is "
+            f"not a number this family has."
+        )
+    if dump.parameters_per_channel != len(CHANNEL_PARAMETERS):
+        raise ProtocolError(
+            f"this setup declares {dump.parameters_per_channel} parameters "
+            f"per channel; p2ked knows {len(CHANNEL_PARAMETERS)}. A field "
+            f"it cannot name is a field it cannot write back."
+        )
+
+    counts = tuple(len(ids) for _label, ids in MASTER_BLOCKS)
+    payload = _setup_dump_payload(dump, counts)
+    return frame(Command.SETUP_DUMP, payload, device=device)
+
+
+def _setup_dump_payload(dump: SetupDump, counts: Tuple[int, ...]) -> List[int]:
+    """The payload, laid out in the order :func:`parse_setup_dump` reads it."""
+    payload: List[int] = []
+    for count in counts + (dump.channel_count, dump.parameters_per_channel):
+        payload.extend(pack14(count))
+    payload.extend(encode_name(dump.name))
+    payload.extend(_encode_master_blocks(dump, counts))
+    for entry in dump.channels:
+        for field, _low, _high in CHANNEL_PARAMETERS:
+            payload.extend(pack14_signed(getattr(entry, field)))
+    payload.extend(_encode_trailing_blocks(dump))
+    return payload
+
+
+def _encode_master_blocks(dump: SetupDump, counts: Tuple[int, ...]) -> List[int]:
+    """The five blocks between the name and the channel block.
+
+    Positional, and therefore only writable when the dump's own header
+    declares the layout p2ked knows: a block carrying a different number of
+    values would put every value after it in the wrong block on the way
+    back, and the eightieth value would land on a parameter nobody edited.
+    """
+    if dump.header_counts and tuple(dump.header_counts) != counts:
+        raise ProtocolError(
+            f"this setup declares block counts {tuple(dump.header_counts)} "
+            f"and p2ked can only write {counts}. A block with a different "
+            f"number of values shifts every value after it."
+        )
+
+    payload: List[int] = []
+    missing: List[int] = []
+    for _label, ids in MASTER_BLOCKS:
+        for parameter_id in ids:
+            if parameter_id not in dump.master:
+                missing.append(parameter_id)
+    if missing:
+        raise ProtocolError(
+            f"this setup carries no value for master parameters {missing}; "
+            f"writing 0 in their place would be a change nobody made."
+        )
+    for _label, ids in MASTER_BLOCKS:
+        for parameter_id in ids:
+            payload.extend(pack14_signed(dump.master[parameter_id]))
+    return payload
+
+
+def _encode_trailing_blocks(dump: SetupDump) -> List[int]:
+    """Whatever follows the channel block, written as it describes itself.
+
+    The parser takes each sub-block's row count and row width from the
+    wire, so a block round-trips only if its rows still agree about their
+    own width -- and a block with no rows at all says nothing about it,
+    which is a refusal rather than a guess.
+    """
+    payload: List[int] = []
+    for block in dump.trailing:
+        if not block.rows:
+            raise ProtocolError(
+                f"the {block.label} block has no rows, so the width it was "
+                f"read at cannot be written back."
+            )
+        width = len(block.rows[0])
+        if any(len(row) != width for row in block.rows):
+            raise ProtocolError(
+                f"the {block.label} block has rows of differing widths, so "
+                f"its own description of itself cannot be written."
+            )
+        payload.extend(pack14(len(block.rows)))
+        payload.extend(pack14(width))
+        for row in block.rows:
+            for value in row:
+                payload.extend(pack14_signed(value))
+    return payload
 
 
 # --- parameters --------------------------------------------------------------
