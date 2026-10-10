@@ -200,10 +200,15 @@ bend range, clock tempo, FX bypass and the SysEx device ID. `enter` on a row
 offers that edit: a parameter with named values — the MIDI mode is omni /
 poly / multi — opens the picker and ⏎ picks; a plain range gets a prompt
 that names the range with it. `+` and `-` nudge the row under the cursor by
-one, clamped to the range, and go through the same gate as an edit. The
-value is checked before anything is sent, because a Proteus **clips** an
-out-of-range value rather than refusing it — a typo would otherwise land as
-a plausible, silent change.
+one, clamped to the range, and go through the same gate as an edit.
+
+`x` on the multi screen opens the **master FX** — the sixteen FX parameters
+the dump carries (513–528: the two algorithms, their decays, damping,
+feedback, LFO, delay and the eight sends). Same gate, same read-back, same
+undo, and the algorithms are *named* lists — 44 and 32 names — picked
+rather than typed. The value is checked before anything is sent, because a
+Proteus **clips** an out-of-range value rather than refusing it — a typo
+would otherwise land as a plausible, silent change.
 
 Everything here is behind a write gate, the family's editor shape rather
 than something this tool invented:
@@ -330,6 +335,7 @@ this one alone. `--config PATH` names a different file entirely.
 | `enter` | select this preset **on the unit** — it will sound |
 | `r` | read this bank's names from the unit — **silent** |
 | `m` | every MIDI channel: what it plays and why it might not — **silent** |
+| `x` | the master FX editor, from the multi screen |
 | `/` | search names |
 | `c` | set the MIDI channel selections go out on |
 | `f` | mark or unmark the preset under the cursor — **this writes the favourites database** |
