@@ -104,6 +104,22 @@ coverage: ## pytest with a term-missing report, enforcing fail_under
 	@# bare `pytest --cov` agree on it.
 	$(PYTEST) --cov=p2k --cov=p2ked --cov-report=term-missing -q
 
+# --- hardware ----------------------------------------------------------------
+
+# The hardware suite is a separate target, not part of `check`: CLAUDE.md's
+# rule is that only one session drives a unit at a time, and CI -- which
+# runs `make check` -- must not be it. `--hardware` and P2KED_HARDWARE=1 open
+# the ports; without them every test in the file skips with a reason.
+#
+# `-o addopts=""` because the ordinary addopts carry --cov with a fail_under
+# gate: a hardware-only run measures coverage over the handful of tests that
+# just ran and would fail by construction. `-rs -s` so the findings the
+# probe prints are actually seen -- a skip reason and a list of answered
+# parameter IDs are the output of this target.
+.PHONY: test-hardware
+test-hardware: ## tests that need a real Proteus 2000 (opens MIDI ports)
+	$(PYTEST) tests/test_hardware.py --hardware -o addopts="" -p no:cacheprovider -rs -s
+
 # ----------------------------------------------------------------- audit ---
 
 .PHONY: audit
