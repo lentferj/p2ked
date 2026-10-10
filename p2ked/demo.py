@@ -135,6 +135,22 @@ class DemoDevice:
         #: would never be reached.
         self._enabled = (5, 8, 9)
         self._closed = False
+        #: The fake's parameter memory: ``{parameter id: value}`` as it was
+        #: last set. It starts where :attr:`MASTER_VALUES` starts, so a
+        #: parameter read and the setup dump this same fake builds cannot
+        #: disagree about one unit -- and it is what an edit moves, which is
+        #: what makes a read-back after a write observable at all. Without
+        #: it a write would leave no trace and the editor's verify step
+        #: would have nothing to verify against.
+        self.parameters: Dict[int, int] = dict(self.MASTER_VALUES)
+        #: ``(parameter id, value)`` for every ``set_parameter``, in order,
+        #: so a test can assert what was sent without re-reading the wire.
+        self.set_log: List[Tuple[int, int]] = []
+        #: ``(source, destination)`` for every ``copy_master_setup``, in
+        #: order. The fake stores no 128 multisetups to copy between -- it
+        #: has no way to act on the copy -- so the call is recorded rather
+        #: than performed, which is the part a test can assert.
+        self.copy_log: List[Tuple[int, int]] = []
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -388,11 +404,67 @@ class DemoDevice:
         return m.identity_reply_fields(self._identity_reply())
 
     def read_parameter(self, parameter_id: int, *, timeout=None) -> int:
+        """One parameter's value. Read-only, makes no sound.
+
+        Same contract as :meth:`p2k.bridge.ProteusBridge.read_parameter`,
+        from the fake's own memory: whatever ``set_parameter`` last put in
+        :attr:`parameters`, else the invented master values, else 0 -- which
+        is what a unit sitting at its defaults would answer.
+        """
         self._tick()
+        if parameter_id in self.parameters:
+            return self.parameters[parameter_id]
         return {
             m.Parameter.MIDI_MODE: m.MidiMode.MULTI,
             m.Parameter.MIDI_ID: self.device_id,
         }.get(parameter_id, 0)
+
+    def set_parameter(
+        self,
+        parameter_id: int,
+        value: int,
+        *,
+        timeout: Optional[float] = None,
+    ) -> None:
+        """Set one parameter. **This changes the fake.**
+
+        Same contract as :meth:`p2k.bridge.ProteusBridge.set_parameter`:
+        sent, and then *not* verified. The write gate, the undo log and the
+        read-back belong to the caller, so the fake must not do them either
+        -- a fake that refused a locked edit would let the app's gate look
+        like it worked when it had never been exercised.
+
+        What the fake adds is memory: the value is kept, so the
+        :meth:`read_parameter` that follows an edit reads back what was
+        sent. A unit that ignored a request instead of taking it is the
+        case the read-back exists to catch, and it needs a different fake
+        -- one that overrides this method and does not record.
+
+        The frame goes through :meth:`handle`, so it lands in
+        :attr:`received` like everything else the fake was handed.
+        """
+        self._tick()
+        self.handle(m.parameter_edit(parameter_id, value, device=self.device_id))
+        self.parameters[parameter_id] = value
+        self.set_log.append((parameter_id, value))
+
+    def copy_master_setup(
+        self, source: int, destination: int, *, timeout: Optional[float] = None
+    ) -> None:
+        """Copy one multisetup over another. **This changes the instrument.**
+
+        Same contract as
+        :meth:`p2k.bridge.ProteusBridge.copy_master_setup`: the numbers go
+        on the wire and nothing is confirmed afterwards. The fake holds no
+        stored setups to copy between -- it has one setup, the one its dump
+        reports -- so there is nothing for the copy to *do* here, and a fake
+        that invented a setup table would be inventing the very thing the
+        real unit would have to be asked about. The call is recorded in
+        :attr:`copy_log`, which is what a test can assert.
+        """
+        self._tick()
+        self.handle(m.copy_master_setup(source, destination, device=self.device_id))
+        self.copy_log.append((source, destination))
 
     def midi_mode(self, *, timeout=None) -> int:
         return self.read_parameter(m.Parameter.MIDI_MODE)

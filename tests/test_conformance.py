@@ -28,8 +28,18 @@ from vinsynlib import conformance
 
 #: The legend's own hints. `m channels` is where the family puts `m` in a
 #: browser, the two after it are p2ked's, and `v favourites view` is
-#: rxved's key borrowed for the reason given below.
-EXTRAS = ("m channels", "v favourites view", "C category", "a all ROMs")
+#: rxved's key borrowed for the reason given below. The last three are the
+#: family's own ``EDITOR_KEYS`` for the write path, declared here because
+#: p2ked binds them and a legend is a promise about which keys work.
+EXTRAS = (
+    "m channels",
+    "v favourites view",
+    "C category",
+    "a all ROMs",
+    "w write gate",
+    "z undo",
+    "Z undo all",
+)
 
 
 def test_flags_match_the_family() -> None:
