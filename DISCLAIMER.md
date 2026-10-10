@@ -140,8 +140,13 @@ are a different claim from "this works".
 
 ## What p2ked does to the instrument
 
-**It does not write to the unit's memory.** There is no code in `p2k/` that
-stores a preset, renames anything, or erases anything.
+**It writes master parameters, and only behind a gate that is locked by
+default.** The multi screen's editor (`e`) sends a Parameter Value Edit,
+checks the write gate first (`w` arms it, `--allow-write` starts armed),
+reads the value back after every send, and logs only what the read-back
+agreed with, so `z` reverses it. It never writes preset memory: a Proteus
+ignores any message that would change ROM data, and p2ked does not try --
+what it stores is stored by the unit's own operations, not by ours.
 
 It plays the instrument in exactly one place, and that place says so:
 `Enter` in the TUI and `p2kcli select` send Bank Select and a Program
