@@ -112,9 +112,11 @@ p2ked is provided **as is, with absolutely no warranty and no liability**
 for data loss or **hardware damage**. You assume all risk. Full terms:
 [DISCLAIMER.md](DISCLAIMER.md).
 
-p2ked **reads** the unit and can **select** a preset, which makes sound; it
-does not write to the unit's memory. Other tools in the family do write to
-hardware and storage media, and this warning is the family's. Even so:
+p2ked **reads** the unit, can **select** a preset, which makes sound, and can
+**write master parameters** — behind a write gate that is locked by default.
+Preset memory is never written: a Proteus ignores any message that would
+change ROM data, and p2ked does not try. Other tools in the family do write
+to hardware and storage media, and this warning is the family's. Even so:
 **make good, current backups of all your files** — and of any existing
 banks on your instrument and storage media — before you start. A mistake, a
 bug, or untested output could overwrite or corrupt data, or be rejected by
@@ -141,26 +143,97 @@ irreplaceable equipment.
   the unit says. A name read from hardware is shown in bold; one that
   *disagrees* with the catalog gets a `*`. On a user bank somebody has saved
   into, that mark is the most useful thing on the screen.
+- **Edits the master parameters, behind a write gate that is locked by
+  default.** `w` arms the gate, `--allow-write` starts it armed, every edit is
+  read back to check it landed, and `z` / `Z` send the previous value back.
+  Only parameters whose IDs were established by reading them off a unit are
+  offered — see Editing below.
 - **A CLI** (`p2kcli`), most of which needs no unit at all.
 
 ### Channels (`m`)
 
 One Setup Dump request returns the whole multi configuration, so `m` shows
-all **32** channels — this family has two MIDI interfaces — with what each
-one plays, resolved to a ROM, a preset number and a name, plus why a channel
-would make no sound.
+all **32** channels — this family has two MIDI interfaces. The dump carries
+nine parameters for each one: preset, volume, pan, mix output, arpeggiator,
+enable, bank map, whether it receives Program Change, and the ROM ID. The
+table is channel, what that preset is — resolved to a ROM, a preset number
+and a name — volume, pan, output, Program Change receive, arpeggiator and
+ROM, plus a **why not** column: the reasons a channel would make no sound,
+every one of them a value the unit reported rather than an inference about a
+cable.
 
-Two things it deliberately does not claim. It does not say the unit is in
-**Multi** mode: in Omni or Poly a Proteus is not multitimbral and none of
-these settings apply, and that byte is in the part of the dump p2ked cannot
-yet decode. And "channel 20 is enabled" says nothing about whether anything
-is plugged into the second interface.
+Above them sits the master panel: clock tempo, transpose, bend range, the
+basic, FX and tempo control channels and the SysEx device ID — the settings
+those channels are played through.
+
+It says which **MIDI mode** the unit is in, because that decides whether any
+of it means anything. In Omni or Poly a Proteus is not multitimbral: it plays
+one preset and ignores every channel setting on this screen, so the screen
+says so rather than letting somebody debug a channel that was never in play.
+The mode is read as parameter 385 directly — one request, no layout, no way
+to be wrong (see RESOLUTION_NOTES §9).
+
+What it still does not claim: **"channel 20 is enabled" says nothing about
+whether anything is plugged into the second interface**, and none of the
+reasons mention the cable, an unplugged submix jack or the monitor, because
+the unit does not report them.
+
+`r` re-reads the setup from inside the screen. `e` is the door to the one
+write path in p2ked, and the only key here that can reach one.
 
 Note the word: **"multi" means two things on this machine.** Multi is one of
 three MIDI *modes* (Omni / Poly / Multi). A *Multisetup* is something else —
 a stored snapshot of all 32 channels, 128 of them, selected with MSB 80 /
 LSB 0 and a Program Change. This screen shows the live channel state, which
 is the first of those. Browsing Multisetups is not built yet.
+
+### Editing (`w`, `z`, `Z`)
+
+`e` on the multi screen opens the **master parameters** — the eleven settings
+a channel map is played through: MIDI mode and whether an external one is
+accepted, the basic, FX and tempo control channels, transpose, fine tune,
+bend range, clock tempo, FX bypass and the SysEx device ID. `enter` on a row
+asks for the value and names the range with it. The value is checked before
+anything is sent, because a Proteus **clips** an out-of-range value rather
+than refusing it — a typo would otherwise land as a plausible, silent change.
+
+Everything here is behind a write gate, the family's editor shape rather
+than something this tool invented:
+
+- **The gate is locked by default.** `w` toggles it, and its state is on the
+  screen and in the legend, so "why did my edit not send?" is answered where
+  the question is asked rather than in a keybinding manual. `--allow-write`
+  starts it armed, for a session that is going to edit anyway. Nothing is
+  sent while it is locked, and a refusal says which of the two it was: the
+  gate, or the range.
+- **Every edit is read back.** A Proteus *ignores* a request it cannot serve
+  rather than refusing it, so a write that did not land looks exactly like
+  one that did until something reads the value again. p2ked reads the
+  parameter, sends the edit, reads it once more, and reports a disagreement
+  instead of trusting the wire.
+- **Only a verified edit is undoable.** `z` sends the previous value back and
+  `Z` all of them, newest first. An edit the read-back did not confirm is not
+  in the log, because nothing landed to restore — and that is the reason
+  "undid 2 edits" can be fewer than the number of edits attempted.
+
+Both undo keys work from the browser as well, not only from the edit screen:
+an edit is made *through* the screen and undone *after* it closes, so the app
+holds the log and the undo worker.
+
+**Per-channel editing is refused, with the reason on the screen that would
+have held the button.** The nine per-channel parameter IDs are in no document
+to hand, and p2ked does not write to a number it invented.
+`probe_channel_ids()` is the read-only way to establish them on a real unit,
+and it is the next hardware session's job.
+
+**No write has been sent to a Proteus from this editor yet.** The IDs were
+established by reading them back off a unit and comparing them with the dump
+— 82 values, all agreeing (RESOLUTION_NOTES §10) — but the *ranges* are
+transcribed from documents that disagree with each other in five of the
+eleven places (§12), and no unit has been asked which range its firmware
+enforces. Every write so far has been verified against `DemoDevice`. Treat
+the first real edit as a hardware session: back the setup up somewhere you
+can restore it from, and read the value back after.
 
 ### The two numbers that identify a ROM
 
@@ -216,7 +289,11 @@ p2ked --demo           # built-in demo device; opens no MIDI ports
 p2ked                  # ask the remembered port, sweep if there is none
 p2ked --scan           # probe every port again (after the unit moves)
 p2ked --port "E-MU Proteus 2000 MIDI 1"
+p2ked --allow-write    # start with the write gate armed (default: locked)
 ```
+
+`--allow-write` is the only one of these that can lead to a write: it makes
+the gate `w` toggles start armed instead of locked. See Editing above.
 
 The first launch finds the unit by broadcasting a Universal Identity Request
 and reading the reply. The reply carries the device ID the unit is set to,
@@ -247,13 +324,27 @@ this one alone. `--config PATH` names a different file entirely.
 | `c` | set the MIDI channel selections go out on |
 | `f` | mark or unmark the preset under the cursor — **this writes the favourites database** |
 | `v` | step the favourites view: all presets → this bank's favourites → every favourite (reads only) |
+| `w` | write gate — **locked by default**; nothing is sent while it is |
+| `z` | undo the last master edit — sends the previous value back |
+| `Z` | undo every master edit made this session |
 | `i` | device identity and which ROMs are fitted |
 | `?` / `q` | help / quit |
+
+On the multi screen: `r` re-reads the setup, `e` opens the master parameters,
+and `w` / `z` / `Z` are there too.
 
 `f` writes and `v` reads, which is why they are not a shift-pair. The family
 puts the favourites view on `F`, one slip of the shift key from the key that
 writes; rxved moved it to `v` and p2ked follows. Every other key is where the
 family puts it.
+
+`w`, `z` and `Z` are the family's editor keys, spelled the same way here so a
+reader who has used rxved already knows them. `enter` changes what the unit is
+playing and `f` writes your own database; these three are the only keys that
+change what the unit *stores*, which is why they are in the legend rather than
+left to a keybinding manual. And `z` / `Z` reach the app's own actions rather
+than a screen's — an edit is made through the edit screen and undone after it
+closes, so both have to work from the browser with no screen open.
 
 **Moving the cursor never sends anything.** That is enforced by a test, not
 just by intent: it is the property that decides whether you can leave this
@@ -272,9 +363,28 @@ p2kcli resolve 7 1 5         # what does this MSB/LSB/PC select?
 p2kcli ports                 # MIDI ports on this host
 p2kcli --demo hardware       # what the unit reports about itself
 p2kcli --demo channels       # every MIDI channel (silent)
+p2kcli --demo channels --json  # the same, as one JSON object
 p2kcli --demo names XLEAD-1  # read a bank's names (silent)
 p2kcli select XLEAD-1 5      # select a preset ON THE UNIT
 ```
+
+`p2kcli channels` has no aliases and needs the unit: one Setup Dump and one
+mode read, neither of which a catalog can answer. Its default output is the
+same table the `m` screen draws — the setup's name, the MIDI mode, the master
+panel on one line, then a row per channel with its volume, pan, output,
+Program Change receive, arpeggiator and ROM, a `why not` column of the
+reasons it would not sound, and a closing line listing the channels that
+would.
+
+`--json` prints **one** object instead, for another program to read rather
+than for a person to scan: `setup`, `mode`, `multitimbral`, a `master` object
+of the seven master values, and `channels` — one object per channel with the
+raw numbers (`volume`, `pan` as the wire's 0-127, `mix_output` as -1..2
+rather than "use preset" / "send 2", `enable`, `bank_map`,
+`receive_program_change`, `rom_id`, `preset`) plus `plays` and a
+`silent_reasons` list. The table has no column for `enable` — it reaches the
+screen only as the "channel is disabled" reason in `why not` — and none for
+`bank_map`; here both are fields in their own right.
 
 Two commands are named differently from earlier p2kcli, with the old
 spelling still accepted, because they collided with something:
