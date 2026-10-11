@@ -25,8 +25,10 @@ unwired interface is exactly the kind of thing somebody opens this screen to
 find, so both halves are shown.
 
 **Read before write.** The read path is one Setup Dump and needs nothing but
-the dump. The write path is separate, gated, and only offers what p2ked can
-name a parameter ID for -- see :mod:`p2ked.masteredit`.
+the dump. The write path is separate, gated, and it has two shapes: the master
+parameters, whose IDs were read back off a unit, and the nine per-channel
+fields, written by sending the dump back with one of them changed -- a route
+that needed no ID to be invented. See :mod:`p2ked.masteredit`.
 
 Everything the unit reports about a channel is shown, because the point of
 the screen is that the reader stops guessing. What the unit does *not*
@@ -37,19 +39,23 @@ which and where each reason was transcribed from.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence, Tuple, cast
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Label, Static
+from textual.widgets import DataTable, Input, Label, Static
 
 from p2k import messages as params
 from p2k import roms
 from p2ked.masteredit import (
+    CHANNEL_EDIT_HINT,
+    CHANNEL_FIELDS,
     FX_PARAMETERS,
     MASTER_PARAMETERS,
+    ChannelChange,
     MasterEditor,
     MasterParameter,
 )
@@ -59,12 +65,15 @@ if TYPE_CHECKING:  # pragma: no cover - importing it at runtime is a cycle
     from p2ked.app import P2kedApp
 
 __all__ = [
+    "ARP_NAMES",
     "CHANNEL_EDIT_HINT",
     "FX_EDIT_HINT",
+    "MIX_OUTPUT_NAMES",
     "ChannelDetailScreen",
     "FXEditScreen",
     "MasterEditScreen",
     "MultiScreen",
+    "SoundPickerScreen",
     "ValuePickerScreen",
 ]
 
@@ -86,16 +95,38 @@ def _say(app, message: str, *, refused: bool = False) -> None:
     cast("P2kedApp", app)._say_edit(message, refused=refused)
 
 
-#: Shown where the per-channel editor would be. It is a sentence, not a
-#: disabled control: the reason matters more than the missing feature, and a
-#: disabled button with no explanation teaches nothing.
-CHANNEL_EDIT_HINT = (
-    "Per-channel edits are not offered. p2ked reads every channel's nine "
-    "values from one dump, but setting one needs its parameter ID, and no "
-    "document to hand lists them -- so p2ked will not write to a number it "
-    "invented. See docs/TODO item 47 for the read-only probe that "
-    "establishes them on a real unit."
-)
+#: What the mix output's four values are called, in the order the field
+#: numbers them.
+#:
+#: The names are the ones this screen and ``p2kcli channels`` already print,
+#: and they follow the manual's reading of the field: "you can select Send
+#: 1-4, or Preset" (OM p. 38, quoted in
+#: :meth:`p2k.messages.ChannelState.silence_reasons`). The parameter tree
+#: prints the same thing as "use preset or send 1-4" (paramtree) -- five
+#: names against a field whose documented range is **four** values (spec
+#: p. 41: -1 to 2). So the fourth send has no value to attach to, and the
+#: code gives "send 3" the top of the range: the list below is the four the
+#: field actually holds, not the five a document prints. Which of the two is
+#: ahead of the other is not something any document to hand settles, and the
+#: field's range is what p2ked writes.
+MIX_OUTPUT_NAMES: Tuple[str, ...] = ("use preset", "send 1", "send 2", "send 3")
+
+#: The value the first of :data:`MIX_OUTPUT_NAMES` is numbered by. -1, so a
+#: pick of "use preset" answers -1 and not 0.
+MIX_OUTPUT_BASE = -1
+
+#: What the arpeggiator field's four values are called, in the order the
+#: field numbers them.
+#:
+#: spec p. 41's own "documented values" column, transcribed in
+#: ``docs/RESOLUTION_NOTES.md`` §12's table of the nine per-channel
+#: parameters: "-2 = off, -1 = on, 0 = P (Preset Arp), 1 = G (Global Arp)".
+#: That is the whole of what any document to hand says about the field,
+#: which is why the list stops there rather than naming what "P" switches.
+ARP_NAMES: Tuple[str, ...] = ("off", "on", "P (preset arp)", "G (global arp)")
+
+#: The value the first of :data:`ARP_NAMES` is numbered by.
+ARP_BASE = -2
 
 #: What sits under the FX table instead of :data:`CHANNEL_EDIT_HINT`,
 #: because the questions a reader has here are different ones: where the FX
@@ -118,6 +149,84 @@ FX_EDIT_HINT = (
     "own display (OM p. 146). FX bypass is not here: the dump puts it in the "
     "general block at id 258, on the master-parameter screen."
 )
+
+
+@dataclass(frozen=True)
+class _Cell:
+    """One column of the multi table, and what an edit on it would write.
+
+    ``kind`` is the whole of the editing decision, and it is declared per
+    column rather than derived from a range, because the derivations would be
+    wrong in the one place it matters: ``enable`` and
+    ``receive_program_change`` are 0-1 like a two-value enumeration, but they
+    are switches -- ``space`` flips them and a list of two would be a dialog
+    where a keystroke belongs.
+
+    ``field`` is the dump field the column writes, empty for the columns that
+    are not one of the nine: ``ch`` is the row's own index, ``plays`` and
+    ``ROM`` are the *sound* -- three fields the unit takes together -- and
+    ``why not`` is a reading of the other eight.
+    """
+
+    key: str
+    label: str
+    kind: str  # "read" | "number" | "named" | "switch" | "sound"
+    field: str = ""
+    names: Tuple[str, ...] = ()
+    base: int = 0
+
+    @property
+    def editable(self) -> bool:
+        """Whether a value can be typed, picked or nudged into this cell."""
+        return self.kind in ("number", "named", "switch")
+
+
+#: The table's columns, in the order they are drawn, with the range of each
+#: one available from :data:`p2ked.masteredit.CHANNEL_FIELDS`.
+#:
+#: Nine of the dump's per-channel fields become cells. The other three --
+#: ``preset``, ``bank_map`` and ``rom_id`` -- do not get a cell each, because
+#: the unit takes the three *together* as one sound: aiming a channel at a
+#: sound is one write and one entry on the undo timeline
+#: (:data:`p2ked.masteredit.SOUND_FIELD`), so they belong behind the one
+#: gesture that changes all three -- ``s`` -- rather than behind three cells
+#: that could each be moved into a channel that plays nothing.
+CELLS: Tuple[_Cell, ...] = (
+    _Cell("ch", "ch", "read"),
+    _Cell("plays", "plays", "sound"),
+    _Cell("vol", "vol", "number", field="volume"),
+    _Cell("pan", "pan", "number", field="pan"),
+    _Cell(
+        "out",
+        "out",
+        "named",
+        field="mix_output",
+        names=MIX_OUTPUT_NAMES,
+        base=MIX_OUTPUT_BASE,
+    ),
+    _Cell("on", "on", "switch", field="enable"),
+    _Cell("rxpc", "rxPC", "switch", field="receive_program_change"),
+    _Cell("arp", "arp", "named", field="arp", names=ARP_NAMES, base=ARP_BASE),
+    _Cell("rom", "ROM", "sound"),
+    _Cell("why", "why not", "read"),
+)
+
+#: The columns by their DataTable key, because a cell arrives as a key and
+#: not as an object.
+CELLS_BY_KEY: Dict[str, _Cell] = {cell.key: cell for cell in CELLS}
+
+
+def _literal(text: str) -> str:
+    """``text`` as markup that renders as exactly itself.
+
+    The specification's own sentence about the old setup dump carries
+    ``[s]`` in it -- "receive[s] and understand[s] the old setup dump" --
+    and rich markup reads a ``[...]`` as a tag and eats it, which silently
+    turns a quotation into a paraphrase. A sentence quoted from a document
+    has to render as the document wrote it, so the brackets are escaped here
+    rather than edited out of the quote.
+    """
+    return text.replace("[", "\\[")
 
 
 def mode_summary(mode: Optional[int]) -> str:
@@ -161,11 +270,26 @@ def master_summary(dump: params.SetupDump) -> List[str]:
 class MultiScreen(ModalScreen[None]):
     """Every MIDI channel, and the master settings they are played through.
 
-    **Read-only, and silent.** One Setup Dump gets the lot; nothing is
-    selected and nothing sounds. ``e`` is the door to the edit path over the
-    general master parameters and ``x`` to the one over the master FX
-    block, and they are the only keys here that can reach one -- see
+    **Silent.** One Setup Dump gets the lot; nothing is selected and nothing
+    sounds. ``e`` is the door to the edit path over the general master
+    parameters and ``x`` to the one over the master FX block -- see
     :mod:`p2ked.masteredit`.
+
+    **And editable, cell by cell.** The table moves between *cells* rather
+    than rows, the way the sibling rxved's multi table does, because nine of
+    the columns are values with ranges and a row-wide cursor could say
+    nothing about which of them a keystroke was aimed at. ``enter`` opens the
+    focused value: a number to type, or the list of names for a field whose
+    values a document names. ``+`` and ``-`` nudge it, ``space`` flips a
+    switch, a digit starts typing a number in place, and ``s`` picks a sound
+    for the channel -- which is the one gesture that writes three fields,
+    because the unit takes them together.
+
+    Every one of those is a write, and none of them is a shortcut around the
+    apparatus: they all call the app's own
+    :meth:`P2kedApp.action_edit_channel`, so the write gate, the range check,
+    the undo log and the read-back are the ones a master edit goes through.
+    The screen holds no device and starts no worker -- the app owns both.
     """
 
     DEFAULT_CSS = """
@@ -177,6 +301,7 @@ class MultiScreen(ModalScreen[None]):
     MultiScreen DataTable { height: 1fr; }
     MultiScreen .note { height: auto; color: $text-muted; padding-top: 1; }
     MultiScreen .master { height: auto; color: $text-muted; }
+    MultiScreen .status { height: auto; color: $text; padding-top: 1; }
     """
 
     BINDINGS = [
@@ -184,6 +309,17 @@ class MultiScreen(ModalScreen[None]):
         Binding("q", "close", "Close"),
         Binding("r", "refresh", "Re-read"),
         Binding("e", "edit", "Edit", show=False),
+        # `w` is here as well as on the app, and both are needed. A modal
+        # screen's bindings take precedence over the app's -- the whole
+        # point of a modal -- so the app's `w` never arrives on this
+        # screen. Without this one the gate could only be armed by closing
+        # the very screen whose cells are refused until it is armed.
+        #
+        # The gate itself is the editor's, which the app handed in: the
+        # same object the app's own key toggles and the same one its edits
+        # are checked against, so the two cannot disagree about which is
+        # open.
+        Binding("w", "toggle_write_gate", "Write gate"),
         # `x` is the FX block, for the same reason `e` is the general one:
         # they are two different tables in the dump (spec p. 49 puts the
         # master effects right after the master general parameters), and a
@@ -201,6 +337,29 @@ class MultiScreen(ModalScreen[None]):
         # the browser; promising it here too is what makes that true.
         Binding("z", "undo", "Undo"),
         Binding("Z", "undo_all", "Undo all"),
+        # The four editing gestures, and `s`. Not a second edit path: each
+        # one calls the same `on_edit_channel` a typed number does, so the
+        # gate, the range check, the log and the read-back are the ones an
+        # edit has always gone through. rxved binds the same three on its
+        # part table for the same reason -- a value with a clear range
+        # should not be changed one way here and another way one screen
+        # over.
+        Binding("space", "toggle_cell", "Toggle"),
+        Binding("plus", "bump(1)", "Value +"),
+        # `=` as well as `+`, because `+` is a shift on most layouts and a
+        # nudge is a one-handed gesture.
+        Binding("equals_sign", "bump(1)", "Value +"),
+        Binding("minus", "bump(-1)", "Value -"),
+        Binding("s", "pick_sound", "Pick a sound"),
+        # Typing a digit on a numeric cell starts entering a number, the way
+        # a spreadsheet does -- pressing Enter first to open an empty-ish
+        # prompt is a step nobody wants for a three-keystroke value. The
+        # digits go on this screen's own status line, `enter` confirms and
+        # `escape` cancels, so there is no modal to leave.
+        *[
+            Binding(str(digit), f"type_digit('{digit}')", "Type", show=False)
+            for digit in range(10)
+        ],
     ]
 
     def __init__(
@@ -210,9 +369,14 @@ class MultiScreen(ModalScreen[None]):
         mode: Optional[int] = None,
         *,
         fitted: Optional[Dict[int, bool]] = None,
+        bank_ids: Optional[Sequence[str]] = None,
+        favorites=None,
+        editor: Optional[MasterEditor] = None,
         on_edit: Optional[Callable[[], None]] = None,
         on_edit_fx: Optional[Callable[[], None]] = None,
         on_undo: Optional[Callable[[Optional[int]], None]] = None,
+        on_edit_channel: Optional[Callable[[int, str, int], None]] = None,
+        on_channel_sound: Optional[Callable[[int, int, int, int], None]] = None,
     ) -> None:
         super().__init__()
         self._dump = dump
@@ -220,14 +384,41 @@ class MultiScreen(ModalScreen[None]):
         #: ``None`` when it could not be read -- which is said, not hidden.
         self._mode = mode
         self._fitted = fitted
+        #: The banks the sound picker lists: the app's own visible set, so a
+        #: picker and a browser cannot disagree about which ROMs exist.
+        #: ``None`` means every bank in the table.
+        every_bank = list(roms.bank_ids())
+        self._bank_ids = list(bank_ids) if bank_ids is not None else every_bank
+        #: The favourites store, for the picker's ``v`` view. ``None`` when
+        #: the app was started without one -- the cycle then has "all" only,
+        #: rather than promising a view it cannot fill.
+        self._favorites = favorites
+        #: The app's editor, for the same reason the master edit screen
+        #: takes one: this screen offers per-channel edits, so it has to
+        #: serve `w` -- a modal cuts the app's binding chain -- and it has
+        #: to be able to say which state that left the gate in. ``None``
+        #: for a screen built with no edit path at all, which is what the
+        #: read-only tests do.
+        self._editor = editor
         self._on_edit = on_edit
         #: The app's FX editor, handed in for the reason ``on_edit`` is:
         #: a screen owns no worker, and the FX screen needs values read off
         #: one before it can show them.
         self._on_edit_fx = on_edit_fx
         #: The app's undo, handed in for the same reason ``on_edit`` is:
-        #: a screen owns no worker, and ``z`` reverses on one.
+        # a screen owns no worker, and ``z`` reverses on one.
         self._on_undo = on_undo
+        #: The two write paths, both the app's own. A screen offers an edit
+        # and never sends one: the gate, the range check, the worker and the
+        # read-back are the app's, which is what makes them the same ones a
+        # master edit goes through.
+        self._on_edit_channel = on_edit_channel
+        self._on_channel_sound = on_channel_sound
+        #: The number being typed on this screen's status line:
+        #: ``(channel, field, digits)``, or ``None``. Held here rather than
+        #: in a modal, because a three-keystroke value should not cost a
+        #: dialog -- the spreadsheet gesture, not the form.
+        self._typing: Optional[Tuple[int, str, str]] = None
 
     # --- reading ----------------------------------------------------------
 
@@ -287,6 +478,7 @@ class MultiScreen(ModalScreen[None]):
             str(entry.volume),
             str(entry.pan - 64),
             mix,
+            "on" if entry.enable else "OFF",
             "on" if entry.receive_program_change else "OFF",
             str(entry.arp),
             f"{self._rom_name(entry.rom_id)} ({entry.rom_id})",
@@ -294,11 +486,17 @@ class MultiScreen(ModalScreen[None]):
         )
 
     def _report(self) -> str:
-        """What is wrong, and what p2ked cannot see.
+        """What is wrong, what p2ked cannot see, and what an edit will do.
 
         Every reason comes from a value the unit reported; nothing is
         inferred from a cable, a jack or a monitor, and the last line says
         so rather than leaving the reader to assume.
+
+        The closing paragraphs are about the *writing*, because this screen
+        writes: what the gate is, what a per-channel edit actually sends, and
+        how it is verified. A reader who has just changed a channel deserves
+        to be told which of those happened, and a reader who has not deserves
+        to know the gate was locked rather than to guess.
         """
         if not self._multitimbral:
             return (
@@ -334,11 +532,51 @@ class MultiScreen(ModalScreen[None]):
             "second one. They are real channels whether or not anything is "
             "plugged into it.",
             "",
+            self._edit_note(),
+            "",
+            # The ROM column's own caveat, on the screen whose column it is.
+            # CLAUDE.md's rule is that a guess is labelled in the interface
+            # and not only in a comment, and this column names a ROM from a
+            # SIMM ID -- see p2k/roms.py's `rom_for_simm_id` and the test in
+            # tests/test_roms.py that keeps its wording.
+            "The ROM column reads the SIMM ID as that ROM's Bank Select MSB. "
+            "No E-MU document to hand says they are the same number; it was "
+            "confirmed against hardware for three ROMs on 2026-09-12, which "
+            "is not all twenty.",
+            "",
             "What this report cannot see, because the unit does not report "
             "it: the cable, an unplugged submix jack, the monitor, and "
             "anything set on the preset rather than the channel.",
         ]
         return "\n".join(lines)
+
+    def _edit_note(self) -> str:
+        """What editing a channel here does, in the fewest honest words.
+
+        Four facts, in the order a reader asks for them: the gate, the
+        write, the verification, the undo. It is here rather than in the
+        footer because the footer has to name keys and this has to explain
+        consequences -- and because the gate's *state* is a fact about right
+        now, not a key.
+        """
+        # ``describe()`` spells both states -- "write gate locked" and
+        # "write gate ARMED" -- so the sentence carries the editor's own
+        # words rather than a second phrasing of them, and a screen that
+        # ever says what state the gate is in says the same thing the
+        # browser's ``w`` says.
+        gate = (
+            "write gate locked"
+            if self._editor is None
+            else self._editor.gate.describe()
+        )
+        return (
+            f"{gate[0].upper()}{gate[1:]}: editing a cell — ⏎, + and -, "
+            "space, or s — writes the whole setup dump. p2ked reads the live "
+            "dump, changes this one field and sends the dump back (spec p. "
+            "29), so every other byte is the one the unit just sent. The "
+            "field is read back to verify it, and z — here or in the "
+            "browser — puts the previous value back."
+        )
 
     # --- layout -----------------------------------------------------------
 
@@ -351,27 +589,28 @@ class MultiScreen(ModalScreen[None]):
         with Vertical():
             yield Label(f"{title}  {mode_summary(self._mode)}")
             yield Static(" · ".join(master_summary(self._dump)), classes="master")
-            yield DataTable(id="multi-table", cursor_type="row", zebra_stripes=True)
+            # `cell`, not `row`: nine of these columns are values with
+            # ranges, and a row-wide cursor cannot say which of them a
+            # keystroke was aimed at. Textual then hands back arrow-key
+            # movement between cells and Enter as CellSelected.
+            yield DataTable(id="multi-table", cursor_type="cell", zebra_stripes=True)
             yield Static(self._report(), classes="note")
+            # The screen's own status line, for the same reason the master
+            # editor has one: everything an edit says -- a refusal, a
+            # result, a number half-typed -- lands here, where the user is
+            # looking, and not on the app's `#status` behind the modal.
+            yield Static("", classes="status")
             yield Static(
-                "[dim]r re-read · e edit · x master FX · enter channel detail · "
-                "z undo · esc / q to close[/dim]"
+                "[dim]arrows move · enter channel detail, or edit the value "
+                "under it · a digit types a number · + / - nudge · space "
+                "toggles · s picks a sound · r re-read · e master edit · x "
+                "master FX · z undo · esc / q to close[/dim]"
             )
 
     def on_mount(self) -> None:
         table = self.query_one("#multi-table", DataTable)
-        for label, key in (
-            ("ch", "ch"),
-            ("plays", "plays"),
-            ("vol", "vol"),
-            ("pan", "pan"),
-            ("out", "out"),
-            ("rxPC", "rxpc"),
-            ("arp", "arp"),
-            ("ROM", "rom"),
-            ("why not", "why"),
-        ):
-            table.add_column(label, key=key)
+        for cell in CELLS:
+            table.add_column(cell.label, key=cell.key)
         for entry in self._dump.channels:
             table.add_row(*self._row(entry), key=str(entry.channel))
 
@@ -390,7 +629,15 @@ class MultiScreen(ModalScreen[None]):
         never reached from here, which is the point of a modal.
 
         The same shape as :meth:`p2ked.app.ReportScreen.action_close`.
+
+        ``escape`` first drops a half-typed number, because a key that both
+        cancels an entry and closes the screen would close the screen the
+        first time it was pressed for the entry -- and the status line
+        promises the other thing.
         """
+        if self._typing is not None:
+            self._forget_typing()
+            return
         self.dismiss(None)
 
     def action_refresh(self) -> None:
@@ -408,6 +655,23 @@ class MultiScreen(ModalScreen[None]):
     def action_edit(self) -> None:
         if self._on_edit is not None:
             self._on_edit()
+
+    def action_toggle_write_gate(self) -> None:
+        """``w`` on this screen: the app's own key, and why this one exists.
+
+        A modal screen's bindings win over the app's, so ``w`` pressed here
+        never reaches :meth:`P2kedApp.action_toggle_write_gate`. The gate it
+        arms is still the app's -- the editor was handed in with it -- so
+        what is toggled is the one the edits are checked against, and the
+        note under the table is redrawn rather than left describing the
+        state the gate was in before the keypress.
+        """
+        if self._editor is None:
+            _say(self.app, "this screen has no write gate to toggle", refused=True)
+            return
+        self._editor.gate.toggle()
+        self.query_one(".note", Static).update(self._report())
+        _say(self.app, self._editor.gate.describe())
 
     def action_edit_fx(self) -> None:
         """``x``: the master FX block, the other half of the edit path.
@@ -438,19 +702,510 @@ class MultiScreen(ModalScreen[None]):
         if self._on_undo is not None:
             self._on_undo(None)
 
-    def on_data_table_row_selected(self, event) -> None:
-        """Enter on a channel row opens that channel, read-only.
+    def on_data_table_cell_selected(self, event) -> None:
+        """Enter on a cell: edit the value, or open the channel's detail.
 
-        Enter arrives here rather than as a binding for the same reason
-        the browser has no App-level Enter: a focused DataTable consumes
-        the key for its own row selection, so the value comes back as a
-        message.
+        Enter arrives here rather than as a binding for the same reason the
+        browser has no App-level Enter: a focused DataTable consumes the key
+        for its own selection, so the value comes back as a message -- and
+        with ``cursor_type="cell"`` it comes back as a *cell*, which is the
+        only way to know which of a row's nine values the key was aimed at.
+
+        The read-only columns still answer, because a reader who presses
+        Enter on ``ch`` or ``why not`` is asking about the channel and not
+        fumbling: the detail screen is what they get. The two sound columns
+        get the picker, because they are the columns ``s`` writes and the
+        gesture a reader will try first.
         """
         if event.data_table.id != "multi-table":
             return
-        row = event.cursor_row
-        if 0 <= row < len(self._dump.channels):
-            self.app.push_screen(self._detail(self._dump.channels[row]))
+        cell = CELLS_BY_KEY.get(event.cell_key.column_key.value)
+        if cell is None:  # pragma: no cover - the table is built from CELLS
+            return
+        channel = self._channel_of(event.cell_key.row_key.value)
+        if channel is None:
+            return
+        if self._typing is not None and self._typing[:2] == (channel, cell.field):
+            # A number was being typed on this very cell: Enter confirms it.
+            self._commit_typing()
+            return
+        entry = self._dump.channel(channel)
+        if entry is None:  # pragma: no cover - _channel_of checked it
+            return
+        if cell.kind == "number":
+            self._offer_number(channel, cell, entry)
+        elif cell.kind == "named":
+            self._offer_named(channel, cell, entry)
+        elif cell.kind == "switch":
+            self._toggle(channel, cell.field, getattr(entry, cell.field))
+        elif cell.kind == "sound":
+            self._pick_sound(channel)
+        else:
+            self.app.push_screen(self._detail(entry))
+
+    def on_data_table_cell_highlighted(self, event) -> None:
+        """The cursor moved, so a number being typed is abandoned.
+
+        Not left on the status line, where it would look live: the next
+        digit would append to a value meant for the cell the cursor has
+        left. ``enter`` and ``escape`` still work on the cell it is now on,
+        which is the cell the status line is describing by then.
+        """
+        if event.data_table.id != "multi-table":
+            return
+        self._forget_typing()
+
+    def _channel_of(self, row_key: str) -> Optional[int]:
+        """The channel a table row key names, or ``None``.
+
+        Row keys are the wire's own 0-based channel numbers as strings, which
+        is what makes the row index and
+        :meth:`p2ked.app.P2kedApp.action_edit_channel`'s ``channel`` the same
+        number.
+        """
+        try:
+            channel = int(row_key)
+        except ValueError:  # pragma: no cover - the keys are ours
+            return None
+        return channel if self._dump.channel(channel) is not None else None
+
+    def _focused(
+        self, *, forget: bool = True
+    ) -> Tuple[Optional[_Cell], Optional[int], Optional[int]]:
+        """``(cell, channel, value)`` under the cursor, or ``(None, ...)``.
+
+        Every editing gesture starts here, so this is also where a
+        half-typed number is dropped: a gesture that is not a digit is a
+        different gesture, and leaving the digits on the status line would
+        make the next ``4`` append to a ``4`` nobody meant to keep.
+
+        ``forget=False`` is for the digit gesture itself, which has to read
+        the buffer *before* deciding what to do with it.
+        """
+        if forget:
+            self._forget_typing()
+        table = self.query_one("#multi-table", DataTable)
+        if not table.row_count:
+            return None, None, None
+        try:
+            row_key, column_key = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:  # pragma: no cover - a table with no cursor yet
+            return None, None, None
+        # Every row and every column here was added with a key of our own,
+        # so a missing one means the table moved underneath us rather than
+        # that a channel has no name.
+        cell = CELLS_BY_KEY.get(column_key.value or "")
+        channel = self._channel_of(row_key.value or "")
+        entry = self._dump.channel(channel) if channel is not None else None
+        if cell is None or entry is None:
+            return None, None, None
+        return cell, channel, getattr(entry, cell.field) if cell.field else None
+
+    # --- offering an edit -------------------------------------------------
+
+    def _offer_number(
+        self, channel: int, cell: _Cell, entry: params.ChannelState
+    ) -> None:
+        """A number to type, with the range and the current value on it.
+
+        The question names the range because the specification clips an
+        out-of-range value rather than refusing it (spec p. 41) -- so the
+        reader has to be able to see what the field takes before sending
+        one. The check itself is the app's, on the main thread, before
+        anything is spawned; see :meth:`MasterEditor.allow_channel_field`.
+        """
+        field = CHANNEL_FIELDS[cell.field]
+        question = (
+            f"channel {channel + 1} {cell.field} "
+            f"({field.low}-{field.high}), now {getattr(entry, cell.field)}"
+        )
+
+        def apply(text) -> None:
+            if not text or not text.strip():
+                return
+            try:
+                value = int(text.strip())
+            except ValueError:
+                _say(self.app, f"{text!r} is not a number", refused=True)
+                return
+            self._edit_channel(channel, cell.field, value)
+
+        self.app.push_screen(PromptScreen(question), apply)
+
+    def _offer_named(
+        self, channel: int, cell: _Cell, entry: params.ChannelState
+    ) -> None:
+        """A field whose values a document names is a list to pick from.
+
+        Not a number to type: ``use preset`` is what the screen prints and
+        what the front panel shows, so asking for ``-1`` and then spelling
+        it back as words on the next render is a round trip through a
+        vocabulary the unit does not use. The answer is the value the field
+        is numbered by -- the same integer a typed ``-1`` would produce --
+        so the gate, the range check and the undo log downstream cannot tell
+        which door the edit came through.
+        """
+
+        def picked(value: Optional[int]) -> None:
+            if value is not None:
+                self._edit_channel(channel, cell.field, value)
+
+        self.app.push_screen(
+            ValuePickerScreen(
+                f"channel {channel + 1} {cell.field}",
+                list(cell.names),
+                getattr(entry, cell.field),
+                base=cell.base,
+            ),
+            picked,
+        )
+
+    def _edit_channel(self, channel: int, field: str, value: int) -> None:
+        """One per-channel edit, handed to the app to send.
+
+        The gate and the range are the app's to check -- see
+        :meth:`p2ked.app.P2kedApp.action_edit_channel` -- and this screen
+        never sends anything itself. The only thing it does when there is no
+        path to hand is say so, rather than accept a keystroke and do
+        nothing with it.
+        """
+        on_edit = self._on_edit_channel
+        if on_edit is None:
+            _say(self.app, "this screen has no per-channel edit path", refused=True)
+            return
+        on_edit(channel, field, value)
+
+    # --- the gestures -----------------------------------------------------
+
+    def action_type_digit(self, digit: str) -> None:
+        """A digit starts a number on the focused cell, in place.
+
+        The spreadsheet gesture: the value a reader wants is three
+        keystrokes, and a modal for each of them is a step nobody wants.
+        The digits accumulate on this screen's own status line, ``enter``
+        confirms and ``escape`` cancels -- the two keys the status line
+        names while it holds them.
+
+        There is nothing to type into a switch or a named field, and saying
+        so is more use than ignoring the key: ``space`` is the one that
+        toggles.
+        """
+        cell, channel, _value = self._focused(forget=False)
+        if cell is None or channel is None:
+            return
+        if cell.kind == "switch":
+            _say(
+                self.app,
+                f"{cell.field} is on or off — space toggles it",
+                refused=True,
+            )
+            return
+        if cell.kind != "number":
+            _say(
+                self.app, f"there is no number to type into {cell.field}", refused=True
+            )
+            return
+        started = self._typing
+        if started is not None and started[:2] == (channel, cell.field):
+            digits = started[2] + digit
+        else:
+            # A number started on another cell is abandoned rather than
+            # appended to: the cursor has moved, so what was being built
+            # was for a different channel.
+            self._forget_typing()
+            digits = digit
+        self._typing = (channel, cell.field, digits)
+        field = CHANNEL_FIELDS[cell.field]
+        self.say(
+            f"channel {channel + 1} {cell.field}: {digits} "
+            f"({field.low}-{field.high}) — ⏎ writes · esc cancels"
+        )
+
+    def action_bump(self, by: int) -> None:
+        """``+`` / ``-``: one step the focused numeric value, clamped.
+
+        Not a shortcut around the edit path but another way into it: the
+        clamped value goes to the same ``on_edit_channel`` a typed number
+        goes to, so the gate refuses it, the range check sees it, the log
+        records it and the read-back verifies it. A screen that moved the
+        cell itself would be a screen that could show a value the unit never
+        accepted.
+
+        A step that cannot move is said, not sent. A per-channel edit is a
+        whole-dump write, and re-sending a value the unit already holds would
+        put an entry on the undo timeline that restores something that was
+        never changed -- so ``+`` at the top of a range answers with the range
+        and sends nothing.
+        """
+        cell, channel, value = self._focused()
+        if cell is None or channel is None:
+            return
+        if cell.kind != "number":
+            field = CHANNEL_FIELDS.get(cell.field)
+            span = f"{field.low}-{field.high}" if field else cell.field
+            _say(self.app, f"+ / - step a number; {cell.field} is {span}", refused=True)
+            return
+        if value is None:  # pragma: no cover - every field on a read channel
+            return
+        field = CHANNEL_FIELDS[cell.field]
+        stepped = min(field.high, max(field.low, value + by))
+        if stepped == value:
+            _say(
+                self.app,
+                f"channel {channel + 1} {cell.field} is already {value}, "
+                f"and the range is {field.low}-{field.high}",
+                refused=True,
+            )
+            return
+        self._edit_channel(channel, cell.field, stepped)
+
+    def action_toggle_cell(self) -> None:
+        """``space``: flip the switch under the cursor.
+
+        The one-bit fields are a switch rather than a range because there is
+        nothing to step: ``enable`` and ``receive_program_change`` are the
+        two, and rxved bound ``space`` to the same gesture on its part table.
+        """
+        cell, channel, value = self._focused()
+        if cell is None or channel is None:
+            return
+        if cell.kind != "switch":
+            _say(
+                self.app,
+                f"space toggles a switch; {cell.field} is not one",
+                refused=True,
+            )
+            return
+        self._toggle(channel, cell.field, value)
+
+    def _toggle(self, channel: int, field: str, value: Optional[int]) -> None:
+        """Flip a one-bit field and hand the new value to the app.
+
+        ``value`` is what the field holds now, read from the screen's own
+        copy of the dump -- which is the same object the read-back just
+        verified, so a toggle cannot act on a stale value.
+        """
+        self._edit_channel(channel, field, 0 if value else 1)
+
+    def action_pick_sound(self) -> None:
+        """``s``: pick a sound for the focused channel, by name.
+
+        The three fields the unit takes together -- ``rom_id``, ``preset``
+        and ``bank_map`` -- are one write and one entry on the undo
+        timeline, so they belong behind one gesture rather than three cells.
+        See :meth:`_pick_sound`.
+        """
+        _cell, channel, _value = self._focused()
+        if channel is None:
+            return
+        self._pick_sound(channel)
+
+    def _pick_sound(self, channel: int) -> None:
+        """The picker, and what a pick writes.
+
+        ``bank_map`` is carried over from the channel rather than set: no
+        document to hand says what the Multimode Bank Map maps between
+        (RESOLUTION_NOTES §12), so the picker changes the sound and leaves
+        the channel's own mapping alone. Inventing a value for it would be
+        exactly the guess the rest of this file refuses to make.
+        """
+        entry = self._dump.channel(channel)
+        on_sound = self._on_channel_sound
+        if entry is None or on_sound is None:
+            _say(self.app, "this screen has no sound picker path", refused=True)
+            return
+
+        def picked(preset: Optional[roms.Preset]) -> None:
+            if preset is None:
+                return
+            rom = preset.bank.rom
+            rom_id = roms.USER_ROM_ID if rom is roms.USER else rom.msb
+            on_sound(channel, rom_id, preset.number, entry.bank_map)
+
+        self.app.push_screen(
+            SoundPickerScreen(
+                self._catalog,
+                self._bank_ids,
+                favorites=self._favorites,
+                current=self._preset_of(entry),
+            ),
+            picked,
+        )
+
+    def _preset_of(self, entry: params.ChannelState) -> Optional[roms.Preset]:
+        """The preset this channel is on, when p2ked can name its slot.
+
+        The same split :meth:`_plays` makes: the dump's ``preset`` is
+        ROM-relative and the catalog is keyed bank-relative, so a preset
+        past 128 belongs to a different bank than the first. ``None`` when
+        the ROM is not in the table or the number is past its last bank --
+        said as unknown rather than rounded into a slot that plays something
+        else.
+        """
+        rom = (
+            roms.USER
+            if entry.rom_id == roms.USER_ROM_ID
+            else roms.rom_for_simm_id(entry.rom_id)
+        )
+        if rom is None:
+            return None
+        index, program_change = divmod(entry.preset, roms.PRESETS_PER_BANK)
+        if index >= len(rom.lsbs):
+            return None
+        try:
+            return roms.preset(f"{rom.id}-{rom.lsbs[index]}", program_change)
+        except LookupError:
+            return None  # a ROM whose last bank is partly empty
+
+    # --- the number being typed -------------------------------------------
+
+    def _forget_typing(self) -> None:
+        """Drop a half-typed number, and clear the line it was on."""
+        if self._typing is not None:
+            self._typing = None
+            self._clear_status()
+
+    def _commit_typing(self) -> None:
+        """``enter``: write the number that was typed, or refuse it."""
+        typing = self._typing
+        self._typing = None
+        if typing is None:  # pragma: no cover - the caller checked
+            return
+        channel, field, digits = typing
+        self._clear_status()
+        try:
+            self._edit_channel(channel, field, int(digits))
+        except ValueError:  # pragma: no cover - digits are digits
+            _say(self.app, f"{digits!r} is not a number", refused=True)
+
+    def _clear_status(self) -> None:
+        try:
+            self.query_one(".status", Static).update("")
+        except Exception:  # pragma: no cover - the screen closed under us
+            return
+
+    # --- the seams the app looks for --------------------------------------
+
+    def say(self, message: str, *, refused: bool = False) -> None:
+        """One sentence on this screen's own status line.
+
+        The same shape :meth:`MasterEditScreen.say` has, and for the same
+        reason: the app's ``#status`` is the dimmed backdrop behind this
+        modal, so a refusal written there is written where nobody is
+        looking. ``[b]refused[/b] · `` in front of a refusal, because the
+        difference between a "no" and news is carried by the words and the
+        weight, not by the colour alone.
+        """
+        try:
+            status = self.query_one(".status", Static)
+        except Exception:  # pragma: no cover - the screen closed under us
+            return
+        prefix = "[b]refused[/b] · " if refused else ""
+        status.update(prefix + message)
+
+    # --- the master-edit seams -------------------------------------------
+    #
+    # The app looks for a screen that answers `say` and then hands it the
+    # master editor's own two seams, because that is the shape it learned
+    # them in: `MasterEditScreen` answers all three. A screen that grew a
+    # `say` and not these would be a screen the app calls a missing method
+    # on, which in Python is an AttributeError out of a worker.
+    #
+    # This screen is the honest case for it. An edit made through `e` comes
+    # back here, and `z` is pressed here -- so the sentence belongs on this
+    # screen's line and not on the editor's, which is closed. What cannot
+    # happen here is the master editor's *redraw*: those rows are on that
+    # screen's table, and there are none of them on this one.
+
+    def result(
+        self,
+        ok: bool,
+        message: str,
+        parameter_id: Optional[int] = None,
+        value: Optional[int] = None,
+    ) -> None:
+        """A master edit's answer, when this screen is the live one.
+
+        The row is the editor's to redraw and it is not here, so this says
+        the sentence and stops. ``_edit_applied`` calls this instead of
+        ``_say_edit``, which is why the sentence is written here rather than
+        left for the app.
+        """
+        self.say(message, refused=not ok)
+
+    def undone(self, plan, results) -> None:
+        """``z`` put master values back, and this screen has no master rows.
+
+        Nothing is redrawn, and the sentence is not repeated: the app's own
+        ``_say_edit`` follows this call with the same one, and a status line
+        written twice in one pass is a flicker.
+        """
+        return
+
+    def channel_result(self, ok: bool, message: str, change: ChannelChange) -> None:
+        """What a per-channel edit did, from the app's read-back.
+
+        A success is drawn where it happened, not just said: the row is
+        redrawn from the values the read-back verified. What is shown is
+        what the *unit reported*, not what was sent -- the two differ
+        exactly when an edit did not land, which is the whole point of
+        reading back.
+
+        The screen's own copy of the dump is updated too, so a channel
+        detail opened afterwards says the same thing the row does. A screen
+        whose two views of one channel could disagree would be a screen
+        nobody could trust.
+
+        The sentence is not repeated here: the app says it on every path --
+        ``_channel_edited`` ends with ``_say_edit`` -- and a sentence
+        written twice is a status line that flickers.
+        """
+        if ok:
+            self._adopt(change, change.sent_values)
+
+    def channel_undone(self, changes: Sequence[Tuple[ChannelChange, bool]]) -> None:
+        """``z`` put values back, so the rows say what the unit has now.
+
+        The same redraw :meth:`channel_result` does, for the same reason. A
+        ``z`` whose send failed leaves the row alone, because nothing was
+        put back: the row still says what the unit has.
+        """
+        for change, ok in changes:
+            if ok:
+                self._adopt(change, change.restore_values)
+
+    def _adopt(self, change: ChannelChange, values: Tuple[int, ...]) -> None:
+        """Show one channel's new values, in the row and in the dump copy.
+
+        ``values`` is ``change.sent_values`` after a write and
+        ``change.restore_values`` after an undo; both have already been
+        verified by a read-back, which is what makes writing them here
+        honest.
+        """
+        entry = self._dump.channel(change.channel)
+        if entry is None:  # pragma: no cover - the edit was on a real channel
+            return
+        for name, value in zip(change.fields, values, strict=True):
+            setattr(entry, name, value)
+        self._draw_row(change.channel)
+
+    def _draw_row(self, channel: int) -> None:
+        """Redraw one row's cells.
+
+        ``DataTable.update_cell`` rather than ``refresh()``, which would
+        repaint the cells the table already has and never recompute them --
+        an edit that appears to do nothing. Guarded, because a worker can
+        finish after the screen it was started from has closed.
+        """
+        entry = self._dump.channel(channel)
+        if entry is None:  # pragma: no cover - the caller checked
+            return
+        try:
+            table = self.query_one("#multi-table", DataTable)
+            for cell, value in zip(CELLS, self._row(entry), strict=True):
+                table.update_cell(str(channel), cell.key, value)
+        except Exception:  # pragma: no cover - the screen closed underneath
+            return
 
     def _detail(self, entry: params.ChannelState) -> ChannelDetailScreen:
         """One channel, everything the dump says about it, and nothing that
@@ -465,6 +1220,328 @@ class MultiScreen(ModalScreen[None]):
             rom_name=self._rom_name(entry.rom_id),
             mode_note="" if self._multitimbral else mode_summary(self._mode),
         )
+
+
+class SoundPickerScreen(ModalScreen[Optional[roms.Preset]]):
+    """Pick a sound for a channel by name, not by a preset number.
+
+    The ``plays`` column is the resolved name, and nobody knows which
+    preset number "Velvet Bell" is. So `s` opens this: every bank the app
+    lists on the left, that bank's presets on the right with their names
+    from the catalog, and the three numbers that select one -- Program
+    Change, Bank Select LSB, Bank Select MSB -- on every row, in the order
+    a sequencer's MIDI track asks for them.
+
+    The shape is the sibling rxved's ``PatchPickerScreen``, and it is worth
+    saying which parts of it p2ked can be given and which it cannot:
+
+    * **The bank pane** matches. p2ked's bank table is ``roms.bank_ids()``
+      -- 74 banks, and the app hands in the same visible set its own browser
+      shows, so a picker and a browser cannot disagree about what exists.
+    * **The favourites cycle** matches, on ``v``, for the same three views
+      the browser steps through. A picker with no store to read -- the app
+      started without ``--favorites`` -- has the one view only, rather than
+      promising two it cannot fill.
+    * **A name search** is *not* in rxved's multi picker; its ``/`` search
+      lives on the browser, and the picker scrolls. p2ked's catalog can
+      search, and a 128-preset bank is a long scroll, so this screen adds
+      the filter box. That is the one filter here rxved does not have.
+
+    What a pick writes is one operation: ``rom_id``, ``preset`` and
+    ``bank_map`` together, because the unit takes the three together (see
+    :meth:`p2ked.app.P2kedApp.action_channel_sound`). The ROM ID is the
+    ROM's Bank Select MSB, which is the number ``roms.rom_for_simm_id``
+    reads a reported SIMM ID as -- confirmed against hardware for three
+    ROMs, which is not all nineteen, and the sentence below the table says
+    so rather than leaving a column of numbers looking transcribed.
+    """
+
+    DEFAULT_CSS = """
+    SoundPickerScreen { align: center middle; }
+    SoundPickerScreen > Vertical {
+        width: 104; height: 90%; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    SoundPickerScreen DataTable { height: 1fr; width: 1fr; }
+    SoundPickerScreen #banks { width: 34; height: 1fr; }
+    SoundPickerScreen .note { height: auto; color: $text-muted; padding-top: 1; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("q", "cancel", "Cancel"),
+        # `v` is the favourites view, on the family's own key -- the same
+        # one the browser uses, for the same three views.
+        Binding("v", "cycle_view", "Favourites view"),
+        Binding("tab", "switch_pane", "Switch pane"),
+    ]
+
+    #: The three views ``v`` steps through, named after the app's own.
+    VIEW_ALL = "all"
+    VIEW_BANK_FAVOURITES = "bank-favourites"
+    VIEW_ALL_FAVOURITES = "all-favourites"
+    VIEW_CYCLE = (VIEW_ALL, VIEW_BANK_FAVOURITES, VIEW_ALL_FAVOURITES)
+    VIEW_LABELS = {
+        VIEW_ALL: "all presets in this bank",
+        VIEW_BANK_FAVOURITES: "this bank's favourites",
+        VIEW_ALL_FAVOURITES: "every favourite, all banks",
+    }
+
+    #: What the ROM column reads the SIMM ID as, in the app's own words.
+    #: Reused rather than reworded: it is the sentence ``p2kcli hardware``
+    #: prints and the device screen shows, and a second phrasing of the same
+    #: caveat is a caveat that drifts.
+    ROM_NOTE = (
+        "The ROM ID is that ROM's Bank Select MSB. No E-MU document to hand "
+        "says a SIMM ID and an MSB are the same number; it was confirmed "
+        "against hardware for three ROMs on 2026-09-12, which is not all "
+        "twenty."
+    )
+
+    def __init__(
+        self,
+        catalog,
+        bank_ids: Sequence[str],
+        *,
+        favorites=None,
+        current: Optional[roms.Preset] = None,
+    ) -> None:
+        super().__init__()
+        self._catalog = catalog
+        self._bank_ids = list(bank_ids)
+        #: The favourites store, or ``None`` when the app has none.
+        self._favorites = favorites
+        #: The preset the channel is on now, marked in the list and put
+        #: under the cursor. ``None`` when p2ked cannot name the slot.
+        self._current = current
+        #: Index into VIEW_CYCLE, cycled by `v`.
+        self._view = 0
+        #: What is typed in the filter box. Empty means "the bank's own
+        #: presets"; anything else searches every bank, the way the
+        #: browser's `/` does.
+        self._filter = ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(self._title(), id="picker-title")
+            yield Input(
+                placeholder="filter names — empty shows this bank",
+                id="filter",
+            )
+            with Horizontal():
+                yield DataTable(id="sound-banks", cursor_type="row", zebra_stripes=True)
+                yield DataTable(id="sound-slots", cursor_type="row", zebra_stripes=True)
+            yield Static(self.ROM_NOTE, classes="note")
+            yield Static(
+                "[dim]tab pane · type to filter names · v favourites view · "
+                "⏎ picks · esc cancels[/dim]",
+                classes="note",
+            )
+
+    def on_mount(self) -> None:
+        banks = self.query_one("#sound-banks", DataTable)
+        banks.add_column("bank", key="bank")
+        for bank_id in self._bank_ids:
+            entry = roms.bank(bank_id)
+            banks.add_row(f"{entry.label} ({entry.id})", key=bank_id)
+        banks.focus()
+        self._fill_slots()
+
+    # --- the two panes -----------------------------------------------------
+
+    def _title(self) -> str:
+        view = self.VIEW_CYCLE[self._view]
+        if self._filter.strip():
+            which = f"matching “{self._filter.strip()}”"
+        else:
+            which = self.VIEW_LABELS[view]
+        return f"[b]Pick a sound[/b]  [dim]· {which}[/dim]"
+
+    def _bank_id(self) -> Optional[str]:
+        table = self.query_one("#sound-banks", DataTable)
+        if not table.row_count:
+            return None
+        return table.coordinate_to_cell_key(table.cursor_coordinate)[0].value
+
+    def _slot_name(self, entry: roms.Preset) -> str:
+        """What the catalog calls this slot. Empty when it cannot.
+
+        An empty string rather than a placeholder: a row reading "unknown"
+        claims something the catalog did not say, and a user bank has no
+        printed name to fall back on at all.
+        """
+        return self._catalog.display_name(entry.bank_id, entry.program_change)
+
+    def _visible_slots(self) -> List[roms.Preset]:
+        """The rows the slot pane shows, for the view and the filter.
+
+        A filter searches every bank, because that is the question being
+        asked: "which bank is Velvet Bell in" is what somebody types a name
+        for. With no filter the pane shows the bank the left-hand cursor is
+        on, exactly as the browser does.
+        """
+        needle = self._filter.strip().lower()
+        if needle:
+            hits = []
+            # The hit carries its name and whether the printed list disagrees
+            # about that slot; the slot is all a picker needs, because the
+            # name is fetched again from the same catalog when the row is
+            # drawn -- one source, not two answers to the same question.
+            for bank_id, program_change, *_rest in self._catalog.search(needle):
+                try:
+                    hits.append(roms.preset(bank_id, program_change))
+                except LookupError:
+                    # A hit in a bank this build no longer defines.
+                    continue
+            return hits
+        view = self.VIEW_CYCLE[self._view]
+        if view == self.VIEW_ALL:
+            bank_id = self._bank_id()
+            return roms.presets(bank_id) if bank_id is not None else []
+        if self._favorites is None:
+            return []
+        if view == self.VIEW_BANK_FAVOURITES:
+            bank_id = self._bank_id()
+            if bank_id is None:
+                return []
+            marked = self._favorites.keys_for_bank(bank_id)
+            return [e for e in roms.presets(bank_id) if e.program_change in marked]
+        rows = []
+        for favourite in self._favorites.all(order="bank"):
+            try:
+                rows.append(roms.preset(favourite.bank_id, favourite.number))
+            except LookupError:
+                continue
+        return rows
+
+    def _fill_slots(self) -> None:
+        table = self.query_one("#sound-slots", DataTable)
+        table.clear(columns=True)
+        for label, key in (
+            ("♥", "fav"),
+            ("bank / #", "number"),
+            ("name", "name"),
+            ("PC", "pc"),
+            ("LSB", "lsb"),
+            ("MSB", "msb"),
+        ):
+            table.add_column(label, key=key)
+        for entry in self._visible_slots():
+            name = self._slot_name(entry)
+            if self._favorites is not None and self._favorites.get(
+                entry.bank_id, entry.program_change
+            ):
+                mark = "[b]♥[/b]"
+            else:
+                mark = ""
+            if self._matches(entry):
+                name += "  [b]← current[/b]"
+            table.add_row(
+                mark,
+                f"{entry.bank_id} {entry.number:03d}",
+                name,
+                str(entry.program_change),
+                str(entry.lsb),
+                str(entry.msb),
+                key=entry.key,
+            )
+        self.query_one("#picker-title", Label).update(self._title())
+
+    def _matches(self, entry: roms.Preset) -> bool:
+        if self._current is None:
+            return False
+        return (self._current.bank_id, self._current.number) == (
+            entry.bank_id,
+            entry.number,
+        )
+
+    def _slot(self) -> Optional[roms.Preset]:
+        table = self.query_one("#sound-slots", DataTable)
+        if not table.row_count:
+            return None
+        key = table.coordinate_to_cell_key(table.cursor_coordinate)[0].value
+        if not key:  # pragma: no cover - a row always has a key
+            return None
+        bank_id, _, number = key.rpartition(":")
+        try:
+            return roms.preset(bank_id, int(number))
+        except (LookupError, ValueError):
+            return None
+
+    # --- messages ----------------------------------------------------------
+
+    def on_data_table_row_highlighted(self, event) -> None:
+        if event.data_table.id != "sound-banks":
+            return
+        # The bank pane only chooses rows while the pane is showing a bank;
+        # in the all-favourites view every bank is already listed, and in a
+        # name search the bank is irrelevant.
+        if (
+            self._filter.strip()
+            or self.VIEW_CYCLE[self._view] == self.VIEW_ALL_FAVOURITES
+        ):
+            return
+        self._fill_slots()
+
+    def on_data_table_row_selected(self, event) -> None:
+        if event.data_table.id == "sound-slots":
+            picked = self._slot()
+            if picked is not None:
+                self.dismiss(picked)
+            return
+        if event.data_table.id == "sound-banks":
+            # Enter on a bank is "show me its presets", which the highlight
+            # has already done -- so it moves the cursor into them.
+            self.query_one("#sound-slots", DataTable).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "filter":
+            return
+        self._filter = event.value
+        self._fill_slots()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Enter in the filter box goes to the first match."""
+        if event.input.id != "filter":
+            return
+        self.query_one("#sound-slots", DataTable).focus()
+
+    # --- actions -----------------------------------------------------------
+
+    def action_cancel(self) -> None:
+        """``escape`` and ``q``: nothing was picked."""
+        self.dismiss(None)
+
+    def action_switch_pane(self) -> None:
+        """``tab``: filter box, banks, presets -- round again.
+
+        Three stops rather than rxved's two, because the filter box is a
+        third thing to be in and a two-stop cycle would leave it reachable
+        only by mouse.
+        """
+        focused = self.focused
+        if isinstance(focused, Input):
+            self.query_one("#sound-banks", DataTable).focus()
+        elif isinstance(focused, DataTable) and focused.id == "sound-banks":
+            self.query_one("#sound-slots", DataTable).focus()
+        else:
+            self.query_one("#filter", Input).focus()
+
+    def action_cycle_view(self) -> None:
+        """``v``: every preset in this bank, its favourites, all favourites.
+
+        The same three views the browser's own table has, so the favourites
+        marked there can be picked from here too. With no store the cycle
+        does not move, and says why rather than showing an empty list.
+        """
+        if self._favorites is None:
+            self.query_one("#picker-title", Label).update(
+                "[b]Pick a sound[/b]  [dim]· no favourites store: "
+                "start with --favorites[/dim]"
+            )
+            return
+        self._view = (self._view + 1) % len(self.VIEW_CYCLE)
+        self._fill_slots()
 
 
 class MasterEditScreen(ModalScreen[None]):
@@ -642,7 +1719,9 @@ class MasterEditScreen(ModalScreen[None]):
         with Vertical():
             yield Label(f"[b]{self._title}[/b]")
             yield DataTable(id=self.TABLE_ID, cursor_type="row", zebra_stripes=True)
-            yield Static(self._report(), classes="note")
+            # `_literal`, because the note quotes the specification and its
+            # own sentence carries `[s]` in it -- see the helper.
+            yield Static(_literal(self._report()), classes="note")
             # The screen's own status line. Without it everything the
             # screens in here say -- a refusal, a result, an undo report
             # -- lands on the app's `#status`, which is the dimmed
@@ -1109,11 +2188,14 @@ class ValuePickerScreen(ModalScreen[Optional[int]]):
 class ChannelDetailScreen(ModalScreen[None]):
     """One MIDI channel, its nine values, and nothing that writes.
 
-    Read-only, and it says why rather than leaving a disabled control that
-    teaches nothing: p2ked reads all nine values out of one Setup Dump,
-    but *setting* one needs its parameter ID and no document to hand lists
-    those. The hint is :data:`CHANNEL_EDIT_HINT`, and it points at
-    ``docs/TODO`` item 47's read-only probe.
+    Read-only, and it says where the writing is rather than leaving a
+    reader to conclude it cannot be done: the editing gestures live on the
+    multi screen's table, one cell at a time, and this screen is the same
+    nine values in the words the manual uses. :data:`CHANNEL_EDIT_HINT`
+    explains what a per-channel edit actually sends, and it points at
+    ``docs/TODO`` item 47's read-only probe -- the ID-based alternative
+    that would cost one small frame per field instead of a whole-setup
+    write.
 
     The nine values are spelled the way the manual spells them -- ``use
     preset`` for a mix output of -1, ``on``/``OFF`` for the two flags --
@@ -1159,6 +2241,10 @@ class ChannelDetailScreen(ModalScreen[None]):
 
     def _value_lines(self) -> List[str]:
         entry = self._entry
+        # The four names spec p. 41 gives the arpeggiator field, where the
+        # value is one of the four; the bare number where it is not, rather
+        # than the nearest word.
+        arp = entry.arp - ARP_BASE
         shown = {
             "preset": f"{entry.preset}",
             "volume": f"{entry.volume} of 127",
@@ -1168,7 +2254,7 @@ class ChannelDetailScreen(ModalScreen[None]):
                 if entry.mix_output < 0
                 else f"send {entry.mix_output + 1}"
             ),
-            "arp": f"{entry.arp}",
+            "arp": ARP_NAMES[arp] if 0 <= arp < len(ARP_NAMES) else f"{entry.arp}",
             "enable": "on" if entry.enable else "OFF",
             "bank_map": f"{entry.bank_map}",
             "receive_program_change": "on" if entry.receive_program_change else "OFF",
@@ -1203,7 +2289,16 @@ class ChannelDetailScreen(ModalScreen[None]):
         with Vertical():
             yield Label("[b]Multi — channel detail[/b]")
             yield Static("\n".join(body), classes="body")
-            yield Static(CHANNEL_EDIT_HINT, classes="hint")
+            # Where the editing is, because a reader who has just read nine
+            # values will want to change one and this screen will not do it.
+            yield Static(
+                "Editing is on the table, one cell at a time: ⏎ on a value, "
+                "+ and -, space on a switch, s for a sound.",
+                classes="hint",
+            )
+            # `_literal`, because the sentence quotes the specification and
+            # carries `[s]` in it -- see the helper.
+            yield Static(_literal(CHANNEL_EDIT_HINT), classes="hint")
             yield Static("[dim]esc / q to close[/dim]", classes="hint")
 
     def action_close(self) -> None:

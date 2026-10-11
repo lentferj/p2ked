@@ -151,6 +151,17 @@ KEY_HINTS = (
     # a key that changes the unit and is documented nowhere is a key that
     # gets pressed by accident.
     "w write gate",
+    # The per-channel editing gestures. All four are the multi screen's
+    # own, bound on the screen for the reason `w` and `x` are bound on the
+    # edit screens -- a modal cuts the app's binding chain, so a legend
+    # entry served only by the app would be dead the moment the screen they
+    # belong to was open. They are in the legend anyway, because each of
+    # them changes the unit and the footer of a modal is not where a reader
+    # looks to find out that a key exists. Declared to the family in
+    # tests/test_conformance.py's EXTRAS with the rest.
+    "+ - nudge",
+    "space toggle",
+    "s pick sound",
     "z undo",
     "Z undo all",
     "i device",
@@ -1859,15 +1870,27 @@ class P2kedApp(App):
         ``on_edit_fx`` is handed in for the same reason again: ``x`` here
         opens the FX editor, which is the app's worker and the app's screen
         to build.
+
+        ``editor``, ``on_edit_channel`` and ``on_channel_sound`` are the
+        per-channel write path's: the screen offers an edit on a cell, and
+        the gate, the range check, the worker and the read-back are all
+        here. ``bank_ids`` and ``favorites`` are the sound picker's, handed
+        in so a picker cannot disagree with the browser about which banks
+        there are or which presets are marked.
         """
         screen = MultiScreen(
             dump,
             self.catalog,
             mode,
             fitted=self.installed,
+            bank_ids=self._bank_ids,
+            favorites=self.favorites,
+            editor=self._editor,
             on_edit=self.action_edit_master,
             on_edit_fx=self.action_edit_fx,
             on_undo=self._undo_master_edits,
+            on_edit_channel=self.action_edit_channel,
+            on_channel_sound=self.action_channel_sound,
         )
         screen.on_refresh = self._refresh_multi
         self.push_screen(screen)

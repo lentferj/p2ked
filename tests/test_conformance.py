@@ -36,6 +36,12 @@ from vinsynlib import conformance
 #: (the family has no FX block to edit), it is bound at App level *and* on
 #: both edit screens, and a legend that promised it only in the browser
 #: would be a legend the multi screen's footer contradicts.
+#:
+#: `+ - nudge`, `space toggle` and `s pick sound` are the multi screen's
+#: per-channel editing gestures. They are *screen* bindings rather than App
+#: ones, because a modal cuts the app's binding chain -- which is why the
+#: multi screen's own footer names them as well. They are declared here for
+#: the reason `x` is: each of them changes the unit.
 EXTRAS = (
     "m channels",
     "v favourites view",
@@ -43,6 +49,9 @@ EXTRAS = (
     "a all ROMs",
     "x master FX",
     "w write gate",
+    "+ - nudge",
+    "space toggle",
+    "s pick sound",
     "z undo",
     "Z undo all",
 )
