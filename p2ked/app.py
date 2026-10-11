@@ -143,18 +143,32 @@ class RatingFilter:
         return f"rating {'≥' if self.at_least else '='}{self.stars}"
 
 
-#: Every state ``V`` can leave the list in, in the order the picker shows
-#: them: the six exact thresholds, then the five floors that are real.
+#: Every state ``V`` can leave the list in: the six exact thresholds and
+#: the five floors that are real.
 #:
-#: ``≥0`` is deliberately absent. At least *nothing* matches everything,
-#: which is not a filter; exactly-nothing is a real one, and the question
-#: it answers -- which of my favourites have I not rated yet -- is the one
-#: this filter gets asked most. No filter at all is ``None``, not a
-#: twelfth row, for the reason :class:`RatingFilter` says.
+#: ``≥0`` is deliberately absent, and this tuple is where that decision
+#: lives -- so the picker's ``≥`` cell on the "no rating" row is blank
+#: because the state does not exist, rather than because a second copy of
+#: the rule said so. At least *nothing* matches everything, which is not a
+#: filter; exactly-nothing is a real one, and the question it answers --
+#: which of my favourites have I not rated yet -- is the one this filter
+#: gets asked most. No filter at all is ``None``, not a twelfth state, for
+#: the reason :class:`RatingFilter` says.
 RATING_FILTER_STATES: Tuple[RatingFilter, ...] = tuple(
     [RatingFilter(stars=stars) for stars in range(6)]
     + [RatingFilter(stars=stars, at_least=True) for stars in range(1, 6)]
 )
+
+
+def _has_floor_at(stars: int) -> bool:
+    """Whether a filter at this many stars has a floor at all.
+
+    Reads :data:`RATING_FILTER_STATES` rather than repeating "not at
+    nothing" a third time: a rule with three copies is a rule with three
+    chances to disagree with itself.
+    """
+    return RatingFilter(stars=stars, at_least=True) in RATING_FILTER_STATES
+
 
 #: The legend. The shared blocks in the family's order, with this tool's own
 #: hints in the one place the shared legend leaves room for them -- after
@@ -440,7 +454,7 @@ class RatingFilterScreen(ModalScreen[Optional[RatingFilter]]):
             # the table as well as dead under the cursor, because a cell
             # that looks empty and toggles anyway is the worst of both.
             at_least = (
-                stars > 0
+                _has_floor_at(stars)
                 and self._current is not None
                 and self._current.at_least
                 and self._current.stars == stars
@@ -480,7 +494,10 @@ class RatingFilterScreen(ModalScreen[Optional[RatingFilter]]):
         # cursor itself or from the fallback above.
         self._radio_column = which
         at_least = which == 1
-        if at_least and row == 0:
+        if at_least and not _has_floor_at(row):
+            # At least *nothing*: not a state, so not a cell. The table
+            # leaves it blank as well, which is why the check is asked of
+            # the states rather than of the row number.
             return
         # Toggling the cell that is already on clears the filter; toggling
         # any other one moves it. Either way exactly one cell is on
@@ -1813,8 +1830,9 @@ class P2kedApp(App):
         """Every rating in the store, as ``{bank id: {number: rating}}``.
 
         One query for the whole set rather than a ``get`` per row, for the
-        reason :meth:`_favorite_keys` is one: a bank is over a hundred rows
-        redrawn on every cursor move, and the store is behind a lock.
+        reason the favourite marker's comment in :meth:`_fill_presets`
+        gives: a bank is over a hundred rows redrawn on every cursor move,
+        and the store is behind a lock.
 
         A rating of 0 is left out rather than stored as a zero, because 0
         is what :func:`p2k.favorites.rating_cell` renders as a blank and
