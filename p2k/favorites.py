@@ -68,8 +68,14 @@ def default_path() -> str:
     return _favorites.default_path(APP_NAME, DB_NAME)
 
 
-def rating_cell(rating: int) -> str:
+def rating_cell(rating: int, *, scale: int = 5) -> str:
     """How a rating reads in a table: the filled stars, then the rest dim.
+
+    The signature and the glyphs are now the library's too:
+    :func:`vinsynlib.favorites.rating_cell` was added in vinsynlib 0.4.0
+    and renders the same cell, ``scale`` included. This copy is kept for one
+    release and the next phase replaces it with the library's; the reasoning
+    below is why it was written here first, and is the record of that.
 
     Value *and* scale, because ``★★★`` is ambiguous where ``★★★··`` is not,
     and zero is blank rather than five dots -- blank for "not rated", the
@@ -89,9 +95,9 @@ def rating_cell(rating: int) -> str:
     show a rating, and a second copy of a glyph is exactly the kind of
     thing that drifts.
     """
-    if not rating:
+    if rating == 0:
         return ""
-    return "★" * rating + "·" * (5 - rating)
+    return "★" * rating + "·" * (scale - rating)
 
 
 class Favorites(_favorites.Favorites):

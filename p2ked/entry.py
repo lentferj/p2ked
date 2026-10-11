@@ -40,16 +40,22 @@ from __future__ import annotations
 
 import sys
 
-#: The minimum that has the API this project was written against.
+#: The minimum this project is developed and tested against. Published
+#: since 0.2.0; ``0.4.0`` is the family's current line and the one the
+#: suite here was validated against when the pin was raised.
 #:
-#: ``0.2.0`` is the version that added ``midi.open_remembered_or_swept``'s
-#: ``on_fallback`` hook, the per-file ownership guard in the settings cache,
-#: and the ``__version__`` whose absence used to be undetectable.
-MINIMUM = (0, 2, 0)
+#: It is also the first release to export ``favorites.rating_cell``, the
+#: shared rating glyph. :mod:`p2k.favorites` still carries p2ked's own copy
+#: of that function for one more release, so the floor is set where the
+#: consolidation onto the library's copy can land rather than being raised
+#: again with it. The call surface p2ked uses resolved on 0.2.0 as well, so
+#: this is a "the line we support and test" floor, not a hard API break --
+#: but a user below it is told here rather than finding out at runtime.
+MINIMUM = (0, 4, 0)
 
-#: Where to get it. On PyPI since 0.2.0; the floor is the version that added
-#: the API this project was written against (see MINIMUM).
-SOURCE = "vinsynlib>=0.2.0"
+#: Where to get it. On PyPI since 0.2.0; the floor is the release this
+#: project is developed and tested against (see MINIMUM).
+SOURCE = "vinsynlib>=0.4.0"
 
 
 def _release_parts(version: str, width: int) -> tuple[int, ...] | None:

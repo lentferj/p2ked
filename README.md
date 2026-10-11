@@ -336,12 +336,12 @@ python3 -m venv --system-site-packages .venv
 .venv/bin/pip install -e .
 ```
 
-Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** — the
-shared base of this family of terminal instrument tools: the settings cache,
-the favourites database, the keymap and legend, the command line and the port
-listing. It comes from PyPI with the rest. To develop against a *working copy*
-of it instead of the published one, install that alongside — it shadows the
-published version in this environment only:
+Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** 0.4.0
+or newer — the shared base of this family of terminal instrument tools: the
+settings cache, the favourites database, the keymap and legend, the command
+line and the port listing. It comes from PyPI with the rest. To develop
+against a *working copy* of it instead of the published one, install that
+alongside — it shadows the published version in this environment only:
 `.venv/bin/pip install --no-deps -e ../vinsynlib`.
 
 `--system-site-packages` here is deliberate: ALSA's sequencer and the
@@ -567,6 +567,13 @@ disagree, `make check` is the answer — the Makefile is the source of
 truth and every tool reads its configuration from `pyproject.toml`.
 
 ### Versions
+
+The shared library's floor is `vinsynlib>=0.4.0`, declared in
+`pyproject.toml` and mirrored in `p2ked/entry.py`'s `MINIMUM` and `SOURCE`.
+That is the family's current line and the release this project is developed
+and tested against. `vinsynlib` is a published index dependency, so it is
+not repeated in `requirements-dev.txt`; `pip-audit` renders it from
+`pyproject.toml`, and the lockfile pins only the tools run by `make check`.
 
 `requirements-dev.txt` is the lockfile: every tool and every transitive
 dependency, pinned to an exact version, so a check means the same thing on

@@ -16,7 +16,7 @@ dependencies = [
     # declared rather than relied on transitively through textual. deptry
     # reports DEP003 without this.
     "rich>=14.2",
-    "vinsynlib>=0.2.0",
+    "vinsynlib>=0.4.0",
 ]
 
 [project.optional-dependencies]
