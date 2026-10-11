@@ -57,7 +57,7 @@ from typing import cast
 import pytest
 
 from p2k import messages as m
-from p2ked.masteredit import MASTER_BY_ID, probe_channel_ids
+from p2ked.masteredit import MASTER_BY_ID, mutate_channel, probe_channel_ids
 
 #: How long each probe read waits before counting a parameter ID as silent.
 #: A Proteus answers a request it cannot serve with *silence*, so an ID
@@ -284,4 +284,59 @@ class TestHardwareOneWrite:
                 unit.set_parameter(bypass.parameter_id, before)
         assert unit.read_parameter(bypass.parameter_id) == before, (
             "the FX bypass was not put back; set it back on the front panel"
+        )
+
+
+class TestHardwareTheDumpWritesBack:
+    """The per-channel route, meeting the machine for the first time.
+
+    Everything above reads, or writes one master parameter. This is the
+    route the multi screen's per-channel edits take -- the unit
+    "receive[s] and understand[s] the old setup dump" (spec p. 29), so an
+    edit is *read the live dump, change the one field, send it back* -- and
+    no unit has ever received one from p2ked. RESOLUTION_NOTES §13 records
+    what the first session must therefore do: send back a dump that was not
+    changed, and compare. If that round trip is clean, the edit below is the
+    same route with one field moved; if it is not clean, no per-channel edit
+    may be written at all, and this is the class where that shows up first.
+    """
+
+    def test_an_unmodified_dump_sent_back_changes_nothing(self, unit) -> None:
+        before = unit.read_setup()
+        unit.send_setup_dump(before)
+        after = unit.read_setup()
+        assert m.encode_setup_dump(after, device=unit.device_id) == m.encode_setup_dump(
+            before, device=unit.device_id
+        ), (
+            "a dump sent back unchanged came back different: the encoder "
+            "does not reproduce what the unit sent, and no per-channel edit "
+            "may be written until it does"
+        )
+
+    def test_a_channel_field_edit_lands_and_is_restored(self, unit) -> None:
+        """Channel 1's volume, for about a second.
+
+        Audible, and put back in a ``finally`` whichever way the assertion
+        goes. One field moves -- the round-trip test above is what makes
+        that sentence true rather than hopeful -- and the gate and the
+        read-back are the app's: here the question is the wire, asked of the
+        same pure planner (:func:`~p2ked.masteredit.mutate_channel`) the
+        screen uses.
+        """
+        dump = unit.read_setup()
+        before = dump.channels[0].volume
+        target = 100 if before != 100 else 40
+        try:
+            unit.send_setup_dump(mutate_channel(dump, 0, {"volume": target}))
+            landed = unit.read_setup().channels[0].volume
+            assert landed == target, (
+                f"wrote channel 1 volume {target}, the unit reports {landed}"
+            )
+        finally:
+            if unit.read_setup().channels[0].volume != before:
+                unit.send_setup_dump(
+                    mutate_channel(unit.read_setup(), 0, {"volume": before})
+                )
+        assert unit.read_setup().channels[0].volume == before, (
+            "channel 1's volume was not put back; set it on the front panel"
         )
