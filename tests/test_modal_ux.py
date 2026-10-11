@@ -114,8 +114,27 @@ async def _open_master_edit(app, pilot):
 
 
 async def _open_multi(app, pilot):
-    await pilot.press("m")
-    await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
+    """``m``, and the multi screen that came up.
+
+    ``m`` is retried while the wire is busy: the app starts by reading a
+    bank of names off the unit on its own, and ``m`` is refused with "busy"
+    until that is done -- a read that takes a different number of event-loop
+    turns on every machine. One press and a wait made every test that opens
+    this screen a race with the app's own startup: the screen either came up
+    or the press was spent on the refusal, and nothing in the test could
+    tell which. Repeating the press until the screen is there is what a
+    reader does without thinking about it. Same fix, same reason, as
+    :func:`tests.test_multi_edits._open_multi`.
+    """
+    for _ in range(50):
+        await pilot.press("m")
+        for _ in range(10):
+            if isinstance(app.screen, MultiScreen):
+                break
+            await pilot.pause()
+        if isinstance(app.screen, MultiScreen):
+            break
+        await _wait_for(pilot, lambda: not app._busy)
     return app.screen
 
 
