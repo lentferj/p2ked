@@ -48,6 +48,7 @@ __all__ = [
     "Favorites",
     "data_dir",
     "default_path",
+    "rating_cell",
 ]
 
 #: The directory name used under whichever per-platform data root applies.
@@ -65,6 +66,32 @@ def data_dir() -> str:
 def default_path() -> str:
     """Where the favourites database lives unless ``--favorites`` says otherwise."""
     return _favorites.default_path(APP_NAME, DB_NAME)
+
+
+def rating_cell(rating: int) -> str:
+    """How a rating reads in a table: the filled stars, then the rest dim.
+
+    Value *and* scale, because ``★★★`` is ambiguous where ``★★★··`` is not,
+    and zero is blank rather than five dots -- blank for "not rated", the
+    same blank-means-absent the favourite marker column uses.
+
+    ``★`` and not ``*``, and that is this project's own decision rather than
+    the family's: ``*`` already means "this name disagrees with the
+    catalogue" in the preset table's name column, on the detail line under
+    it, in ``p2kcli find`` and in ``p2kcli names``. One glyph meaning two
+    things in one table is how the favourite marker came to be a heart --
+    and here it would be worse than a collision, because the two meanings
+    answer different questions: "the unit and the book disagree" is a fact
+    about a slot, and a rating is the user's own opinion of one.
+
+    Sibling rxved spells the cell the same way for the same reason. That is
+    the point of it living here rather than beside either front end: both
+    show a rating, and a second copy of a glyph is exactly the kind of
+    thing that drifts.
+    """
+    if not rating:
+        return ""
+    return "★" * rating + "·" * (5 - rating)
 
 
 class Favorites(_favorites.Favorites):

@@ -42,7 +42,15 @@ from vinsynlib import conformance
 #: ones, because a modal cuts the app's binding chain -- which is why the
 #: multi screen's own footer names them as well. They are declared here for
 #: the reason `x` is: each of them changes the unit.
+#:
+#: `* rating` and `V rating filter` are the favourite rating's own pair, and
+#: p2ked's own rather than the family's -- so they are declared here the way
+#: `v` is: `*` writes the rating of the slot under the cursor and `V` narrows
+#: the list to one. `*` is Textual's *asterisk* key, which is why
+#: tests/test_favorites.py has to say so before its legend check will pass.
 EXTRAS = (
+    "* rating",
+    "V rating filter",
     "m channels",
     "v favourites view",
     "C category",

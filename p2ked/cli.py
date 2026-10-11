@@ -471,6 +471,15 @@ def build_parser() -> argparse.ArgumentParser:
     # favorites=False: nothing here reads the favourites database, and a flag
     # accepted and then ignored teaches the user that a flag can lie -- worse
     # than no flag (vinsynlib's docs/UX-SPEC.md section 2).
+    #
+    # That is also the whole of the answer to "where is the rating surface on
+    # the pipe front end": a rating lives in the favourites database and
+    # nowhere else, so ordering or filtering by one would need a favourites
+    # listing to order -- a `fav` command p2kcli has never had, and inventing
+    # one to hang two flags off is the shape of thing the sentence above is
+    # about. The rating is the browser's: `*` writes it, `V` narrows by it,
+    # and `z` puts one back. tests/test_conformance.py keeps the flag
+    # forbidden here.
     cli.add_common_arguments(
         parser,
         port=True,

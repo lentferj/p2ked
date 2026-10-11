@@ -58,6 +58,7 @@ from textual.widgets import DataTable, Header, Label, Static
 
 from p2k import catalog as cat
 from p2k import roms
+from p2k.favorites import rating_cell
 from p2ked._report import say_connected, say_fallback, say_probing
 from p2ked.masteredit import (
     FX_PARAMETERS,
@@ -72,7 +73,12 @@ from p2ked.masteredit import (
     fields_of,
     mutate_channel,
 )
-from p2ked.multi import FXEditScreen, MasterEditScreen, MultiScreen
+from p2ked.multi import (
+    FXEditScreen,
+    MasterEditScreen,
+    MultiScreen,
+    ValuePickerScreen,
+)
 from p2ked.prompts import PromptScreen
 from vinsynlib import cli as vincli
 from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
@@ -108,6 +114,48 @@ VIEW_LABELS = {
     VIEW_ALL_FAVOURITES: "every favourite, all banks",
 }
 
+
+@dataclass(frozen=True)
+class RatingFilter:
+    """``stars``, and whether that many is a floor or an exact match.
+
+    Two widths rather than one because "show me the 3s" and "show me 3 and
+    up" are both real questions and neither implies the other. Absence --
+    no filter -- is ``None`` rather than a value, since at least one of the
+    rows below is genuinely "no rating".
+
+    The sibling rxved's shape, kept because it is the family's answer to
+    the same question and a rating filter that behaved differently there
+    would be a worse thing than a copy.
+    """
+
+    #: 0 means "no rating" as a category, not "no filter".
+    stars: int = 0
+    #: ``True`` for equal-or-greater, ``False`` for exactly.
+    at_least: bool = False
+
+    def matches(self, rating: int) -> bool:
+        return rating >= self.stars if self.at_least else rating == self.stars
+
+    @property
+    def label(self) -> str:
+        """For the subtitle and the sentence, said as one glance."""
+        return f"rating {'≥' if self.at_least else '='}{self.stars}"
+
+
+#: Every state ``V`` can leave the list in, in the order the picker shows
+#: them: the six exact thresholds, then the five floors that are real.
+#:
+#: ``≥0`` is deliberately absent. At least *nothing* matches everything,
+#: which is not a filter; exactly-nothing is a real one, and the question
+#: it answers -- which of my favourites have I not rated yet -- is the one
+#: this filter gets asked most. No filter at all is ``None``, not a
+#: twelfth row, for the reason :class:`RatingFilter` says.
+RATING_FILTER_STATES: Tuple[RatingFilter, ...] = tuple(
+    [RatingFilter(stars=stars) for stars in range(6)]
+    + [RatingFilter(stars=stars, at_least=True) for stars in range(1, 6)]
+)
+
 #: The legend. The shared blocks in the family's order, with this tool's own
 #: hints in the one place the shared legend leaves room for them -- after
 #: "n note", before "i device" -- so a reader's eye finds them in the same
@@ -130,6 +178,15 @@ KEY_HINTS = (
     "f favourite",
     "t tags",
     "n note",
+    # The rating pair, in the gap the family leaves for this tool's own
+    # keys and beside the annotations it belongs to: a rating hangs off a
+    # favourite exactly as tags and a note do. `*` writes and `V` narrows,
+    # which is the distinction `f` and `v` draw -- a read must not sit one
+    # shift away from a write, and `V` is as far from `v` as a shift gets
+    # while still reading as the same word. Declared to the family in
+    # tests/test_conformance.py's EXTRAS, the way `v` and `x` are.
+    "* rating",
+    "V rating filter",
     # `m` means channels in a browser everywhere in this family. Here that
     # was already true: the multi screen shows what every MIDI channel plays.
     "m channels",
@@ -204,6 +261,27 @@ class FavouriteChange:
     was_favourite: bool
 
 
+@dataclass(frozen=True)
+class RatingChange:
+    """One ``*`` press, so ``z`` can put the rating back.
+
+    A separate entry from :class:`FavouriteChange` rather than a field on
+    it, because the two are different questions: ``f`` asks *whether* a
+    slot is a favourite and ``*`` asks *how much* it is one, and the
+    answer an undo owes is the number that was there before. Folding the
+    rating into the toggle's entry would make an undo of one have to know
+    whether the other had ever been pressed.
+
+    Like it, and unlike every other kind on the timeline, the undo is a
+    write to the local favourites database and nothing else: no frame goes
+    out, and no MIDI operation is in it.
+    """
+
+    bank_id: str
+    number: int
+    was_rating: int
+
+
 class _Sayer(Protocol):
     """What a screen that can carry an edit sentence looks like.
 
@@ -222,8 +300,9 @@ class _Sayer(Protocol):
 #: What ``z`` can reverse. See :class:`EditChange` for why it is one list --
 #: and :class:`p2ked.masteredit.ChannelChange` for the entry that carries its
 #: own data, because undoing one of those is a whole-dump write rather than
-#: one parameter ID and value.
-Change = EditChange | FavouriteChange | ChannelChange
+#: one parameter ID and value. The two favourites-store entries are here for
+#: the reason the edits are: ``z`` reverses whichever came last.
+Change = EditChange | FavouriteChange | RatingChange | ChannelChange
 
 
 class ReportScreen(ModalScreen[None]):
@@ -253,6 +332,180 @@ class ReportScreen(ModalScreen[None]):
 
     def action_close(self) -> None:
         self.dismiss(None)
+
+
+class RatingFilterScreen(ModalScreen[Optional[RatingFilter]]):
+    """Pick a rating to narrow the list to, and how strictly.
+
+    A radio, not a checklist: at most one cell is on, because a row either
+    matches a rating or does not and there is nothing to accumulate. Two
+    columns for the same reason :class:`RatingFilter` has two widths --
+    "the 3s" and "3 and up" are different questions, and a key that flipped
+    between them would hide the one the reader did not pick.
+
+    The ``≥`` cell is missing from the "no rating" row on purpose. At least
+    *nothing* matches everything, which is not a filter; exactly-nothing is
+    a real one, and the question it answers -- which of my favourites have I
+    not rated yet -- is the one this filter gets asked most.
+
+    The cursor is a **cell** cursor, not a row cursor: the two radio columns
+    *are* the choice, so right steps between ``=`` and ``≥`` and the
+    highlighted cell itself says which one ``space`` is about to toggle. The
+    stars label to the right is read-only, and ``space`` on it goes to
+    whichever column was last actually toggled in rather than being a key
+    that does nothing.
+
+    The one difference from the picker on the master editor's enumerations:
+    ``enter`` is a ``priority`` binding rather than the table's own
+    ``RowSelected``, because the answer is a *cell* and that message carries
+    no column.
+    """
+
+    DEFAULT_CSS = """
+    RatingFilterScreen { align: center middle; }
+    RatingFilterScreen > Vertical {
+        width: 62; height: auto; border: thick $accent;
+        background: $surface; padding: 1 2;
+    }
+    RatingFilterScreen DataTable { height: auto; }
+    """
+
+    BINDINGS = [
+        # `toggle_cell` and not `action_toggle`: Textual's own DOMNode has
+        # one of those, for a CSS class, with a different signature -- the
+        # same clash the multi screen's own space binding names its way
+        # out of.
+        Binding("space", "toggle_cell", "Toggle"),
+        # `priority`, for the same reason the browser's Enter is not bound
+        # at all: a focused DataTable consumes Enter for its own row
+        # selection, so without this the key would do nothing and the only
+        # way out would be escape -- which throws the choice away.
+        Binding("enter", "accept", "Apply", priority=True),
+        Binding("x", "clear", "Clear"),
+        Binding("escape", "cancel", "Cancel"),
+        Binding("q", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, current: Optional[RatingFilter] = None) -> None:
+        super().__init__()
+        # What the app is showing, for a cancel to put back unchanged. Kept
+        # apart from `_current`, which the cursor edits: escape has to mean
+        # "leave it alone", and "cleared" is a *choice* made with `x` and
+        # then applied with enter.
+        self._opened_with = current
+        self._current = current
+        #: The radio column the cursor last toggled in, 0 for ``=`` and 1
+        #: for ``≥``. The stars label is read-only, and `space` on it would
+        #: otherwise be a key that does nothing at all.
+        self._radio_column = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("[b]Rating[/b] -- narrows whatever is already shown")
+            # `cell`, not `row`: with a row cursor `right` scrolls the table
+            # instead of moving the cursor, so the ≥ column would be
+            # unreachable and half the filter would be dead code.
+            yield DataTable(id="ratings", cursor_type="cell")
+            yield Static("[dim]space toggle   x clear   ⏎ apply   esc / q cancel[/dim]")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#ratings", DataTable)
+        for label, key in (("=", "exact"), ("≥", "at_least"), ("rating", "stars")):
+            table.add_column(label, key=key)
+        self._fill()
+        table.focus()
+
+    def _stars(self, stars: int) -> str:
+        """The threshold as it reads on the row: five cells, not three."""
+        if not stars:
+            return "no rating"
+        return rating_cell(stars)
+
+    def _fill(self) -> None:
+        table = self.query_one("#ratings", DataTable)
+        # `clear()` resets the cursor to (0, 0), which on a cell cursor also
+        # throws the user back to the `=` column -- so a toggle spent in `≥`
+        # would have to be paid for with another press of right. Save the
+        # whole coordinate, not just the row, and put it back afterwards.
+        where = table.cursor_coordinate
+        first = not table.row_count
+        table.clear()
+        for stars in range(6):
+            exact = (
+                self._current is not None
+                and not self._current.at_least
+                and self._current.stars == stars
+            )
+            # Nothing has no "at least": see the class docstring. Blank in
+            # the table as well as dead under the cursor, because a cell
+            # that looks empty and toggles anyway is the worst of both.
+            at_least = (
+                stars > 0
+                and self._current is not None
+                and self._current.at_least
+                and self._current.stars == stars
+            )
+            table.add_row(
+                "[b]x[/b]" if exact else " ",
+                "[b]x[/b]" if at_least else " ",
+                self._stars(stars),
+                key=str(stars),
+            )
+        # Not on the first fill: there is nothing to return to yet, and the
+        # table starts where it should anyway.
+        if table.row_count and not first:
+            table.cursor_coordinate = where
+
+    def _cell_under_cursor(self):
+        """``(row, which)``, or ``None`` if the cursor is nowhere useful."""
+        table = self.query_one("#ratings", DataTable)
+        row = table.cursor_row
+        if not 0 <= row < 6:
+            return None
+        column = table.cursor_column
+        if column not in (0, 1):
+            # The stars label: read-only, and a cell a reader passes over on
+            # the way to choosing a row. `space` here does nothing at all,
+            # which reads as a dead key -- so it toggles whichever radio
+            # column was last actually toggled in.
+            column = self._radio_column
+        return row, column
+
+    def action_toggle_cell(self) -> None:
+        cell = self._cell_under_cursor()
+        if cell is None:
+            return
+        row, which = cell
+        # The column the user is choosing in, whether it came from the
+        # cursor itself or from the fallback above.
+        self._radio_column = which
+        at_least = which == 1
+        if at_least and row == 0:
+            return
+        # Toggling the cell that is already on clears the filter; toggling
+        # any other one moves it. Either way exactly one cell is on
+        # afterwards, or none is.
+        on = (
+            self._current is not None
+            and self._current.stars == row
+            and self._current.at_least == at_least
+        )
+        self._current = None if on else RatingFilter(stars=row, at_least=at_least)
+        self._fill()
+
+    def action_clear(self) -> None:
+        self._current = None
+        self._fill()
+
+    def action_accept(self) -> None:
+        self.dismiss(self._current)
+
+    def action_cancel(self) -> None:
+        # The filter as it was when the screen opened, not as the cursor has
+        # left it: escape discards what was picked *in this screen* and
+        # changes nothing on the table behind it. Clearing is `x` and then
+        # enter -- a choice, not the same as walking away from one.
+        self.dismiss(self._opened_with)
 
 
 class P2kedApp(App):
@@ -290,6 +543,8 @@ class P2kedApp(App):
         Binding("right_square_bracket", "channel_up", "Channel +"),
         Binding("c", "pick_channel", "Channel"),
         Binding("f", "toggle_favorite", "Favourite"),
+        Binding("asterisk", "edit_rating", "Rating"),
+        Binding("V", "rating_filter", "Rating filter"),
         Binding("v", "cycle_favorites", "Favourites view"),
         Binding("t", "edit_tags", "Tags"),
         Binding("n", "edit_note", "Note"),
@@ -342,7 +597,7 @@ class P2kedApp(App):
 
     def watch_channel(self, channel: int) -> None:
         """Say it on the line that persists, wherever it was set."""
-        self.sub_title = self._channel_line()
+        self._update_subtitle()
 
     # --- the write gate ------------------------------------------------------
 
@@ -381,14 +636,14 @@ class P2kedApp(App):
         with no screen open. It is the app's because the worker is: see
         :meth:`_undo_master_edits`.
 
-        One change, not one edit: a favourite toggle made with ``f`` is
-        undoable here too, and ``z`` reverses whichever of the two came
-        last. See :class:`EditChange`.
+        One change, not one edit: a favourite toggle made with ``f`` and a
+        rating made with ``*`` are undoable here too, and ``z`` reverses
+        whichever came last. See :class:`EditChange`.
         """
         self._undo_master_edits(1)
 
     def action_undo_all(self) -> None:
-        """``Z``: every change there is, of either kind, newest first."""
+        """``Z``: every change there is, of any kind, newest first."""
         self._undo_master_edits(None)
 
     def _saying_screen(self) -> Optional[_Sayer]:
@@ -1069,13 +1324,13 @@ class P2kedApp(App):
 
         ``None`` means every change there is, which is what ``Z`` asks for.
 
-        **Three kinds, one timeline.** A master edit is reversed by sending
+        **Four kinds, one timeline.** A master edit is reversed by sending
         the value it replaced back over the wire, on a worker; a per-channel
         edit is reversed by re-reading the dump, putting that one field back
-        and sending the *dump* back; and a favourite toggle is reversed in
-        the local favourites store and **goes nowhere near the device**.
-        ``z`` reverses whichever came last, so the entries are kept in the
-        order they happened rather than one log per kind -- see
+        and sending the *dump* back; and a favourite toggle and a rating are
+        reversed in the local favourites store and **go nowhere near the
+        device**. ``z`` reverses whichever came last, so the entries are
+        kept in the order they happened rather than one log per kind -- see
         :class:`EditChange` and :class:`ChannelChange`.
 
         Each entry leaves the timeline as it is undone, so an undo that
@@ -1094,12 +1349,20 @@ class P2kedApp(App):
             return
         taken = self._changes[-wanted:]
         del self._changes[-wanted:]
-        # The local kind first, and with no wire involved at all: a
-        # favourite lives in SQLite, and undoing one is a write there. New
-        # ones are undone before old ones, like the edits after them.
-        favourites = [c for c in reversed(taken) if isinstance(c, FavouriteChange)]
-        for change in favourites:
-            self._undo_favourite(change)
+        # The two local kinds first, and with no wire involved at all: a
+        # favourite and its rating live in SQLite, and undoing one is a
+        # write there. New ones are undone before old ones, like the edits
+        # after them.
+        local = [
+            c for c in reversed(taken) if isinstance(c, (FavouriteChange, RatingChange))
+        ]
+        for change in local:
+            if isinstance(change, RatingChange):
+                self._undo_rating(change)
+            else:
+                self._undo_favourite(change)
+        favourites = sum(1 for c in taken if isinstance(c, FavouriteChange))
+        ratings = sum(1 for c in taken if isinstance(c, RatingChange))
         edits = sum(1 for c in taken if isinstance(c, EditChange))
         # Off the timeline, which is the authority: a ChannelChange carries
         # its own channel, field and previous value, so undoing one needs
@@ -1114,7 +1377,14 @@ class P2kedApp(App):
             # well as off the timeline is what leaves the two agreeing.
             plan = self._editor.undo_plan(edits)
             self._busy = True  # main thread, before the spawn; see _busy
-            self._undo_worker(plan, channels, len(favourites))
+            self._undo_worker(plan, channels, favourites, ratings)
+        elif favourites or ratings:
+            # No wire, so no worker and nothing to hand off: the local
+            # kinds were undone above and are already done, so the
+            # sentence is all that is left. Without it a `z` over nothing
+            # but a favourite toggle or a rating was indistinguishable
+            # from a dead key -- the work happened and nothing said so.
+            self._say_edit(self._undo_sentence([], favourites, ratings))
 
     def _undo_favourite(self, change: FavouriteChange) -> None:
         """Put one ``f`` press back. **Sends nothing: no MIDI here.**
@@ -1133,8 +1403,31 @@ class P2kedApp(App):
         if change.bank_id == self._current_bank:
             self._refill_keeping_place()
 
+    def _undo_rating(self, change: RatingChange) -> None:
+        """Put one ``*`` press back. **Sends nothing: no MIDI here.**
+
+        ``set_rating`` and not a remove-then-add, which is the same reason
+        ``f`` gives for ``toggle``: the row holds a rating, tags, a note and
+        the date it was made, and an undo is one keystroke from the press
+        that made the change. It writes straight to the store, so it also
+        works on a slot that is no longer a favourite -- the row survives
+        being toggled off, and putting a rating back on it has to too.
+
+        The table is rebuilt rather than one cell updated, because a rating
+        is the one change that can take a row *out* of the list: rate a
+        3-star down to nothing under a ``≥2`` filter and it no longer
+        belongs there. A row the filter does not describe is worse than a
+        stale cell -- it is the row that makes the list a lie.
+        """
+        if self.favorites is None:  # pragma: no cover - recorded only when not
+            return
+        self.favorites.set_rating(change.bank_id, change.number, change.was_rating)
+        self._refill_keeping_place()
+
     @work(thread=True)
-    def _undo_worker(self, plan, channels=(), favourites: int = 0) -> None:
+    def _undo_worker(
+        self, plan, channels=(), favourites: int = 0, ratings: int = 0
+    ) -> None:
         """Send everything ``z`` asked for back. **MIDI only.**
 
         Two verbs because the two kinds of edit are two shapes of write: a
@@ -1162,7 +1455,9 @@ class P2kedApp(App):
                 for change in channels:
                     undone.append((change, self._restore_channel(change)))
         finally:
-            self.call_from_thread(self._edit_undone, results, favourites, plan, undone)
+            self.call_from_thread(
+                self._edit_undone, results, favourites, ratings, plan, undone
+            )
 
     def _restore_channel(self, change: ChannelChange) -> bool:
         """Put one per-channel edit back. True only if the unit took it.
@@ -1187,7 +1482,9 @@ class P2kedApp(App):
             return False
         return after is not None and tuple(after) == change.restore_values
 
-    def _edit_undone(self, results, favourites: int = 0, plan=(), undone=()) -> None:
+    def _edit_undone(
+        self, results, favourites: int = 0, ratings: int = 0, plan=(), undone=()
+    ) -> None:
         self._busy = False
         screen = self._saying_screen()
         if screen is not None:
@@ -1203,29 +1500,40 @@ class P2kedApp(App):
             # multi screen's is the UI's to write; until it exists the
             # sentence below is the whole of the answer.
             screen.channel_undone(undone)
-        self._say_edit(self._undo_sentence(results, favourites, undone))
+        self._say_edit(self._undo_sentence(results, favourites, ratings, undone))
 
     def _undo_sentence(
         self,
         results,
         favourites: int,
+        ratings: int,
         undone: Sequence[Tuple[ChannelChange, bool]] = (),
     ) -> str:
-        """One sentence over the three kinds of undo.
+        """One sentence over the four kinds of undo.
 
-        A favourite is named first because it was undone first and needed no
-        wire. With no per-channel undo at all this is the editor's own
-        report, verbatim -- "undid 1 edit", "undid 1; the unit rejected 1
-        (parameters 259)" -- because that wording is what the MIDI half is
-        pinned to; the per-channel half adds its own, naming the channel and
-        the field rather than a parameter ID.
+        The local kinds are named first because they were undone first and
+        needed no wire -- one clause for both, because "undid 1 favourite
+        and 1 rating" is one thing the user did even though it is two
+        entries on the timeline. With no per-channel undo at all this is
+        the editor's own report, verbatim -- "undid 1 edit", "undid 1; the
+        unit rejected 1 (parameters 259)" -- because that wording is what
+        the MIDI half is pinned to; the per-channel half adds its own,
+        naming the channel and the field rather than a parameter ID.
         """
         parts = []
-        if favourites:
-            parts.append(
-                f"undid {favourites} favourite{'s' if favourites != 1 else ''}"
-            )
-        if results or not undone:
+        if favourites or ratings:
+            local = []
+            if favourites:
+                local.append(f"{favourites} favourite{'s' if favourites != 1 else ''}")
+            if ratings:
+                local.append(f"{ratings} rating{'s' if ratings != 1 else ''}")
+            parts.append("undid " + " and ".join(local))
+        # The editor's own report, verbatim, when there is anything to
+        # report -- and when nothing else was undone, because then it is
+        # the sentence that says so. A local kind is a whole clause of its
+        # own, so "nothing to undo" belongs to neither half of a sentence
+        # that already said what it did.
+        if results or not (parts or undone):
             parts.append(self._editor.undo_report(results))
         channels = self._editor.channel_undo_report(list(undone)) if undone else ""
         if channels:
@@ -1250,6 +1558,17 @@ class P2kedApp(App):
         #: in rather than passed to a gate that does not exist yet.
         self._allow_write = allow_write
         self.catalog = catalog if catalog is not None else cat.empty()
+        #: The rating filter, or ``None`` for none. Stacks on the view and
+        #: on the categories the same way the categories stack on the view
+        #: -- see :meth:`_visible`, which applies it last and over all
+        #: three.
+        #:
+        #: Above the ``channel`` assignment below and not beside the view
+        #: mode, because that assignment fires :meth:`watch_channel` while
+        #: the constructor is still running, and the watcher writes the
+        #: subtitle. It does not matter for the *channel*; it matters for
+        #: anything the subtitle says as well.
+        self.rating_filter: Optional[RatingFilter] = None
         self.channel = channel
         #: Injected rather than opened here, so a test never writes into the
         #: user's real database. rxved learned that one the hard way, by
@@ -1415,7 +1734,7 @@ class P2kedApp(App):
         # rather than only for as long as the sentence that announced a
         # change. rxved shows its send channel the same way -- a suffix on
         # the sub-title line -- and the family agrees on where to look.
-        self.sub_title = self._channel_line()
+        self._update_subtitle()
         banks = self.query_one("#bank-table", DataTable)
         for label, key in (
             ("bank", "bank"),
@@ -1432,16 +1751,31 @@ class P2kedApp(App):
         # character glued to the name: a name that starts with a marker
         # cannot be read straight down, and cannot be sorted or searched
         # without the marker getting in the way.
-        for label, key in (
-            ("♥", "fav"),
-            ("#", "pc"),
-            ("name", "name"),
-            ("PC", "pcn"),
-            ("LSB", "lsb"),
-            ("MSB", "msb"),
-            ("ROM#", "rom"),
+        for label, key, width in (
+            ("♥", "fav", None),
+            # The rating, beside the marker it belongs to: both are the
+            # favourites store's own, both are narrow, and a rating means
+            # nothing without a favourite -- one glance down the gutter
+            # answers "is this one of mine" and "how much" together. rxved
+            # puts its ★ column after the name instead; p2ked puts it here
+            # because its name column is the widest thing in the table and
+            # a five-wide block wedged between the name and the numbers
+            # pushes PC/LSB/MSB off a narrow terminal.
+            #
+            # Pinned to five rather than fitted to its content, for rxved's
+            # reason: fitted, it is five wide in a bank you have rated and
+            # one wide in a bank you have not, so the same column changes
+            # shape depending on data that has nothing to do with it -- and
+            # the row you just rated would jump sideways as it appeared.
+            ("★", "rating", 5),
+            ("#", "pc", None),
+            ("name", "name", None),
+            ("PC", "pcn", None),
+            ("LSB", "lsb", None),
+            ("MSB", "msb", None),
+            ("ROM#", "rom", None),
         ):
-            presets.add_column(label, key=key)
+            presets.add_column(label, key=key, width=width)
         self._fill_presets(self._current_bank)
         banks.focus()
         self.notify_status(
@@ -1474,6 +1808,28 @@ class P2kedApp(App):
         if self.favorites is None:
             return set()
         return self.favorites.keys_for_bank(bank_id)
+
+    def _rating_map(self) -> Dict[str, Dict[int, int]]:
+        """Every rating in the store, as ``{bank id: {number: rating}}``.
+
+        One query for the whole set rather than a ``get`` per row, for the
+        reason :meth:`_favorite_keys` is one: a bank is over a hundred rows
+        redrawn on every cursor move, and the store is behind a lock.
+
+        A rating of 0 is left out rather than stored as a zero, because 0
+        is what :func:`p2k.favorites.rating_cell` renders as a blank and
+        what a lookup of a slot with no row has to fall back to. Keeping
+        them apart in the map would be one more thing to be right about.
+        """
+        if self.favorites is None:
+            return {}
+        out: Dict[str, Dict[int, int]] = {}
+        for favourite in self.favorites.all():
+            if favourite.rating:
+                out.setdefault(favourite.bank_id, {})[favourite.number] = (
+                    favourite.rating
+                )
+        return out
 
     def _all_favourites(self) -> List[roms.Preset]:
         """Every favourite in every bank, in bank order then number.
@@ -1510,7 +1866,28 @@ class P2kedApp(App):
                 for e in entries
                 if self.category_of(e.bank_id, e.program_change) in self._categories
             ]
-        return entries
+        return self._by_rating(entries)
+
+    def _by_rating(self, entries: List[roms.Preset]) -> List[roms.Preset]:
+        """Narrow to the rating filter. A no-op when there is none.
+
+        Last of the three narrowings, and over all of them, for rxved's
+        reason: a rating filter applied only to the favourites views would
+        be a different filter depending on which view is showing, which is
+        how a keypress ends up doing something the user cannot predict.
+        ``v`` steps through three views and ``V`` is a filter over whichever
+        one is showing, so the order has to be the same in all three.
+        """
+        if self.rating_filter is None or self.favorites is None:
+            return entries
+        ratings = self._rating_map()
+        return [
+            e
+            for e in entries
+            if self.rating_filter.matches(
+                ratings.get(e.bank_id, {}).get(e.program_change, 0)
+            )
+        ]
 
     def _is_user_bank(self, bank_id: str) -> bool:
         entry = roms.bank(bank_id)
@@ -1628,6 +2005,10 @@ class P2kedApp(App):
             column.label = Text(
                 "bank / #" if self.view_mode == VIEW_ALL_FAVOURITES else "#"
             )
+        # One query for the whole store, for the reason the marker below
+        # takes one per bank: a bank is over a hundred rows redrawn on every
+        # cursor move, and the store is behind a lock.
+        ratings = self._rating_map()
         self._filling = True
         try:
             table.clear()
@@ -1642,6 +2023,7 @@ class P2kedApp(App):
                 across = self.view_mode == VIEW_ALL_FAVOURITES
                 fav_here = every_bank.get(entry.bank_id, set()) if across else marked
                 star = "[b]♥[/b]" if entry.program_change in fav_here else ""
+                rating = ratings.get(entry.bank_id, {}).get(entry.program_change, 0)
                 number = (
                     f"{roms.bank(entry.bank_id).label} {entry.program_change:03d}"
                     if across
@@ -1649,6 +2031,7 @@ class P2kedApp(App):
                 )
                 table.add_row(
                     star,
+                    rating_cell(rating),
                     number,
                     shown,
                     str(entry.program_change),
@@ -1753,6 +2136,73 @@ class P2kedApp(App):
 
         self.push_screen(PromptScreen("Note:", existing.note), apply)
 
+    def action_edit_rating(self) -> None:
+        """Rate the favourite under the cursor, 0 to 5.
+
+        The one favourite field with no key until now. The store has held a
+        rating since it was a store and ``z`` could put one back, but
+        nothing in this interface could produce the change -- which made
+        the store's own promise of "slots, ratings, tags" half true of the
+        front end. ``*`` writes it and ``V`` narrows by it.
+
+        The picker is the same one an enumerated master parameter opens,
+        and that is deliberate: a rating is six named things rather than a
+        number to type -- ``no rating`` is one of them -- and the answer is
+        the number of stars the slot is worth, so the store and the undo
+        log downstream cannot tell which door the value came through. Six
+        rows rather than a range to remember, because a rating that has to
+        be recalled is a rating nobody sets.
+        """
+        if self.favorites is None:
+            self.notify_status(
+                "no favourites database: pass --favorites, or let it use the "
+                "default path"
+            )
+            return
+        where, existing = self._favourite_under_cursor()
+        if where is None:
+            self.notify_status("no preset under the cursor to rate", refused=True)
+            return
+        if existing is None:
+            self.notify_status("not a favourite yet -- press f first", refused=True)
+            return
+        name = self.catalog.display_name(where[0], where[1])
+        # `rating_cell` for rows 1-5 rather than a row of bare stars, so
+        # the picker, the column it fills and the filter's own third
+        # column all spell a rating the same way. The first row is the
+        # words: a rating of nothing renders as a blank, and a blank row
+        # in a list of choices is not a choice.
+        choices = ["no rating"] + [rating_cell(stars) for stars in range(1, 6)]
+        self.push_screen(
+            ValuePickerScreen(f"Rating for {name}", choices, existing.rating),
+            lambda value: self._apply_rating(where, existing, value),
+        )
+
+    def _apply_rating(self, where, existing, value) -> None:
+        """Write one rating, and record it beside the favourite toggle."""
+        if value is None or self.favorites is None:
+            return
+        bank_id, number = where
+        self.favorites.set_rating(bank_id, number, value)
+        # Recorded so `z` can put the number back, in the same timeline as
+        # the toggle and the master edits: `z` reverses whichever came
+        # last. The rating *before* the keypress is what an undo restores,
+        # because that is the only thing this keypress can be held to.
+        self._changes.append(RatingChange(bank_id, number, existing.rating))
+        name = self.catalog.display_name(bank_id, number)
+        said = f"rated {value} {name}" if value else f"rating cleared {name}"
+        # The row can leave the list: rate a 3-star down to nothing under a
+        # `>= 2` filter and it no longer belongs there. A list that shrank
+        # and a slot that vanished are two different things to act on, so
+        # the sentence says which.
+        if not any(
+            e.bank_id == bank_id and e.program_change == number
+            for e in self._visible(bank_id)
+        ):
+            said += " -- no longer matches the rating filter"
+        self.notify_status(said)
+        self._refill_keeping_place()
+
     def action_cycle_favorites(self) -> None:
         """Step: all presets -> this bank's favourites -> every favourite.
 
@@ -1785,6 +2235,38 @@ class P2kedApp(App):
             )
         else:
             self.notify_status(f"{VIEW_LABELS[self.view_mode]} - {shown}")
+
+    def action_rating_filter(self) -> None:
+        """Narrow the list by rating, exactly or at least.
+
+        The shift pair of ``*``, and it narrows rather than writes, which is
+        the distinction ``f`` and ``v`` draw. Offered with no counts,
+        because six thresholds is not a bank of categories and every one of
+        them is a question worth asking.
+        """
+        if self.favorites is None:
+            self.notify_status("no favourites database")
+            return
+
+        def apply(chosen) -> None:
+            # Escape comes back as the filter unchanged, so "nothing
+            # changed" and "cleared" are different answers and only one of
+            # them rebuilds.
+            if chosen == self.rating_filter:
+                return
+            self.rating_filter = chosen
+            self._refill_keeping_place()
+            self.query_one("#preset-table", DataTable).focus()
+            shown = len(self._current)
+            if chosen is None:
+                self.notify_status(f"rating filter cleared -- {shown} rows")
+            else:
+                self.notify_status(f"{chosen.label} -- {shown} rows")
+            # Never a silent narrowing: the filter stays on the header line
+            # after the sentence is gone. See :meth:`_update_subtitle`.
+            self._update_subtitle()
+
+        self.push_screen(RatingFilterScreen(self.rating_filter), apply)
 
     def action_pick_categories(self) -> None:
         """Filter by the ``bas:`` style prefix."""
@@ -1865,6 +2347,24 @@ class P2kedApp(App):
         seen the number in a config file has seen the 0-based one.
         """
         return f"sending on MIDI channel {self.channel + 1}"
+
+    def _update_subtitle(self) -> None:
+        """The header's line: the send channel, and any rating filter.
+
+        A rating filter is the one narrowing that has to be on this line.
+        The category filter only ever cuts down a view the user asked for,
+        and the status line that announced it is enough; a rating filter
+        narrows **all three** views, including the full list of a bank you
+        were reading straight down. Rows that are not there and no word
+        about why is the failure this exists to prevent -- the same reason
+        rxved puts the filter on its own sub-title first.
+
+        Main thread only, like every other thing that touches a widget.
+        """
+        filters = ""
+        if self.rating_filter is not None:
+            filters = f"   ·   {self.rating_filter.label}"
+        self.sub_title = self._channel_line() + filters
 
     # --- navigation ---------------------------------------------------------
 
