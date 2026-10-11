@@ -1527,13 +1527,19 @@ channel at a sound, and the unit takes them together, so
 records **one** `ChannelChange` under `SOUND_FIELD`. Three `z` presses that
 each restored a third of a sound would not put back the sound anybody had.
 
-**Caveat: no unit has received one from p2ked.** Everything above is a
-transcription plus a synthetic test suite. The receive path is documented and
-has never been exercised on a cable, the documented error route does not work
-on this unit (§7), so a dump the unit cannot serve is *ignored* and the only
-evidence either way is the read-back. `make test-hardware` should therefore
-start where §12 said it should: send back an unmodified dump — the one
-`read_setup` just returned, re-encoded and nothing else — and compare what the
-unit reports afterwards with what came in. Until that has run,
-`send_setup_dump` is a builder nothing has called on hardware, and every
-sentence in this section is about p2ked rather than about a Proteus.
+**Verified on a unit, 2026-10-11.** `make test-hardware` has run against a
+Proteus 2000 with Composer, X-Lead v2, Techno Synth and Beat Garden fitted
+(512 user presets), and the two tests this section asked for passed. An
+unmodified dump -- the one `read_setup` had just returned, re-encoded and
+nothing else -- came back byte-for-byte identical
+(`TestHardwareTheDumpWritesBack.test_an_unmodified_dump_sent_back_changes_nothing`),
+and channel 1's volume was written, read back at the value sent, and
+restored in the test's `finally`
+(`test_a_channel_field_edit_lands_and_is_restored`). The master reads
+agreed with the dump value for value (§10's check, now
+`test_the_dump_and_the_parameter_reads_agree`), and the FX-bypass write of
+item 48's shape landed and was restored. The receive path is therefore
+documented *and* exercised, and the sentences above describe a Proteus now
+rather than only p2ked. One unit, one session: the first hardware session of
+any new change still starts where this one did -- send back an unmodified
+dump, and compare.

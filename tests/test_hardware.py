@@ -101,20 +101,22 @@ class TestHardwareStructuralReads:
         assert len(config.simms) <= 4, (
             f"the unit reported {len(config.simms)} SIMMs; a Proteus 2000 holds four"
         )
-        simm_ids = [simm_id for simm_id, _presets, _instruments in config.simms]
+        simm_ids = [simm.simm_id for simm in config.simms]
         assert len(set(simm_ids)) == len(simm_ids), (
             f"duplicate SIMM IDs in the configuration answer: {simm_ids}"
         )
-        for simm_id, presets, instruments in config.simms:
-            assert 0 <= simm_id <= 127, f"SIMM ID {simm_id} is not a byte"
-            assert presets > 0, f"SIMM {simm_id} holds {presets} presets"
-            assert instruments > 0, f"SIMM {simm_id} holds {instruments} instruments"
+        for simm in config.simms:
+            assert 0 <= simm.simm_id <= 127, f"SIMM ID {simm.simm_id} is not a byte"
+            assert simm.presets > 0, f"SIMM {simm.simm_id} holds {simm.presets} presets"
+            assert simm.instruments > 0, (
+                f"SIMM {simm.simm_id} holds {simm.instruments} instruments"
+            )
         print(
             "\nconfiguration: "
             f"{config.user_presets} user presets, SIMMs "
             + ", ".join(
-                f"{simm_id}:{presets}p/{instruments}i"
-                for simm_id, presets, instruments in config.simms
+                f"{simm.simm_id}:{simm.presets}p/{simm.instruments}i"
+                for simm in config.simms
             )
             + "\n-- record these against the ROM table (docs/TODO item 9 "
             "and the SIMM-ID hypothesis in CLAUDE.md) rather than asserting "

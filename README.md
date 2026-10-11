@@ -299,14 +299,16 @@ restored a third of a sound would not put back the sound anybody had.
 hand says what the Multimode Bank Map maps between (RESOLUTION_NOTES §12), so
 the picker changes the sound and leaves the channel's own mapping alone.
 
-**No write has been sent to a Proteus from this editor yet.** The IDs were
-established by reading them back off a unit and comparing them with the dump
-— 82 values, all agreeing (RESOLUTION_NOTES §10) — but the *ranges* are
-transcribed from documents that disagree with each other in five of the
-eleven places (§12), and no unit has been asked which range its firmware
-enforces. Every write so far has been verified against `DemoDevice`. Treat
-the first real edit as a hardware session: back the setup up somewhere you
-can restore it from, and read the value back after.
+**The first writes have now been sent to a Proteus (2026-10-11).** The
+hardware suite ran against a unit with Composer, X-Lead v2, Techno Synth and
+Beat Garden fitted: the master reads agree with the dump value for value
+(§10's check, now a test), FX bypass was written, read back and restored,
+and §13's unmodified-dump round trip came back byte-identical. So the
+mechanism has met a unit — but that is one unit, one session. The *ranges*
+are still transcribed from documents that disagree with each other in five
+of the eleven places (§12), and no unit has been asked which range its
+firmware enforces. Treat an edit as a hardware session anyway: back the
+setup up somewhere you can restore it from, and read the value back after.
 
 ### The two numbers that identify a ROM
 

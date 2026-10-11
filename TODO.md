@@ -53,6 +53,13 @@ A second, independent check agrees: `ProteusBridge.installed_roms()` asks
 each ROM ID for preset 0 and reads the reply, and its answer matches the
 Configuration response exactly.
 
+**Re-confirmed 2026-10-11** by `make test-hardware`'s structural reads, on
+a second unit: the Configuration response reported SIMMs 4, 14, 65 and 67
+carrying 1024, 640, 512 and 512 presets -- exactly the table's Composer,
+X-Lead v2, Techno Synth and Beat Garden, counts included -- and 512 user
+presets against the table's 512. Four for four, preset counts exact, on a
+unit whose ROM mix is not the 2026-09-12 one.
+
 ## 3. The checksum rule is ambiguous
 
 **Status:** open, worked around.
@@ -1263,10 +1270,26 @@ place nobody named, which is the one failure this project's own rules
 forbid. What changed is that there is now a second route that needs no ID --
 see item 52 -- so this is an optimisation to earn rather than a blocker.
 
-**For the next hardware session:** run the probe against a real unit,
-establish which answering ID is which of the dump's nine fields, and record
-the mapping here -- after which per-channel editing can choose between the ID
-route (one frame per field) and the dump route (one whole-setup write).
+**The answer, on a Proteus 2000 (2026-10-11; Composer, X-Lead v2, Techno
+Synth and Beat Garden fitted, 512 user presets).** The probe's default
+range answered **89 IDs, in two blocks: 769-787 (19) and 897-966 (70)**.
+Recorded here as data, not as a mapping:
+
+- 771-775 reads `Blank` (66, 108, 97, 110, 107) followed by spaces through
+  782, with 769/770 = -1/-1 before it and 783-787 = 1, -52, 0, 1, 0 after.
+- 899-914 reads `   :k:4:Crystal ` (32, 32, 32, 58, 107, 58, 52, 58, 67,
+  114, 121, 115, 116, 97, 108, 32) -- a preset's identity as the unit
+  spells it, which is a name-shaped string and is not transcribed here as
+  content.
+- 931-953 runs in 16 groups of three -- (42,1,100), (42,2,100), (42,3,100),
+  (42,4,0), (43,5,100) ... -- with the first value stepping from 42 to 43
+  after the fourth group: the shape of 16 parts of three values.
+
+Which of all this is the dump's nine fields is **not** settled, and nothing
+above claims it is. The experiment is unchanged: change one channel's one
+field on the front panel, re-read, and see which ID moved. When that has
+run, the mapping goes here -- and then the ID route becomes the cheaper
+write, one small frame per field instead of the whole-setup one.
 
 ## 48. Editing exists — the gate, the log, and the read-back — 2026-10-10
 
