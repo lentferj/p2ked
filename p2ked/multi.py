@@ -290,6 +290,14 @@ class MultiScreen(ModalScreen[None]):
     :meth:`P2kedApp.action_edit_channel`, so the write gate, the range check,
     the undo log and the read-back are the ones a master edit goes through.
     The screen holds no device and starts no worker -- the app owns both.
+
+    A burst of nudges on one cell is what that apparatus was extended for,
+    and the extension is the app's: the row is drawn with each value as it
+    is pressed, and the worker already writing sends the next one when its
+    read-back agrees. Still one write in flight, still gate-checked, still
+    read back, and one entry on the undo timeline per value the unit
+    actually received. :meth:`channel_target` and :meth:`channel_reported`
+    are the two seams that draw a row before and after that.
     """
 
     DEFAULT_CSS = """
@@ -575,7 +583,11 @@ class MultiScreen(ModalScreen[None]):
             "dump, changes this one field and sends the dump back (spec p. "
             "29), so every other byte is the one the unit just sent. The "
             "field is read back to verify it, and z — here or in the "
-            "browser — puts the previous value back."
+            "browser — puts the previous value back. A burst of nudges on "
+            "one cell is not refused and not lost: the row moves as each "
+            "one is pressed, the writes still go out one at a time and are "
+            "still read back, and z steps back through the values that "
+            "were actually sent."
         )
 
     # --- layout -----------------------------------------------------------
@@ -1174,20 +1186,63 @@ class MultiScreen(ModalScreen[None]):
             if ok:
                 self._adopt(change, change.restore_values)
 
+    def channel_target(self, channel: int, values: Dict[str, int]) -> None:
+        """A value on its way to the unit, drawn on the row now.
+
+        The app calls this the moment a key is accepted, and there are
+        two reasons it has to. The first is the complaint that started
+        it: a row that waits for a whole-dump round trip to move looks
+        broken for as long as the write takes, which on a cable is
+        longer than anybody is willing to believe. The second is
+        arithmetic -- the next ``+`` of a burst steps from *this* value,
+        so the screen's own copy of the dump, the one every gesture
+        reads, has to hold the target and not the value the last
+        read-back confirmed.
+
+        An offer and not a claim, and the screen is not asked to believe
+        it: :meth:`channel_result` confirms it from the read-back, and
+        :meth:`channel_reported` puts back what the unit holds if the
+        write does not land.
+        """
+        self._put_values(channel, values)
+
+    def channel_reported(self, channel: int, values: Dict[str, int]) -> None:
+        """What the unit reports for this channel, put back on the row.
+
+        The correction to :meth:`channel_target`, and the reason an
+        optimistic row cannot lie: it was drawn with a target nothing
+        had verified, so a refusal or a read-back that disagreed hands
+        back the values that were read and the row says those instead.
+        """
+        self._put_values(channel, values)
+
+    def _put_values(self, channel: int, values: Dict[str, int]) -> None:
+        """``values`` into this screen's copy of the dump, and redraw.
+
+        One place that writes the dump copy, for the reason
+        :meth:`_draw_row` is one place that redraws a row: a channel
+        detail opened afterwards has to say the same thing the row says.
+        Three things can move a row now -- a read-back, a target on its
+        way to the unit, and a correction after a write that did not
+        land -- and they all come through here so they cannot drift.
+        """
+        entry = self._dump.channel(channel)
+        if entry is None:  # pragma: no cover - the edit was on a real channel
+            return
+        for name, value in values.items():
+            setattr(entry, name, value)
+        self._draw_row(channel)
+
     def _adopt(self, change: ChannelChange, values: Tuple[int, ...]) -> None:
         """Show one channel's new values, in the row and in the dump copy.
 
         ``values`` is ``change.sent_values`` after a write and
         ``change.restore_values`` after an undo; both have already been
         verified by a read-back, which is what makes writing them here
-        honest.
+        honest. The record's own field order, so the two cannot drift
+        apart.
         """
-        entry = self._dump.channel(change.channel)
-        if entry is None:  # pragma: no cover - the edit was on a real channel
-            return
-        for name, value in zip(change.fields, values, strict=True):
-            setattr(entry, name, value)
-        self._draw_row(change.channel)
+        self._put_values(change.channel, dict(zip(change.fields, values, strict=True)))
 
     def _draw_row(self, channel: int) -> None:
         """Redraw one row's cells.

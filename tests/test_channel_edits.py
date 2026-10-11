@@ -45,6 +45,8 @@ unmodified round trip is the first thing it should do; see
 ``docs/RESOLUTION_NOTES.md`` §12, "The dump is a writable message too".
 """
 
+import threading
+
 import pytest
 from textual.widgets import Static
 
@@ -73,6 +75,9 @@ LIVE = 8
 #: A disabled channel: its fields are every bit as writable, and this is the
 #: row a "would not sound" channel still gets edited from.
 QUIET = 3
+#: An enabled channel at volume 0, the demo's second kind of silent -- and
+#: the one a burst of ``+`` presses has room to climb from.
+MUTED = 5
 
 
 @pytest.fixture
@@ -606,6 +611,224 @@ class TestAChannelEditIsWrittenAndReadBack:
             assert f"channel {LIVE + 1} volume = 90" in message
             assert "no reply" in message
             assert refused
+
+
+class TestABurstOfNudgesOnOneCellIsCoalesced:
+    """Five presses in the time one write takes: none refused, none lost.
+
+    The complaint this answers is a whole one -- "incredibly slow and
+    consecutive presses are often lost" -- and its cause is structural
+    rather than a mistake. A per-channel edit is a whole-setup write, so
+    one nudge is a round trip, and ``_busy`` refused the next key while
+    that was in flight.
+
+    The mechanism is unchanged here. What changed is that a press
+    arriving during a write is not a refusal but the *next* value the
+    same worker sends: one write in flight, gate-checked, read back, and
+    one entry on the timeline per value the unit actually received.
+    """
+
+    class _Counting(DemoDevice):
+        """A fake that counts how many dump writes are in flight at once.
+
+        "Exactly one write in flight" is the load-bearing half of the
+        claim -- the mechanism must not change -- and the wire is the
+        only place it can be watched from.
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.inflight = 0
+            self.most_at_once = 0
+
+        def send_setup_dump(self, dump, *, timeout=None):
+            self.inflight += 1
+            self.most_at_once = max(self.most_at_once, self.inflight)
+            try:
+                super().send_setup_dump(dump, timeout=timeout)
+            finally:
+                self.inflight -= 1
+
+    class _Holding(_Counting):
+        """A fake that stops a dump write on the wire until it is let go.
+
+        The one state an app-level test cannot otherwise reach: the gate
+        locked *between* two writes of a burst. ``w`` is live while a
+        write is in flight, so the second write has to ask the gate
+        again -- and against a fast fake the loop has asked and answered
+        before the key that locks it is even dispatched. Holding the
+        write makes that gap real.
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.held = threading.Event()
+            self.released = threading.Event()
+
+        def send_setup_dump(self, dump, *, timeout=None):
+            self.held.set()
+            self.released.wait(timeout=10)  # a forgotten release fails, slowly
+            super().send_setup_dump(dump, timeout=timeout)
+
+    async def test_five_presses_end_at_the_last_value_and_refuse_none(self, app):
+        """The burst, as fast as the app can be asked for it.
+
+        Channel 6 sits at volume 0 with room above it, and the five
+        presses are made with no ``await`` between them -- five
+        keypresses inside one whole-dump round trip, which is the case
+        the complaint was about.
+        """
+        device = self._Counting()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("w")  # arm the gate
+            said = _record(app)
+            device.dump_log.clear()
+            for value in (1, 2, 3, 4, 5):
+                app.action_edit_channel(MUTED, "volume", value)
+            await _wait_for(pilot, lambda: not app._busy)
+            # Not one refusal, and not one "busy": every press counted.
+            assert not any(refused for _message, refused in said)
+            assert all(message != "busy" for message, _refused in said)
+            assert app.device.read_setup().channel(MUTED).volume == 5
+            assert len(device.dump_log) == 2, (
+                f"{len(device.dump_log)} writes for five presses: the "
+                f"intermediate values are not worth a frame each"
+            )
+            assert device.most_at_once == 1, "two writes were in flight at once"
+            # And the log holds the values actually sent, so z is honest.
+            assert app._changes == [
+                ChannelChange(MUTED, "volume", 0, 1),
+                ChannelChange(MUTED, "volume", 1, 5),
+            ]
+            assert said[-1] == ("channel 6 volume = 5", False)
+
+    async def test_a_minus_after_a_plus_lands_on_the_net_value(self, app):
+        """Two up and one back down: the burst nets +1, and the ``-`` is
+        a value of its own rather than being swallowed by the ``+``.
+
+        It costs one write, not two, because the last target is the value
+        already in flight -- re-sending it would put an entry on the
+        timeline for a write that changes nothing.
+        """
+        device = self._Counting()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("w")
+            said = _record(app)
+            for value in (1, 2, 1):
+                app.action_edit_channel(MUTED, "volume", value)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.read_setup().channel(MUTED).volume == 1
+            assert len(device.dump_log) == 1
+            assert device.most_at_once == 1
+            assert not any(refused for _message, refused in said)
+            assert app._changes == [ChannelChange(MUTED, "volume", 0, 1)]
+
+    async def test_the_log_holds_the_values_actually_sent_and_z_walks_them(self, app):
+        """One entry per *sent* value -- five presses, two writes, two
+        entries -- and ``z`` steps back through the values the unit
+        actually held, not through the keys that were pressed."""
+        device = self._Counting()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("w")
+            for value in (1, 2, 3, 4, 5):
+                app.action_edit_channel(MUTED, "volume", value)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert [change.after for change in app._changes] == [1, 5]
+            assert app._editor.channel_pending == 2
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.read_setup().channel(MUTED).volume == 1
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.read_setup().channel(MUTED).volume == 0
+            assert app._changes == []
+            assert app._editor.channel_pending == 0
+
+    async def test_a_locked_gate_refuses_every_press_of_a_burst(self, app):
+        """The gate is checked at the press, before any slot is filled,
+        so a locked one refuses the first key of a burst -- and nothing
+        is queued behind the lock for the later ones either."""
+        device = self._Counting()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            said = _record(app)
+            for value in (1, 2, 3):
+                app.action_edit_channel(MUTED, "volume", value)
+            await pilot.pause()
+            assert device.dump_log == []
+            assert device.set_log == []
+            assert app._busy is False
+            assert app._channel_inflight is None
+            assert app._channel_target is None
+            assert app._changes == []
+            # Three refusals and no write: the sentence is the app's own
+            # progress chatter that says "reading ...", so it is the
+            # refusals that are counted rather than everything said.
+            refused = [message for message, was in said if was]
+            assert len(refused) == 3, refused
+            for message in refused:
+                assert "the write gate is locked" in message
+
+    async def test_a_gate_locked_mid_burst_refuses_the_next_write(self, app):
+        """``w`` stays live while a write is in flight, so the burst's
+        second write has to ask the gate again -- and a locked one stops
+        the burst rather than sending on the first write's authority."""
+        device = self._Holding()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("w")
+            said = _record(app)
+            app.action_edit_channel(MUTED, "volume", 40)
+            # The write reaches the unit and stops on the wire there.
+            await _wait_for(pilot, device.held.is_set)
+            # The second press is coalesced into the worker's next write.
+            app.action_edit_channel(MUTED, "volume", 50)
+            await pilot.press("w")  # locked again, mid-round-trip
+            device.released.set()
+            await _wait_for(pilot, lambda: not app._busy)
+            # One write out, the second refused rather than queued.
+            assert len(device.dump_log) == 1
+            assert app.device.read_setup().channel(MUTED).volume == 40
+            assert app._changes == [ChannelChange(MUTED, "volume", 0, 40)]
+            message, refused = said[-1]
+            assert "channel 6 volume not sent" in message
+            assert "the write gate is locked" in message
+            assert refused
+
+    async def test_a_nudge_on_another_cell_during_a_write_is_still_busy(self, app):
+        """The one slot holds one cell. A press on a second cell finds
+        the wire owned by the first and gets the old refusal, which is
+        the whole of what ``_busy`` still guards."""
+        device = self._Counting()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("w")
+            said = _record(app)
+            device.dump_log.clear()
+            app.action_edit_channel(MUTED, "volume", 60)
+            # The same channel's other field, and another channel's
+            # volume: neither is the cell being written.
+            app.action_edit_channel(MUTED, "pan", 90)
+            app.action_edit_channel(LIVE, "volume", 90)
+            await _wait_for(pilot, lambda: not app._busy)
+            # The refusals, and not the app's own chatter about reading
+            # a bank of names that said the word first.
+            refused = [message for message, was in said if was]
+            assert refused == ["busy", "busy"]
+            assert said[-1] == ("channel 6 volume = 60", False)
+            assert len(device.dump_log) == 1
+            assert app.device.read_setup().channel(MUTED).volume == 60
+            assert app.device.read_setup().channel(MUTED).pan == 64
+            assert app.device.read_setup().channel(LIVE).volume == 127
 
 
 class TestASoundIsWrittenTogether:

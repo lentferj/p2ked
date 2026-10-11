@@ -320,6 +320,14 @@ class P2kedApp(App):
     #: ``__init__``. See there for what the flag is for.
     _busy: bool
 
+    #: The per-channel write in flight, and the target a press made while
+    #: it was. Declared here for the reason ``_busy`` is, and for one more:
+    #: they are the coalescing, they are read from a worker on another
+    #: thread, and their whole contract is worth naming where a reader
+    #: finds ``_busy``. See ``__init__``.
+    _channel_inflight: Optional[Tuple[int, str]]
+    _channel_target: Optional[Dict[str, int]]
+
     #: What ``--allow-write`` was given on the command line: the state the
     #: gate below starts in, recorded because the gate itself is created on
     #: first use. Declared here for the same reason ``_busy`` is.
@@ -695,6 +703,14 @@ class P2kedApp(App):
         index is the same number. Whether this setup has that many channels
         is a fact about the dump, which is the worker's to read; a channel it
         does not have is refused there, before anything is sent.
+
+        **A press that arrives while this one is still on the wire is not
+        lost and not refused.** It becomes the value the same worker sends
+        next, and the row is drawn with it at once; the write, the gate
+        check and the read-back are one per *sent* value, so the undo log
+        holds what the unit actually received. See
+        :meth:`_start_channel_edit` for the slot and
+        :meth:`_channel_edit_worker` for the loop.
         """
         if self.device is None:
             return
@@ -741,12 +757,97 @@ class P2kedApp(App):
         No MIDI in here: the gate and the range have already been answered
         on the main thread, and ``_busy`` is the last thing to say before a
         worker is spawned.
+
+        **Unless the wire is busy with this very cell.** A nudge that
+        arrives while a write to the same ``(channel, field)`` is in
+        flight is not refused and not queued either: it becomes the target
+        in :attr:`_channel_target`, the row is drawn with it at once, and
+        the worker that is already running sends it next. That is the
+        whole of the coalescing -- one slot, not a queue, because the
+        burst is on one cell and the value that matters is the last one
+        pressed. See :meth:`_channel_edit_worker` for the loop that
+        drains it.
+
+        Every *other* cell still finds ``_busy`` set and is refused with
+        the one sentence: the slot holds one cell, and a second one is
+        the old refusal.
         """
+        if self._channel_inflight == (channel, field):
+            self._channel_target = values
+            self._show_channel_target(channel, values)
+            return
         if self._busy:
             self._say_edit("busy", refused=True)
             return
         self._busy = True  # main thread, before the spawn; see _busy
+        self._channel_inflight = (channel, field)
+        self._show_channel_target(channel, values)
         self._channel_edit_worker(channel, field, values)
+
+    def _allow_channel_values(
+        self, channel: int, field: str, values: Dict[str, int]
+    ) -> Optional[str]:
+        """Why these values must not be sent, or ``None`` if they may be.
+
+        The press path's gate-and-range check, made again on the thread
+        that sends, and field by field in the dump's own order so a
+        refusal names the one a reader would find first -- the order
+        :meth:`p2ked.masteredit.MasterEditor.allow_channel_sound` checks
+        a sound's three in.
+
+        It is repeated because a burst's later writes have no keypress of
+        their own to be checked at, and because the gate can be locked
+        between two presses: ``w`` is not refused while a write is in
+        flight, so the second write of a burst has to ask again rather
+        than rely on the answer the first one was given. A refusal here
+        stops the burst and is not queued across the lock.
+        """
+        for name in fields_of(field):
+            refusal = self._editor.allow_channel_field(channel, name, values[name])
+            if refusal is not None:
+                return refusal
+        return None
+
+    def _show_channel_target(self, channel: int, values: Dict[str, int]) -> None:
+        """Show the values this edit is sending, now, before they land.
+
+        The row moves when the key is accepted rather than when a
+        whole-dump round trip comes back -- the "incredibly slow" half of
+        the complaint, and on a cable a read, a write and a read-back is
+        longer than anybody is willing to believe. The next ``+`` of a
+        burst steps from *this* value too, so the screen's own copy of
+        the dump has to hold the target and not what the last read-back
+        confirmed.
+
+        An offer, not a claim: :meth:`_channel_edited` confirms it from
+        the read-back, or puts back what the unit reports.
+        """
+        screen = self._hook_screen("channel_target")
+        if screen is not None:
+            screen.channel_target(channel, values)
+
+    def _restore_channel_row(
+        self, channel: int, field: str, values: Optional[Tuple[int, ...]]
+    ) -> None:
+        """Put one channel's row back to what the unit reports.
+
+        The correction to :meth:`_show_channel_target`, and the reason an
+        optimistic row cannot lie: it was drawn with a target nothing had
+        verified, so a refusal or a read-back that disagreed hands back
+        the values that *were* read and the row says those.
+
+        ``None`` means nothing was read -- a wire that broke before the
+        read-back -- and then the row is left alone, because the unit may
+        well have taken the dump and only the answer was lost. The
+        sentence says as much.
+        """
+        if values is None:
+            return
+        screen = self._hook_screen("channel_reported")
+        if screen is not None:
+            screen.channel_reported(
+                channel, dict(zip(fields_of(field), values, strict=True))
+            )
 
     @work(thread=True)
     def _channel_edit_worker(
@@ -759,6 +860,22 @@ class P2kedApp(App):
         split across threads, because another read landing between them
         would be read back as this write's result.
 
+        **And it loops.** A press that arrives while the round trip is in
+        flight is neither refused nor queued: it leaves the value it wants
+        in :attr:`_channel_target`, and when this read-back agrees with
+        what was sent the loop looks there, finds a value that differs,
+        and sends that one next -- one write in flight, gate-checked, read
+        back, exactly like the first. Five presses in the time one write
+        takes are therefore two writes, at the first value and at the
+        last; the three in between cost a redraw and no frame, because
+        the burst is on one cell and the newest target is the only one
+        worth sending.
+
+        The gate and the range are re-checked per write, here, for the
+        reason :meth:`_allow_channel_values` gives: ``w`` stays live while
+        a write is in flight, so a burst's second write cannot rely on
+        the answer its first one was given.
+
         The dump is the whole mechanism. It is read live, so the frame sent
         back carries the unit's own bytes for everything but this one field;
         :meth:`p2k.bridge.ProteusBridge.send_setup_dump` encodes it with
@@ -770,47 +887,78 @@ class P2kedApp(App):
         ``refusal`` comes back rather than being raised, because the checks
         that need a dump in hand -- has the setup that many channels, can it
         be written back at all -- are a reader's question, not a failure of
-        the program.
+        the program. ``after`` is read for a refusal too, because a row
+        drawn with the target has to be put back to what the unit holds.
         """
-        failure: Optional[BaseException] = None
-        refusal: Optional[str] = None
-        before: Optional[Tuple[int, ...]] = None
-        after: Optional[Tuple[int, ...]] = None
-        sent = tuple(values[name] for name in fields_of(field))
-        try:
-            with self._lock:
-                dump = self.device.read_setup()
-                refusal = self._editor.decline_channel(dump, channel, values)
-                if refusal is None:
-                    before = channel_values(dump, channel, fields_of(field))
-                    written = mutate_channel(dump, channel, values)
-                    self.device.send_setup_dump(written)
-                    after = channel_values(
-                        self.device.read_setup(), channel, fields_of(field)
-                    )
-        except Exception as exc:
-            failure = exc
-        self.call_from_thread(
-            self._channel_edited,
-            channel=channel,
-            field=field,
-            sent=sent,
-            refusal=refusal,
-            failure=failure,
-            before=before,
-            after=after,
-        )
+        while True:
+            failure: Optional[BaseException] = None
+            refusal: Optional[str] = None
+            before: Optional[Tuple[int, ...]] = None
+            after: Optional[Tuple[int, ...]] = None
+            sent = tuple(values[name] for name in fields_of(field))
+            try:
+                with self._lock:
+                    dump = self.device.read_setup()
+                    refusal = self._editor.decline_channel(dump, channel, values)
+                    if refusal is None:
+                        refusal = self._allow_channel_values(channel, field, values)
+                    if refusal is not None:
+                        after = channel_values(dump, channel, fields_of(field))
+                    else:
+                        before = channel_values(dump, channel, fields_of(field))
+                        written = mutate_channel(dump, channel, values)
+                        self.device.send_setup_dump(written)
+                        after = channel_values(
+                            self.device.read_setup(), channel, fields_of(field)
+                        )
+            except Exception as exc:
+                failure = exc
+            # What to send next, and only a write the read-back agreed
+            # with earns one -- the loop's whole bargain, and the reason
+            # a refusal counts as refusing to send: a unit that has just
+            # not taken this value is unlikely to take the next, and one
+            # disagreement sentence is worth more than one per value in
+            # the burst. Looked at *after* the write rather than before
+            # it, so a press that landed during the round trip is in the
+            # slot by the time it is read.
+            target = self._channel_target
+            landed = (
+                failure is None
+                and refusal is None
+                and after is not None
+                and after == sent
+            )
+            pending = (
+                target if landed and target is not None and target != values else None
+            )
+            self.call_from_thread(
+                self._channel_edited,
+                channel=channel,
+                field=field,
+                values=values,
+                sent=sent,
+                refusal=refusal,
+                failure=failure,
+                before=before,
+                after=after,
+                pending=pending,
+            )
+            if pending is None:
+                return
+            values = pending
 
     def _channel_edited(
         self,
         *,
         channel: int,
         field: str,
+        values: Dict[str, int],
         sent: Tuple[int, ...],
         refusal: Optional[str],
         failure: Optional[BaseException],
         before: Optional[Tuple[int, ...]],
         after: Optional[Tuple[int, ...]],
+        pending: Optional[Dict[str, int]],
     ) -> None:
         """Report a per-channel edit, and log it only if it read back.
 
@@ -818,9 +966,36 @@ class P2kedApp(App):
         operation that could not be carried out, and a success -- said
         differently, because "the field did not change" and "the wire broke"
         are different things to act on.
+
+        **One entry per value sent, not per key pressed.** A burst that
+        coalesced five presses into two writes logs two changes, for the
+        two values the unit actually received -- which is what makes
+        ``z`` honest: it steps back through values the unit held, and an
+        intermediate value nobody sent must not appear on the timeline.
+
+        ``values`` is the dict that was just written, and ``pending`` is
+        the target the worker is already sending next, or ``None`` when
+        the burst is over. Together they are the hand-off this method
+        makes on the main thread, and they are why it is the only place
+        the wire is marked free again: with a ``pending`` there is
+        nothing to do, because spawning a worker here would put a
+        *second* write beside the one the loop is sending; without one
+        there is a last look at the slot, for the press that landed
+        between the worker's final read of it and this callback -- a
+        press that could only have been seen on this thread, so this is
+        the only place its loss could be caught.
         """
-        self._busy = False
         if refusal is not None:
+            # Nothing was sent, so the wire is free -- and the row goes
+            # back to what the unit holds, because it was drawn with the
+            # target the moment the key was accepted. The target is
+            # dropped with it: no write goes out on the strength of a
+            # gate the burst's earlier ones passed, and one left in the
+            # slot would be sent by the next edit to any cell.
+            self._busy = False
+            self._channel_inflight = None
+            self._channel_target = None
+            self._restore_channel_row(channel, field, after)
             self._say_edit(refusal, refused=True)
             return
         if before is None:  # pragma: no cover - decline_channel checks it
@@ -845,7 +1020,34 @@ class P2kedApp(App):
             # the sentence below is the whole of the answer. The signature:
             # channel_result(ok, message, change).
             screen.channel_result(ok, message, change)
+        if not ok:
+            # The row is showing a value the unit did not take, so it goes
+            # back to the one the read-back reported.
+            self._restore_channel_row(channel, field, after)
         self._say_edit(message, refused=not ok)
+        more = pending
+        if more is None:
+            # Read and cleared in one piece, on the one thread nothing
+            # can interrupt between the two, and only here: a target
+            # left in the slot would be sent by the next edit to any
+            # cell -- a write nobody pressed a key for. And a target the
+            # write below did not verify goes out with the clearing,
+            # because no further write goes out on behalf of a unit that
+            # has just not taken one.
+            target = self._channel_target
+            self._channel_target = None
+            if ok and target is not None and target != values:
+                more = target
+        if more is None:
+            self._busy = False
+            self._channel_inflight = None
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._channel_inflight = (channel, field)
+        if pending is None:
+            # The press the worker never saw: its loop is finished, so
+            # this thread starts the write it asked for.
+            self._channel_edit_worker(channel, field, more)
 
     @staticmethod
     def _as_change(
@@ -1080,8 +1282,40 @@ class P2kedApp(App):
         #: Not a lock -- ``self._lock`` is that -- but a refusal, so the
         #: second press says so instead of queueing behind a 2.5 s bank
         #: read the user cannot see.
+        #:
+        #: A coalesced per-channel burst is the one thing that keeps it
+        #: set past a single write: the worker drains the target a later
+        #: press left in :attr:`_channel_target` before it hands the wire
+        #: back, so the flag covers the whole burst rather than flickering
+        #: free between two of its writes. See
+        #: :meth:`_channel_edit_worker`.
         self._busy = False
         self._filling = False
+        #: The per-channel write on the wire right now, as
+        #: ``(channel, field)``, or ``None``. One slot and not a queue,
+        #: because a burst of nudges lands on one cell -- so "which write
+        #: is in flight" is one pair, and the value it is being nudged
+        #: *towards* lives in :attr:`_channel_target` beside it. Set on
+        #: the main thread when the worker is spawned, kept while the
+        #: worker drains, and cleared where the write is reported.
+        self._channel_inflight: Optional[Tuple[int, str]] = None
+        #: The values a press made while that write was in flight wants
+        #: the unit to hold, or ``None``. One slot for the reason the
+        #: in-flight one is one slot: the burst is on a single cell, so
+        #: the value that matters is the last one pressed and an
+        #: intermediate one is not worth a frame.
+        #:
+        #: Overwritten freely on the main thread, read on the worker's,
+        #: and **read and cleared in one piece** where the burst is
+        #: reported over -- see :meth:`_channel_edited`. Both halves of
+        #: that matter. A worker that cleared the slot as it read it
+        #: would drop a press landing between its read and its write,
+        #: which is the lost-press bug wearing a different coat; and a
+        #: slot left standing after a burst would be sent by the next
+        #: edit to any cell, which is a write nobody pressed a key for.
+        #: One attribute under the GIL, so a reader sees either the old
+        #: target or the new one and never half a dict.
+        self._channel_target: Optional[Dict[str, int]] = None
         #: Which of the three views `v` is on.
         self.view_mode = VIEW_ALL
         #: User banks whose names have already been fetched this session.

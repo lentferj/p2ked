@@ -33,6 +33,8 @@ internal consistency and nothing more; the first unit contact is ``make
 test-hardware``'s unmodified-dump round trip.
 """
 
+import threading
+
 import pytest
 from textual.widgets import DataTable, Static
 
@@ -122,9 +124,26 @@ async def _open_multi(app, pilot, *, armed: bool = True):
     work: a modal cuts the app's binding chain, so the app's own ``w`` is
     dead the moment this screen is open -- the whole reason the screen binds
     it for itself.
+
+    ``m`` is retried while the wire is busy, because the app starts by
+    reading a bank of names off the unit on its own and ``m`` is refused
+    with "busy" until that is done -- a read that takes a different
+    number of event-loop turns on every machine. One press and a wait
+    made every test in this file a race with the app's own startup: the
+    screen either came up or the press was spent on the refusal, and
+    nothing in the test could tell which. So the press is repeated until
+    the screen is there, which is what a reader does without thinking
+    about it.
     """
-    await pilot.press("m")
-    await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
+    for _ in range(50):
+        await pilot.press("m")
+        for _ in range(10):
+            if isinstance(app.screen, MultiScreen):
+                break
+            await pilot.pause()
+        if isinstance(app.screen, MultiScreen):
+            break
+        await _wait_for(pilot, lambda: not app._busy)
     screen = app.screen
     if armed:
         await pilot.press("w")
@@ -733,6 +752,213 @@ class TestTheGestures:
             assert "the write gate is locked" in _status(screen)
             assert app.device.dump_log == []
             assert app.device.set_log == []
+
+
+class _Held(DemoDevice):
+    """A fake whose dump write stops on the wire until the test lets it go.
+
+    The coalescing is about a press that arrives *while a write is in
+    flight*, and a pilot cannot produce that deterministically:
+    ``pilot.press`` awaits an idle app, so with a fast fake the write is
+    over before the next key lands and with a slow one "idle" is one
+    round trip away -- neither is a burst. This fake stops the write
+    where a test can wait for it, so the keys are dispatched with the
+    unit holding the frame, which is the case the complaint was about.
+    The write then goes through the real path, so the read-back verifies
+    exactly what it always did.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        #: Set on the worker's thread when a dump write has reached the
+        #: wire, so the test waits for "in flight" rather than sleeping.
+        self.held = threading.Event()
+        #: Set by the test to let that write finish. Waited on with a
+        #: timeout, so a test that forgets fails slowly instead of
+        #: hanging the suite.
+        self.released = threading.Event()
+        self.inflight = 0
+        self.most_at_once = 0
+
+    def send_setup_dump(self, dump, *, timeout=None):
+        self.held.set()
+        self.released.wait(timeout=10)
+        self.inflight += 1
+        self.most_at_once = max(self.most_at_once, self.inflight)
+        try:
+            self.take(dump, timeout=timeout)
+        finally:
+            self.inflight -= 1
+
+    def take(self, dump, *, timeout=None) -> None:
+        """What the unit does with the frame once the test lets it go.
+
+        The real fake's, so a write lands and is read back; a subclass
+        overrides this to be the unit that disregards it.
+        """
+        super().send_setup_dump(dump, timeout=timeout)
+
+
+class TestABurstOfNudgesOnOneCell:
+    """``+`` five times in the time one whole-dump write takes.
+
+    The surface half of what ``tests/test_channel_edits.py`` pins on the
+    app, and the half the complaint was actually about: the row has to
+    move with the keys, and no press may arrive as a refusal. A
+    per-channel edit is a whole-setup write, so one nudge is a round
+    trip -- that is the "incredibly slow", and ``_busy`` refusing the
+    next key while it was in flight was the "often lost".
+    """
+
+    async def test_five_plus_presses_land_on_the_last_value(self, app):
+        """Channel 6 is at volume 0, so there is room above it.
+
+        The write is held on the wire while the other four keys are
+        pressed -- a real round trip is longer still, so the window is
+        wider on hardware than it is here.
+        """
+        device = _Held()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_multi(app, pilot)
+            table = _table(screen)
+            table.move_cursor(row=MUTED, column=VOLUME_COLUMN)
+            said = _record(app)
+            device.held.clear()
+            await pilot.press("plus")
+            await _wait_for(pilot, device.held.is_set)
+            # The row moved with the key, and it is the only one that
+            # moved a unit: the rest land while the first is in flight.
+            assert _cells(table, MUTED)[VOLUME_COLUMN] == "1"
+            await pilot.press("plus", "plus", "plus", "plus")
+            # While the burst is in flight the row already says where it
+            # is going -- the "incredibly slow" half of the complaint.
+            assert _cells(table, MUTED)[VOLUME_COLUMN] == "5"
+            device.released.set()
+            await _wait_for(pilot, lambda: not app._busy)
+            assert _cells(table, MUTED)[VOLUME_COLUMN] == "5"
+            assert app.device.read_setup().channel(MUTED).volume == 5
+            assert device.most_at_once == 1, "two writes were in flight at once"
+            # Two writes, not five and not one: the first value and the
+            # last. The three in between cost a redraw and no frame.
+            assert len(device.dump_log) == 2
+            assert app._changes == [
+                ChannelChange(MUTED, "volume", 0, 1),
+                ChannelChange(MUTED, "volume", 1, 5),
+            ]
+            # No press produced a refusal, and none produced a "busy" --
+            # the sentence that used to answer the second key.
+            assert not any(refused for _message, refused in said)
+            assert "busy" not in [message for message, _refused in said]
+            assert said[-1] == ("channel 6 volume = 5", False)
+
+    async def test_a_minus_after_a_plus_lands_on_the_net_value(self, app):
+        """The pan has room either side of centre, and this burst nets
+        nothing: ``+`` then ``-`` is two writes, and the unit ends where
+        it started with the ``-`` not swallowed by the ``+``."""
+        device = _Held()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_multi(app, pilot)
+            table = _table(screen)
+            table.move_cursor(row=LIVE, column=PAN_COLUMN)
+            assert _cells(table, LIVE)[PAN_COLUMN] == "0"  # 64 on the wire
+            said = _record(app)
+            device.held.clear()
+            await pilot.press("plus")
+            await _wait_for(pilot, device.held.is_set)
+            await pilot.press("minus")
+            assert _cells(table, LIVE)[PAN_COLUMN] == "0"
+            device.released.set()
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.read_setup().channel(LIVE).pan == 64
+            assert len(device.dump_log) == 2
+            assert app._changes == [
+                ChannelChange(LIVE, "pan", 64, 65),
+                ChannelChange(LIVE, "pan", 65, 64),
+            ]
+            assert not any(refused for _message, refused in said)
+
+    async def test_a_locked_gate_refuses_every_press_of_a_burst(self, app):
+        """The gate is checked at the press, so a locked one refuses the
+        first key -- and nothing is queued behind the lock for the later
+        ones either."""
+        device = _Held()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_multi(app, pilot, armed=False)
+            table = _table(screen)
+            table.move_cursor(row=MUTED, column=VOLUME_COLUMN)
+            await pilot.press("plus", "plus", "plus")
+            await pilot.pause()
+            assert app.device.dump_log == []
+            assert app.device.set_log == []
+            # Not even the row moved: a refused nudge draws nothing.
+            assert _cells(table, MUTED)[VOLUME_COLUMN] == "0"
+            status = _status(screen)
+            assert "the write gate is locked" in status
+            assert status.startswith("refused · ")
+
+    async def test_a_nudge_on_another_cell_during_a_write_is_busy(self, app):
+        """``_busy`` still guards everything but the cell being written.
+        One slot holds one cell, and a second cell is the old refusal."""
+        device = _Held()
+        app.device = device
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_multi(app, pilot)
+            table = _table(screen)
+            table.move_cursor(row=MUTED, column=VOLUME_COLUMN)
+            device.held.clear()
+            await pilot.press("plus")
+            await _wait_for(pilot, device.held.is_set)
+            # Channel 9's pan, while channel 6's volume is on the wire.
+            table.move_cursor(row=LIVE, column=PAN_COLUMN)
+            await pilot.press("plus")
+            await pilot.pause()
+            assert _status(screen) == "refused · busy"
+            # And the row that was refused is the one that did not move.
+            assert _cells(table, LIVE)[PAN_COLUMN] == "0"
+            device.released.set()
+            await _wait_for(pilot, lambda: not app._busy)
+            assert len(device.dump_log) == 1
+            assert app.device.read_setup().channel(MUTED).volume == 1
+            assert app.device.read_setup().channel(LIVE).pan == 64
+
+    async def test_a_write_the_unit_ignores_puts_the_row_back(self, app):
+        """The optimistic row is an offer, and a unit that takes the
+        frame and disregards it -- what a Proteus does with a request it
+        cannot serve -- is exactly why. The row ends up saying what the
+        unit reports, not what was sent."""
+
+        class Ignoring(_Held):
+            """Stops on the wire as the held one does, then disregards
+            the frame it was handed."""
+
+            def take(self, dump, *, timeout=None) -> None:
+                self.handle(m.parameter_edit(1, 1, device=self.device_id))
+
+        app.device = Ignoring()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            screen = await _open_multi(app, pilot)
+            table = _table(screen)
+            table.move_cursor(row=MUTED, column=VOLUME_COLUMN)
+            device = app.device
+            device.held.clear()
+            await pilot.press("plus")
+            await _wait_for(pilot, device.held.is_set)
+            # The row moved with the key, before anything was verified.
+            assert _cells(table, MUTED)[VOLUME_COLUMN] == "1"
+            device.released.set()
+            await _wait_for(pilot, lambda: not app._busy)
+            assert app.device.dump_log == []
+            assert _cells(table, MUTED)[VOLUME_COLUMN] == "0"
+            assert app._changes == []
+            assert "did not take 1" in _status(screen)
 
 
 class TestPickASoundForTheChannel:
