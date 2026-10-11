@@ -143,11 +143,12 @@ irreplaceable equipment.
   the unit says. A name read from hardware is shown in bold; one that
   *disagrees* with the catalog gets a `*`. On a user bank somebody has saved
   into, that mark is the most useful thing on the screen.
-- **Edits the master parameters, behind a write gate that is locked by
-  default.** `w` arms the gate, `--allow-write` starts it armed, every edit is
-  read back to check it landed, and `z` / `Z` send the previous value back.
-  Only parameters whose IDs were established by reading them off a unit are
-  offered — see Editing below.
+- **Edits the master parameters, and the 32 channels, behind a write gate
+  that is locked by default.** `w` arms the gate, `--allow-write` starts it
+  armed, every edit is read back to check it landed, and `z` / `Z` send the
+  previous value back. Only parameters whose IDs were established by reading
+  them off a unit are offered; the per-channel fields are written by the
+  dump route instead, with no ID invented — see Editing below.
 - **A CLI** (`p2kcli`), most of which needs no unit at all.
 
 ### Channels (`m`)
@@ -179,11 +180,13 @@ reasons mention the cable, an unplugged submix jack or the monitor, because
 the unit does not report them.
 
 `r` re-reads the setup from inside the screen. `enter` on a row opens that
-channel's **detail** — all nine parameters, the why-not reasons, and the
-reason per-channel editing is refused. `e` is the door to the one write path
-in p2ked, and the only key here that can reach one. The MIDI channel
-selections go out on sits in the window's subtitle for as long as the window
-is open, not only for the moment it changes.
+channel's **detail** — all nine parameters, the why-not reasons, and what an
+edit would send. The **editing** lives on the table itself: the cursor is a
+cell cursor, so the arrows walk over the nine values and a gesture changes
+the one under it — see Editing below. `e` is the door to the master
+parameters and `x` to the master FX block. The MIDI channel selections go
+out on sits in the window's subtitle for as long as the window is open, not
+only for the moment it changes.
 
 Note the word: **"multi" means two things on this machine.** Multi is one of
 three MIDI *modes* (Omni / Poly / Multi). A *Multisetup* is something else —
@@ -235,11 +238,66 @@ Both undo keys work from the browser as well, not only from the edit screen:
 an edit is made *through* the screen and undone *after* it closes, so the app
 holds the log and the undo worker.
 
-**Per-channel editing is refused, with the reason on the screen that would
-have held the button.** The nine per-channel parameter IDs are in no document
-to hand, and p2ked does not write to a number it invented.
-`probe_channel_ids()` is the read-only way to establish them on a real unit,
-and it is the next hardware session's job.
+**The per-channel route is a whole-setup write, and it says so.** A
+Proteus "receive[s] and understand[s] the old setup dump" (spec p. 29), so
+p2ked reads the live dump, changes one channel's one field and sends the
+dump back — every other byte is the one the unit just sent
+(`tests/test_messages.py`'s `TestSetupDumpEncoder` proves the round trip is
+byte-exact). The gate applies and the field is read back, exactly as a
+master edit is. **No parameter ID is invented**: this writes the dump's own
+field positions. No unit has received one yet — the first check is `make
+test-hardware`'s unmodified-dump round trip — and the ID-based alternative
+still needs `docs/TODO` item 47's probe, which would cost one small frame
+per field instead of a ~1 KB whole-setup write.
+
+**The channels screen is editable cell by cell** (`m`, then any of the
+gestures below). The cursor is a *cell* cursor: the arrows walk over a row's
+nine values and the gesture changes the one under them. This is the shape
+rxved's multi table uses, and the reason is the same one — a row-wide cursor
+cannot say which of nine values a keystroke was aimed at.
+
+| gesture | what it does |
+|---|---|
+| `⏎` on `ch`, `why not` | that channel's detail — read-only |
+| `⏎` on `vol` or `pan` | a prompt with the range and the current value |
+| `⏎` on `out` or `arp` | the list of names, because a document names the values |
+| `⏎` on `plays` or `ROM` | the sound picker — the same as `s` |
+| `+` / `-` (and `=`) | step the number under the cursor, clamped |
+| `space` | flip `on` or `rxPC` |
+| a digit | type a number in place: the digits sit on the screen's own status line, `⏎` writes, `esc` cancels |
+| `s` | pick a sound for the channel — writes `rom_id`, `preset` **and** `bank_map` together |
+| `w` | the write gate, on this screen too, because a modal cuts the app's binding chain |
+
+`out` is the mix output, and its four values are the ones spec p. 41
+documents: -1 "use preset", 0 "send 1", 1 "send 2", 2 "send 3". The
+parameter tree prints "use preset or send 1-4" — five names against a
+four-value field — and the code shows the four the field holds.
+`arp` gets its four names from the same table (-2 off, -1 on, 0 P (preset
+arp), 1 G (global arp)); that is the whole of what any document to hand says
+about the field, so the list stops there. Every other field is a number.
+
+A nudge that cannot move — `+` at the top of a range — says the range and
+sends nothing, because a per-channel edit is a whole-dump write and
+re-sending a value the unit already holds would put an entry on the undo
+timeline that restores something that was never changed.
+
+**The sound picker's filters, against rxved's.** `s` opens a bank pane, that
+bank's presets with their names, the favourites cycle on `v` (the same three
+views the browser has, and a sentence rather than an empty list when there is
+no store), and a name filter — the one rxved's multi picker does not have,
+because its `/` search lives on the browser and the picker scrolls. Its bank
+list and favourites views match. The **ROM ID** the pick writes is that ROM's
+Bank Select MSB, which is what `rom_for_simm_id` reads a reported SIMM ID
+as: confirmed against hardware for three ROMs on 2026-09-12, which is not all
+twenty, and the picker says so rather than leaving a column of numbers
+looking transcribed.
+
+**What a pick writes.** `rom_id`, `preset` and `bank_map` together, as one
+change — the unit takes the three together, and three `z` presses that each
+restored a third of a sound would not put back the sound anybody had.
+`bank_map` is carried over from the channel rather than set: no document to
+hand says what the Multimode Bank Map maps between (RESOLUTION_NOTES §12), so
+the picker changes the sound and leaves the channel's own mapping alone.
 
 **No write has been sent to a Proteus from this editor yet.** The IDs were
 established by reading them back off a unit and comparing them with the dump
@@ -346,8 +404,13 @@ this one alone. `--config PATH` names a different file entirely.
 | `i` | device identity and which ROMs are fitted |
 | `?` / `q` | help / quit |
 
-On the multi screen: `r` re-reads the setup, `e` opens the master parameters,
-and `w` / `z` / `Z` are there too.
+On the multi screen, editing the channel under the cursor: `⏎` opens the
+value (or the channel's detail, on the columns that are not values), `+` and
+`-` nudge it, `space` flips a switch, a digit types a number in place, and
+`s` picks a sound. `w` is there too — a modal cuts the app's binding chain,
+so the gate has to be armable from the screen that says it is locked. `r`
+re-reads the setup, `e` opens the master parameters and `x` the FX block, and
+`z` / `Z` undo from here as they do from the browser.
 
 `f` writes and `v` reads, which is why they are not a shift-pair. The family
 puts the favourites view on `F`, one slip of the shift key from the key that
