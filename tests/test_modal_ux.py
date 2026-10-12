@@ -15,12 +15,16 @@
 
 """The modal screens, driven headlessly against the demo device.
 
-Five things are pinned here, and four of them were bugs:
+Six things are pinned here, and four of them were bugs:
 
 * **`escape` and `q` close the modals.** They are bound on both the multi
   screen and the master editor, but a binding whose action method does not
   exist is not an error -- Textual logs it and presses on. Both keys did
   nothing, invisibly, until ``action_close`` was given to both screens.
+* **The help names the build it is running,** in the strongest terms that
+  can be proved for each of the two components -- and never in a term that
+  cannot. A release knows its version and no commit; a checkout knows its
+  commit. See :class:`TestTheHelpNamesItsBuild`.
 * **An edit is visible where it is made.** The ``now`` cell moved, and a
   refusal is said on the modal's own status line rather than on the app's
   ``#status``, which is the dimmed backdrop behind a modal.
@@ -38,7 +42,7 @@ from textual.widgets import DataTable, Static
 
 from p2k import catalog as cat
 from p2k import messages as m
-from p2ked.app import KEY_HINTS, P2kedApp
+from p2ked.app import KEY_HINTS, P2kedApp, _build_line
 from p2ked.demo import DemoDevice
 from p2ked.masteredit import FX_PARAMETERS, MASTER_PARAMETERS, MasterEditor
 from p2ked.multi import (
@@ -51,6 +55,8 @@ from p2ked.multi import (
     ValuePickerScreen,
 )
 from p2ked.prompts import PromptScreen
+from vinsynlib.build import Build
+from vinsynlib.ui.report import ReportScreen
 
 #: The row of a parameter with a plain integer range, so the tests that
 #: drive the typed prompt are not offered a picker instead.
@@ -209,6 +215,163 @@ class TestTheModalsClose:
             assert isinstance(app.screen, type(app.screen))
             assert app._running is True
             assert screen is not None
+
+
+#: A commit that is a valid object name and nothing else, so the short sha
+#: the line prints is recognisable in the output.
+COMMIT = "0bad4f2" * 5
+#: What a checkout knows: no distribution, and the repository it sits in.
+CHECKOUT = Build(version=None, commit=COMMIT)
+#: What a release knows, and all it can know: the wheel was built from an
+#: sdist with no ``.git`` in it.
+RELEASE = Build(version="0.4.1")
+#: What a checkout that was never installed *and* is no longer reachable
+#: knows. Still not an error -- the library says so, and so does the line.
+NEITHER = Build(version=None)
+
+
+class TestTheHelpNamesItsBuild:
+    """``?`` names what is running, in the strongest terms that are true.
+
+    A support question starts with "which version?", and the answer
+    should not be a trip through a git CLI. Both components are named,
+    because they are installed separately and only one of them is
+    usually the bug -- one version number would send a reader down the
+    wrong path.
+
+    The tiering is the point, and it is the library's decision recorded
+    in :mod:`vinsynlib.build`: a checkout can prove a commit, so it
+    says one; a release cannot, so it says its version, which is the
+    identity the family tags. So every case below asserts what is
+    absent as firmly as what is present -- a line that invented a sha
+    to fill a gap would be worse than a line that omits one.
+    """
+
+    @staticmethod
+    def _line(monkeypatch, tool=CHECKOUT, library=CHECKOUT) -> str:
+        """``_build_line`` with the library's facts replaced by ``tool``.
+
+        The lookup is stubbed rather than the real one driven: the point
+        of these tests is what the *words* do with each answer, and the
+        real environment can only ever supply one of the three.
+        """
+
+        def fake(name, origin=None):
+            return tool if name == "p2ked" else library
+
+        monkeypatch.setattr("p2ked.app.build_of", fake)
+        return _build_line()
+
+    def test_the_line_names_both_components(self) -> None:
+        """Not mocked: the environment really is both, and they differ.
+
+        p2ked's install predates PEP 610 metadata -- its ``direct_url``
+        is absent -- so the tool's commit comes out of the checkout the
+        module sits in, while the library's comes out of the editable
+        install's ``file:`` URL. Two different leads, one line.
+        """
+        line = _build_line()
+        assert "p2ked" in line
+        assert "vinsynlib" in line
+        # Both are real commits here, so both are short shas.
+        assert line.count("(") == 2
+
+    def test_a_checkout_names_its_commit_and_no_version_it_cannot_prove(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        line = self._line(monkeypatch)
+        assert COMMIT[:7] in line
+        assert line.count("(") == 2
+
+    def test_a_release_names_its_version_and_no_commit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tier that cannot know a sha -- and does not pretend to."""
+        line = self._line(monkeypatch, tool=RELEASE, library=RELEASE)
+        assert line.count("0.4.1") == 2
+        assert "(" not in line, "a release printed a commit it cannot know"
+
+    def test_a_build_that_proves_nothing_still_reads_as_an_answer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Honest, and not a truncation: both names survive, no sha, no
+        empty parenthesis, no invented version."""
+        line = self._line(monkeypatch, tool=NEITHER, library=NEITHER)
+        assert "p2ked" in line and "vinsynlib" in line
+        assert "(" not in line
+        assert COMMIT[:7] not in line
+        assert line.endswith("unknown version")
+
+    def test_the_tag_is_named_when_it_points_at_the_commit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """'You are on v0.4.1 exactly' beats a bare sha."""
+        tagged = Build(version=None, commit=COMMIT, tag="refs/tags/v0.4.1")
+        line = self._line(monkeypatch, tool=tagged, library=CHECKOUT)
+        assert f"({COMMIT[:7]}, v0.4.1)" in line
+        assert "refs/" not in line
+
+    def test_an_untagged_commit_names_no_tag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tag is proved, not assumed: nothing to show, nothing shown."""
+        line = self._line(monkeypatch, tool=CHECKOUT, library=CHECKOUT)
+        assert "v0." not in line
+
+
+class TestTheHelpScreen:
+    """The frame is the library's now; the words stay p2ked's own.
+
+    Three things had to survive the swap, and two of them are the reason
+    the family wrote a screen instead of a ``notify()`` at all: the keys
+    that close it, and a body long enough to need scrolling. The library
+    scrolls its body in a ``VerticalScroll`` where p2ked's copy put a
+    ``Static`` with ``overflow-y: auto`` on it -- which does not scroll
+    in Textual, so p2ked's help was clipped to the first screenful for
+    as long as that copy existed.
+    """
+
+    async def test_escape_closes_the_help(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("question_mark")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ReportScreen))
+            await pilot.press("escape")
+            await _wait_for(pilot, lambda: not isinstance(app.screen, ReportScreen))
+            assert app._running is True
+
+    async def test_q_closes_the_help(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("question_mark")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ReportScreen))
+            await pilot.press("q")
+            await _wait_for(pilot, lambda: not isinstance(app.screen, ReportScreen))
+            assert app._running is True
+
+    async def test_the_help_still_carries_p2keds_own_words(self, app):
+        """The build line leads; the rest of the help is still p2ked's."""
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("question_mark")
+            await _wait_for(pilot, lambda: isinstance(app.screen, ReportScreen))
+            body = _text(app.screen.query_one(".body", Static))
+            assert "Program Change" in body
+            assert "vinsynlib" in body
+
+    async def test_a_long_body_scrolls_rather_than_truncating(self, app):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.push_screen(
+                ReportScreen("p2ked", "\n".join(f"line {n}" for n in range(200)))
+            )
+            await _wait_for(pilot, lambda: isinstance(app.screen, ReportScreen))
+            await pilot.pause()
+            scroll = app.screen.query_one("VerticalScroll")
+            assert scroll.scroll_offset.y == 0
+            await pilot.press("pagedown")
+            await pilot.pause()
+            assert scroll.scroll_offset.y > 0, "the body scrolled"
 
 
 class TestAnEditIsVisibleInsideTheModal:

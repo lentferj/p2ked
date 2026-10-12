@@ -82,8 +82,10 @@ from p2ked.multi import (
 )
 from p2ked.prompts import PromptScreen
 from vinsynlib import cli as vincli
+from vinsynlib.build import build_of
 from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
 from vinsynlib.ui.hints import KeyHints
+from vinsynlib.ui.report import ReportScreen
 from vinsynlib.undo import Record, UndoLog
 
 # The legend's wrapping and the widget that draws it are the family's; see
@@ -358,35 +360,6 @@ class _ChangesView(List[Change]):
     def append(self, change: Change) -> None:
         self._log.push(Record(_change_label(change), change))
         super().append(change)
-
-
-class ReportScreen(ModalScreen[None]):
-    """A scrollable block of text: device details, help."""
-
-    DEFAULT_CSS = """
-    ReportScreen { align: center middle; }
-    ReportScreen > Vertical {
-        width: 84; height: 80%; border: thick $accent;
-        background: $surface; padding: 1 2;
-    }
-    ReportScreen .body { height: 1fr; overflow-y: auto; }
-    """
-
-    BINDINGS = [Binding("escape", "close", "Close"), Binding("q", "close", "Close")]
-
-    def __init__(self, title: str, body: str) -> None:
-        super().__init__()
-        self._title = title
-        self._body = body
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(f"[b]{self._title}[/b]")
-            yield Static(self._body, classes="body")
-            yield Static("[dim]esc / q to close[/dim]")
-
-    def action_close(self) -> None:
-        self.dismiss(None)
 
 
 class RatingFilterScreen(ModalScreen[Optional[RatingFilter]]):
@@ -2969,7 +2942,41 @@ class P2kedApp(App):
         self.push_screen(ReportScreen("Device", "\n".join(lines)))
 
     def action_help(self) -> None:
-        self.push_screen(ReportScreen("p2ked", _HELP))
+        """The help, with the build it is running named at the top.
+
+        One line first, because a support question starts with "which
+        version?" and the answer should not be a trip through a git CLI.
+        """
+        self.push_screen(ReportScreen("p2ked", f"{_build_line()}\n\n{_HELP}"))
+
+
+def _build_line() -> str:
+    """One line naming both builds: this tool, and the library under it.
+
+    Both, because they are installed separately and only one of them is
+    usually the bug -- one version number would send a reader down the
+    wrong path. The words are p2ked's; the facts are the library's
+    (:func:`vinsynlib.build.build_of`), so the command line and the help
+    screen cannot disagree later.
+
+    A checkout names its commit. A release names its version, which is
+    the identity the family tags -- there is no commit to name, and
+    nothing here invents one.
+    """
+    parts = []
+    for name, origin in (("p2ked", __file__), ("vinsynlib", None)):
+        build = build_of(name, origin=origin)
+        where = build.version or "an unknown version"
+        if build.commit:
+            # The tag, when there is one pointing at the commit: "you are
+            # on v0.4.1 exactly" answers a support question in a way a
+            # sha alone does not.
+            tagged = ""
+            if build.tag:
+                tagged = f", {build.tag.removeprefix('refs/tags/')}"
+            where += f" ({build.commit[:7]}{tagged})"
+        parts.append(f"{name} {where}")
+    return "built from " + " and ".join(parts)
 
 
 _HELP = """\
