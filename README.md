@@ -123,6 +123,12 @@ bug, or untested output could overwrite or corrupt data, or be rejected by
 hardware. Always test on a spare unit or emulator **before** connecting
 irreplaceable equipment.
 
+p2ked now has a command behind that advice, for the one thing it can copy
+back: **the unit's live setup**, which a per-channel edit replaces whole.
+`p2kcli backup save` takes one on demand, and the browser takes one
+automatically before its first whole-setup write of a session. See
+[Editing](#editing-w-z-z) below.
+
 ---
 
 ## What it does
@@ -310,6 +316,30 @@ of the eleven places (§12), and no unit has been asked which range its
 firmware enforces. Treat an edit as a hardware session anyway: back the
 setup up somewhere you can restore it from, and read the value back after.
 
+**The backup is built in now.** A per-channel edit is a whole-setup write, so
+before its **first** whole-setup write of a session the browser saves the live
+dump — the one it just read, before the edit — and says so on the status
+line: `backed up the setup as setup_live_…json`. One restore point, not a log:
+a burst of presses costs one file and every later edit reuses it. It lands
+under the per-platform data directory beside `favorites.db`
+(`~/.local/share/p2ked/backups` on Linux), not in the checkout, and
+`--backup-dir` names somewhere else. If the save fails the edit still goes
+out, unchanged, and the failure is said rather than swallowed.
+
+```sh
+p2kcli backup save             # the current setup, on demand
+p2kcli backup list             # what is on disk (no unit needed)
+p2kcli backup restore <id>     # write one back — DESTRUCTIVE
+```
+
+`restore` is a whole-setup write like the edit it undoes, so it is behind the
+family's `--yes` and refuses without it, naming the setup it would replace.
+It reads the unit back afterwards and warns if the setup that came back
+differs from the backup. The files are the family's JSON envelope
+(`vinsynlib.backup`): a header you can read, base64 blocks, a version byte,
+and never an overwrite — two saves are two files. See
+`docs/RESOLUTION_NOTES.md` §14.
+
 ### The two numbers that identify a ROM
 
 - the **Bank Select MSB**, used to select a preset;
@@ -447,7 +477,19 @@ p2kcli --demo channels       # every MIDI channel (silent)
 p2kcli --demo channels --json  # the same, as one JSON object
 p2kcli --demo names XLEAD-1  # read a bank's names (silent)
 p2kcli select XLEAD-1 5      # select a preset ON THE UNIT
+p2kcli backup save           # the current setup, to a backup file
+p2kcli backup list           # backups on disk (no unit needed)
+p2kcli backup restore <id> --yes   # write one back (DESTRUCTIVE)
 ```
+
+`p2kcli backup` is the restore point for the per-channel write: `save` reads
+the current setup and writes it under the data directory, `list` prints what
+is there — including a file it cannot read, with the error, rather than
+dropping it — and `restore` sends one back, which replaces the unit's whole
+live setup. `restore` is the one destructive command here: it refuses
+without `--yes` and says which setup it would overwrite. `list` takes
+`--json` for the same reason `channels` does, and `--dir` on all three
+names the directory instead of the default. See [Editing](#editing-w-z-z).
 
 `p2kcli channels` has no aliases and needs the unit: one Setup Dump and one
 mode read, neither of which a catalog can answer. Its default output is the

@@ -1543,3 +1543,55 @@ documented *and* exercised, and the sentences above describe a Proteus now
 rather than only p2ked. One unit, one session: the first hardware session of
 any new change still starts where this one did -- send back an unmodified
 dump, and compare.
+
+## §14 — The setup backup, and why the envelope is the library's
+
+**2026-10-12.** §13's per-channel write is a whole-setup write: a Setup Dump
+"replaces" every master and channel setting the unit is playing from, and
+nothing on the unit keeps the setup it had a moment before. Until now the
+README only *advised* backing that setup up. The advice has a facility now, and
+this section is the cite for what it stores and why the format is not p2ked's.
+
+**The envelope is `vinsynlib.backup`, and it is not a tenth copy.** The
+family's device-agnostic JSON format was generalised from rxved's `xv/backup.py`
+-- the file rxved's `perf-store` has been writing since its own whole-slot
+write existed -- and it already carries exactly what a restore point needs: a
+format byte a future tool reads and checks, a `kind`, the slot and name, the
+saved time, the device ID, and blocks as base64. `p2k/backup.py` is a binding,
+not a reimplementation: it passes p2ked's own name, the setup block and the
+filename; the library owns the on-disk shape, the version check, the
+never-overwrite rule and the lenient listing (a file it cannot read is listed
+with its `error` rather than dropped).
+
+**What one block is.** The frame `p2k.messages.encode_setup_dump` produces from
+the dump the unit just sent. That encoder is the parser's exact inverse (§13,
+and `TestSetupDumpEncoder` in `tests/test_messages.py`), so the block is the
+unit's own bytes and a restore sends back what the unit sent -- no layout is
+re-derived at restore time, and a dump the encoder refuses is refused at save
+time rather than stored as something a restore could not send.
+
+**The directory is the data directory, not the checkout.** `p2k/backup.py`'s
+`default_dir()` is `<per-platform data>/p2ked/backups` -- the same directory
+`favorites.db` lives in, which is the user's own work and is gitignored, rather
+than the checkout a `git clean` empties. `--backup-dir` names another, the flag
+rxved's browser already has and whose help text this one reuses.
+
+**One restore point per session.** The automatic save is taken in the
+channel-edit worker, before the **first** whole-setup write and after the gate
+and range have passed -- so a locked gate, a refused range or a failed read
+takes no file, because nothing is about to overwrite anything. It is once per
+session and not once per write: a burst of presses coalesces into one or two
+frames, and a restore point is the setup *before* the burst, not a log of each
+value. The write itself is unchanged -- gate, read-back and undo are §13's --
+and a backup that fails is announced on the status line without stopping the
+write, because a safety net that silently becomes a wall is worse than one
+that says it tore.
+
+**A restore is a write, and is gated like one.** `p2kcli backup restore <id>`
+sends the dump with `send_setup_dump`, so it replaces the whole live setup and
+is behind the family's `--yes`, refusing without it and naming the setup it
+would overwrite. It reads the unit back afterwards and warns if the frame that
+comes back differs from the one it sent -- the same read-back every other write
+here has. `backup list` and `backup save` are local: list opens no port at all,
+and save is a read plus a file write.
+

@@ -1454,3 +1454,38 @@ now testable: `send_setup_dump(read_setup())`) and compare what the unit
 reports afterwards with what came in. Until then, item 52 is a synthetic green.
 The UI half is still open: the multi screen's per-channel editor is not
 written, so nothing calls `action_edit_channel` from a key yet.
+
+## 53. The setup can be backed up and restored — 2026-10-12
+
+**Status:** built and tested synthetically; the restore write itself is the
+same whole-setup write item 52 covers, and no unit has received a restored
+one either.
+
+p2ked's only destructive write replaces the unit's whole live setup, and
+until now the README only *advised* keeping a copy. There is a facility now,
+on the family's own envelope (`vinsynlib.backup`, the JSON format rxved's
+`perf-backup` was generalised from):
+
+- `p2k/backup.py` — a thin binding: the app's name, the default directory
+  under p2ked's per-platform data directory (`~/.local/share/p2ked/backups`
+  on Linux, beside `favorites.db`; **not** the checkout), `save_setup` (the
+  encoded Setup Dump as one block, kind `"setup"`), `list_backups` (lenient —
+  a file it cannot read is listed with the error), and `load` (back to a
+  `SetupDump`, ready to send).
+- `p2ked/app.py` — before the **first** whole-setup write of a session the
+  channel-edit worker saves the live dump it just read and says
+  `backed up the setup as <id>` on the status line. One restore point per
+  session, not a log; the write, its gate, its read-back and its undo are
+  unchanged, and a backup that fails is announced without stopping the write.
+  `--backup-dir` names the directory (rxved's own flag, kept).
+- `p2ked/cli.py` — `p2kcli backup list|save|restore`. `restore` sends the
+  dump back, so it is destructive and behind the family's `--yes`, naming the
+  setup it would replace; it reads the unit back and warns on a mismatch.
+- `tests/test_backup.py` — the round trip, never-overwrite, the one-per-
+  session rule and its announcement, the failure path, and the CLI's
+  confirmation.
+
+**What remains for a human.** No unit has taken a restored dump. The first
+hardware session should `backup save`, edit a channel, `backup restore` and
+compare — the same unmodified-round-trip check item 52 asks for, now with a
+file in the middle.
