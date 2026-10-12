@@ -41,21 +41,24 @@ from __future__ import annotations
 import sys
 
 #: The minimum this project is developed and tested against. Published
-#: since 0.2.0; ``0.4.0`` is the family's current line and the one the
+#: since 0.2.0; ``0.4.1`` is the family's current line and the one the
 #: suite here was validated against when the pin was raised.
 #:
-#: It is also the first release to export ``favorites.rating_cell``, the
-#: shared rating glyph, and :mod:`p2k.favorites` now **imports** that rather
-#: than carrying its own copy -- so 0.4.0 is a hard floor for the browser:
-#: below it the import fails, and the user is told here rather than by a
-#: traceback. The rest of the call surface p2ked uses resolved on 0.2.0, so
-#: without the rating glyph this would be a "the line we support and test"
-#: floor rather than an API break.
-MINIMUM = (0, 4, 0)
+#: It is also the first release to carry the undo seam's ``plan`` and
+#: ``settle``, and :mod:`p2ked.app` now **takes its plan from them** --
+#: so 0.4.1 is a hard floor, and worse than the rating glyph's was. Below
+#: it ``vinsynlib.undo.UndoLog`` still exists and still imports, because
+#: 0.4.0 shipped the log with no consumers; only ``plan``/``settle`` are
+#: missing. The library's own entry gate would pass a 0.4.0 and ``z``
+#: would then fail with an ``AttributeError`` on a keypress -- the exact
+#: failure this module exists to prevent, arriving past the import. The
+#: rest of the call surface p2ked uses resolved on 0.2.0, so this is an
+#: API break rather than a "the line we support and test" floor.
+MINIMUM = (0, 4, 1)
 
 #: Where to get it. On PyPI since 0.2.0; the floor is the release this
 #: project is developed and tested against (see MINIMUM).
-SOURCE = "vinsynlib>=0.4.0"
+SOURCE = "vinsynlib>=0.4.1"
 
 
 def _release_parts(version: str, width: int) -> tuple[int, ...] | None:
