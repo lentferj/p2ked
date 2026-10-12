@@ -26,10 +26,13 @@ while somebody else is using the hardware.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
 from typing import Callable, Dict, List, Optional
 
 from vinsynlib import cli, midi
+from p2k import backup as bk
 from p2k import catalog as cat
 from p2k import roms
 from p2ked._report import say_fallback, say_probing
@@ -395,6 +398,122 @@ def _cmd_select(device, args) -> None:
     )
 
 
+# --- backups -----------------------------------------------------------------
+
+
+def _when(saved: float) -> str:
+    """A backup's saved time, as a person reads it."""
+    if not saved:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(saved))
+
+
+def _cmd_backup_list(_device, args) -> None:
+    """Backups on disk. Needs no unit, so it opens no port."""
+    directory = args.dir or bk.default_dir()
+    rows = bk.list_backups(args.dir)
+    if getattr(args, "json", False):
+        import json
+
+        payload = {
+            "directory": directory,
+            "backups": [
+                {
+                    "id": backup.id,
+                    "kind": backup.kind,
+                    "slot": backup.slot,
+                    "name": backup.name,
+                    "saved": _when(backup.saved),
+                    "device_id": backup.device_id,
+                    "source": backup.source,
+                    "error": backup.error,
+                }
+                for backup in rows
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return
+    if not rows:
+        print(f"no backups in {directory}")
+        return
+    print(f"{directory}\n")
+    table = []
+    for backup in rows:
+        if backup.error is not None:
+            # Kept, not dropped: a restore point that cannot be read is
+            # exactly the thing to be told about. The library's rule, and
+            # the reason this row still appears.
+            table.append([backup.id, "", "", "", backup.error])
+            continue
+        table.append(
+            [
+                backup.id,
+                backup.kind,
+                backup.name,
+                _when(backup.saved),
+                backup.device_id,
+            ]
+        )
+    print(_table(table, ["id", "kind", "name", "saved", "device"]))
+
+
+def _cmd_backup_save(device, args) -> None:
+    """Read the current setup and write it to a backup file. Read-only."""
+    directory = args.dir or bk.default_dir()
+    dump = device.read_setup()
+    record = bk.save_setup(
+        dump,
+        device_id=device.device_id,
+        slot="live",
+        source="p2ked (manual)",
+        directory=args.dir,
+    )
+    print(f"saved {record.name!r} to {os.path.join(directory, record.id)}")
+
+
+def _cmd_backup_restore(device, args) -> None:
+    """Write a backup file back into the unit. **Destructive.**
+
+    The whole setup, not one field: a Setup Dump replaces every master and
+    channel setting the unit is playing from, so this is behind the family's
+    ``--yes`` and names what it will overwrite before it does. Nothing is
+    backed up first -- the caller can ``backup save`` -- and the write is
+    read back so a unit that clipped a value says so.
+    """
+    from p2k import messages as msg
+
+    dump = bk.load(args.id, directory=args.dir)
+    if not args.yes:
+        raise SystemExit(
+            f"error: this overwrites the unit's whole live setup with "
+            f"{dump.name!r} from {args.id}. A Setup Dump replaces every "
+            f"master and channel setting the unit is playing from, and the "
+            f"unit keeps no copy of the setup it has now. Save it first with "
+            f"`p2kcli backup save`, then re-run with --yes."
+        )
+    device.send_setup_dump(dump)
+    after = device.read_setup()
+    if msg.encode_setup_dump(after, device=device.device_id) != msg.encode_setup_dump(
+        dump, device=device.device_id
+    ):
+        print(
+            f"WARNING: the unit reports a setup that differs from {args.id} "
+            f"after the write; it may have clipped a value."
+        )
+        return
+    print(f"restored {dump.name!r} into the unit's live setup")
+
+
+def _cmd_backup(device, args) -> None:
+    """The ``backup`` group: list, save, restore."""
+    if args.backup_command == "list":
+        _cmd_backup_list(device, args)
+    elif args.backup_command == "save":
+        _cmd_backup_save(device, args)
+    else:
+        _cmd_backup_restore(device, args)
+
+
 _COMMANDS: Dict[str, Callable] = {
     # `banks` is the family's name for the table and `roms` still works, as
     # an alias on the subparser and as a key here. p2ked's own browser has
@@ -413,11 +532,27 @@ _COMMANDS: Dict[str, Callable] = {
     "channels": _cmd_channels,
     "names": _cmd_names,
     "select": _cmd_select,
+    "backup": _cmd_backup,
 }
 
 #: Commands that open no port at all. Both spellings of `banks`, because both
 #: dispatch and neither may fall through to the device path.
 _OFFLINE = {"banks", "roms", "list", "find", "resolve"}
+
+
+def _offline(args) -> bool:
+    """True when this command needs no unit.
+
+    ``backup list`` is the one command inside a group that opens no port, so
+    the group's name alone is not enough: ``backup save`` reads the unit and
+    ``backup restore`` writes to it, and both build a device. Checked as a
+    function rather than by growing :data:`_OFFLINE`, because that set is the
+    documented list of *top-level* commands and a reader should not have to
+    know a sub-command's name to read it.
+    """
+    return args.command in _OFFLINE or (
+        args.command == "backup" and args.backup_command == "list"
+    )
 
 
 def _cmd_ports(_device, _args) -> None:
@@ -528,6 +663,31 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("select", help="select a preset ON THE UNIT")
     sp.add_argument("bank")
     sp.add_argument("pc", type=int)
+    # The backup group. `list` needs no unit; `save` reads the current setup;
+    # `restore` writes one back and is destructive, so it carries the
+    # family's `--yes` the way rxved's `perf-restore` does.
+    sp = sub.add_parser("backup", help="setup backups: list, save, restore")
+    bsub = sp.add_subparsers(dest="backup_command", required=True)
+    bp = bsub.add_parser("list", help="backups on disk (no unit needed)")
+    bp.add_argument("--dir", help="backup directory (default: the data dir)")
+    bp.add_argument(
+        "--json",
+        action="store_true",
+        help="one JSON object instead of a table, for another program to read",
+    )
+    bp = bsub.add_parser("save", help="save the current setup to a backup file")
+    bp.add_argument("--dir", help="backup directory (default: the data dir)")
+    bp = bsub.add_parser(
+        "restore",
+        help="write a backup back into the unit (DESTRUCTIVE)",
+    )
+    bp.add_argument("id", help="the backup's id, as `backup list` prints it")
+    bp.add_argument("--dir", help="backup directory (default: the data dir)")
+    bp.add_argument(
+        "--yes",
+        action="store_true",
+        help="required: this replaces the unit's whole live setup",
+    )
     return parser
 
 
@@ -587,7 +747,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.scan and args.port:
         midi.fail("--scan searches for the port and --port names it; use one")
 
-    if args.command in _OFFLINE:
+    if _offline(args):
         try:
             handler(None, args)
         except (LookupError, ValueError) as exc:

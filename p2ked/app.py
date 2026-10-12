@@ -56,6 +56,7 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Header, Label, Static
 
+from p2k import backup as bk
 from p2k import catalog as cat
 from p2k import roms
 from p2k.favorites import rating_cell
@@ -605,6 +606,13 @@ class P2kedApp(App):
     #: first use. Declared here for the same reason ``_busy`` is.
     _allow_write: bool
 
+    #: True once the live setup has been written to the backup directory
+    #: this session. One restore point, not a log: the first whole-setup
+    #: write of a session takes it, and every write after that reuses it.
+    #: Declared here for the same reason ``_busy`` is -- it is read and set
+    #: on a worker thread. See :meth:`_backup_before_write`.
+    _setup_backed_up: bool
+
     #: The MIDI channel selections go out on, 0-based. A reactive rather
     #: than a plain attribute so the header's line cannot go stale: three
     #: places set it -- ``--channel`` at startup, ``[`` / ``]``, and the
@@ -638,6 +646,19 @@ class P2kedApp(App):
         if getattr(self, "_master_editor", None) is None:
             self._master_editor = MasterEditor(self._gate, EditLog())
         return self._master_editor
+
+    def backup_dir(self) -> str:
+        """Where setup backups go.
+
+        The per-platform data directory unless a caller said otherwise --
+        the same directory the favourites database lives in, so the restore
+        points are beside the user's own work and not in the checkout. The
+        method is named the way rxved's is, because the flag that sets it
+        (``--backup-dir``) is the family's own and so is the sentence.
+        """
+        if self._backup_dir is not None:
+            return self._backup_dir
+        return bk.default_dir()
 
     def action_toggle_write_gate(self) -> None:
         self._gate.toggle()
@@ -1080,6 +1101,51 @@ class P2kedApp(App):
                 return refusal
         return None
 
+    def _backup_before_write(self, dump) -> None:
+        """Take the session's one restore point, before the first write.
+
+        A per-channel edit is a whole-setup write (§13), so the setup the
+        unit is playing from is about to be replaced and nothing on the unit
+        keeps it. This saves the live ``dump`` -- the one the worker has
+        just read, before it is mutated -- under :meth:`backup_dir`, and says
+        so on the status line. It runs **once per session**: a restore point,
+        not a log, so a burst of presses costs one file and not one per
+        write. The flag lives on the app, so it survives the worker a burst
+        returns from.
+
+        Called from :meth:`_channel_edit_worker`'s thread, deliberately, and
+        it is the one file write on that thread. It is not the settings
+        cache -- the library's ``save`` writes a uniquely named file and no
+        other writer touches it -- and it has to happen here, before the
+        ``send`` on the next line, because a backup taken after the write is
+        a copy of the thing that overwrote the setup. If it fails the write
+        still goes out, unchanged, and the failure is announced rather than
+        swallowed: the gate, the read-back and the undo log are not this
+        method's to change.
+        """
+        if self._setup_backed_up:
+            return
+        try:
+            record = bk.save_setup(
+                dump,
+                device_id=self.device.device_id,
+                slot="live",
+                source="p2ked (before edit)",
+                directory=self.backup_dir(),
+            )
+        except Exception as exc:
+            # Not fatal, and not silent: the write the caller is about to
+            # make is unchanged, but a session with no restore point should
+            # say so rather than look as safe as one with a backup.
+            self.call_from_thread(
+                self._say_edit,
+                f"could not back up the setup: {exc}",
+                refused=True,
+            )
+            return
+        self._setup_backed_up = True
+        self.call_from_thread(self._say_edit, f"backed up the setup as {record.id}")
+
     def _show_channel_target(self, channel: int, values: Dict[str, int]) -> None:
         """Show the values this edit is sending, now, before they land.
 
@@ -1178,6 +1244,7 @@ class P2kedApp(App):
                         after = channel_values(dump, channel, fields_of(field))
                     else:
                         before = channel_values(dump, channel, fields_of(field))
+                        self._backup_before_write(dump)
                         written = mutate_channel(dump, channel, values)
                         self.device.send_setup_dump(written)
                         after = channel_values(
@@ -1567,6 +1634,7 @@ class P2kedApp(App):
         installed=None,
         config_path: Optional[str] = None,
         allow_write: bool = False,
+        backup_dir: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.device = device
@@ -1574,6 +1642,16 @@ class P2kedApp(App):
         #: :attr:`_gate` -- so the flag is kept here as the state to start it
         #: in rather than passed to a gate that does not exist yet.
         self._allow_write = allow_write
+        #: Where setup backups are written. Injected rather than defaulted
+        #: here, for the reason ``favorites`` is: a test must be able to point
+        #: the automatic backup at a ``tmp_path`` rather than leave files in
+        #: the developer's real data directory. ``None`` means the
+        #: per-platform default; see :meth:`backup_dir`.
+        self._backup_dir = backup_dir
+        #: The first whole-setup write of this session takes one restore
+        #: point; every write after it reuses it. See
+        #: :meth:`_backup_before_write`.
+        self._setup_backed_up = False
         self.catalog = catalog if catalog is not None else cat.empty()
         #: The rating filter, or ``None`` for none. Stacks on the view and
         #: on the categories the same way the categories stack on the view
@@ -2849,6 +2927,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list every ROM in the table, not just the ones this unit has",
     )
+    # --backup-dir is p2ked's own, as it is rxved's: where the automatic
+    # restore point for the whole-setup write goes. It names a concept the
+    # family's flag contract has no opinion about, so it is not in
+    # spec.CANONICAL_FLAGS and the help text is this project's.
+    parser.add_argument(
+        "--backup-dir",
+        default=None,
+        help="where setup backups are written "
+        "(default: alongside the favourites database)",
+    )
     return parser
 
 
@@ -2987,6 +3075,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         config_path=config_path,
         channel=channel,
         allow_write=args.allow_write,
+        backup_dir=args.backup_dir,
     )
     try:
         app.run()
