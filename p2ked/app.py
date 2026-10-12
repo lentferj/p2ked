@@ -84,6 +84,7 @@ from p2ked.prompts import PromptScreen
 from vinsynlib import cli as vincli
 from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
 from vinsynlib.ui.hints import KeyHints
+from vinsynlib.undo import Record, UndoLog
 
 # The legend's wrapping and the widget that draws it are the family's; see
 # src/vinsynlib/keys.py and src/vinsynlib/ui/hints.py, which carry the
@@ -318,6 +319,45 @@ class _Sayer(Protocol):
 #: one parameter ID and value. The two favourites-store entries are here for
 #: the reason the edits are: ``z`` reverses whichever came last.
 Change = EditChange | FavouriteChange | RatingChange | ChannelChange
+
+
+def _change_label(change: Change) -> str:
+    """The label a timeline record for *change* carries.
+
+    The kind, in one readable word: a record is inspectable data, so
+    the label is what a reader of the log sees before the payload, and
+    the payload is the change itself. A shared record type was rejected
+    -- the family's decision is that the payload is the tool's own
+    change object, which is why this maps four kinds onto one name
+    each rather than asking each class to inherit one.
+    """
+    if isinstance(change, FavouriteChange):
+        return "favourite"
+    if isinstance(change, RatingChange):
+        return "rating"
+    if isinstance(change, ChannelChange):
+        return "channel edit"
+    return "edit"
+
+
+class _ChangesView(List[Change]):
+    """The timeline as the app has always read it: a list of changes.
+
+    A window rather than a second copy. The library's
+    :class:`~vinsynlib.undo.UndoLog` is the store -- ``z`` takes its
+    plan from there -- and this is how the rest of the app, and every
+    test that reads the timeline, sees it in the shape it always had.
+    :meth:`append` writes through, so putting a change on the timeline
+    is a record on the log rather than two lists to keep in step.
+    """
+
+    def __init__(self, log: UndoLog, changes: List[Change]) -> None:
+        super().__init__(changes)
+        self._log = log
+
+    def append(self, change: Change) -> None:
+        self._log.push(Record(_change_label(change), change))
+        super().append(change)
 
 
 class ReportScreen(ModalScreen[None]):
@@ -948,7 +988,7 @@ class P2kedApp(App):
             # The edit is now undoable, and `z` has to know that *after*
             # any favourite toggle -- so it goes on the shared timeline
             # rather than only on the editor's own log. See EditChange.
-            self._changes.append(EditChange())
+            self._push_change(EditChange())
         screen = self._saying_screen()
         if screen is not None:
             # The screen says it as well as the status line, because it is
@@ -1351,7 +1391,7 @@ class P2kedApp(App):
             # field and the previous value, which is what an undo of a
             # whole-dump write needs and what an empty EditChange could not
             # hold. See EditChange.
-            self._changes.append(change)
+            self._push_change(change)
         screen = self._hook_screen("channel_result")
         if screen is not None:
             # The screen's own hook for a screen that shows a channel row --
@@ -1403,6 +1443,44 @@ class P2kedApp(App):
             return ChannelChange(channel, field, before[0], after[0])
         return ChannelChange(channel, field, tuple(before), tuple(after))
 
+    @property
+    def _changes(self) -> List[Change]:
+        """Everything ``z`` can reverse, oldest first -- the log's window.
+
+        The store is the library's :class:`UndoLog`; this is the shape
+        the rest of the app and its tests have always read it in. See
+        :class:`_ChangesView` for the write-through half.
+        """
+        return _ChangesView(self._undo_log, [r.payload for r in self._undo_log])
+
+    @_changes.setter
+    def _changes(self, changes: List[Change]) -> None:
+        self._undo_log.clear()
+        for change in changes:
+            self._push_change(change)
+
+    def _push_change(self, change: Change) -> None:
+        """One change onto the shared timeline, as a record.
+
+        The record is the library's shape -- a label and this tool's
+        own change as the payload -- so ``z`` reverses whichever came
+        last regardless of kind. See :class:`EditChange` for why it is
+        one timeline and not one log per kind.
+        """
+        self._undo_log.push(Record(_change_label(change), change))
+
+    def _undo_gate(self) -> Optional[str]:
+        """Why an undo must not start, or ``None`` when it may.
+
+        The busy flag in the library's shape: the log consults it
+        before it hands out a plan, so a plan is never taken while a
+        write is in flight. The sentence and its ordering against
+        "nothing to undo" are built on the main thread in
+        :meth:`_undo_master_edits` -- one predicate, read by the log
+        and by the message, so there is no second gate to drift.
+        """
+        return "busy" if self._busy else None
+
     def _undo_master_edits(self, count: Optional[int] = None) -> None:
         """Reverse the last ``count`` changes. Nothing read-only about it.
 
@@ -1417,42 +1495,56 @@ class P2kedApp(App):
         kept in the order they happened rather than one log per kind -- see
         :class:`EditChange` and :class:`ChannelChange`.
 
-        Each entry leaves the timeline as it is undone, so an undo that
-        fails halfway cannot be replayed by the next press. The editor's own
-        logs lose the same entries at the same time, which is what keeps
-        "N undoable with z" on the edit screen true.
+        **The library owns the which; this method owns the when.** The
+        plan is taken from the library's log -- newest-first, clamped,
+        gate-checked -- and the entries are off it as the plan is taken, so
+        an undo that fails halfway cannot be replayed by the next press.
+        What is left here is the when: the two local kinds go on the main
+        thread with no wire at all, and the wired ones go to the worker.
+
+        The library's log is the single authority for the *timeline*,
+        and the editor's two kind-logs stay in step with it rather than
+        deriving from it -- that split is the honest one, because an
+        :class:`EditChange` deliberately carries no value of its own (see
+        its docstring), so the value ``z`` sends back can only come from
+        the editor's log. Both are consumed from the one plan taken here,
+        in one piece: the counts handed to the editor are counted off the
+        very records the library gave out, so "N undoable with z" on the
+        edit screen cannot drift.
         """
-        if self._busy:
-            self._say_edit("busy", refused=True)
+        taken = self._undo_log.plan(len(self._changes) if count is None else count)
+        if not taken:
+            refusal = self._undo_log.last_refusal
+            if refusal is not None:
+                # The busy gate, in the log's voice. The word is the
+                # gate's, so there is one place that says it.
+                self._say_edit(refusal, refused=True)
+            elif not self._changes:
+                self._say_edit("nothing to undo")
+            # else: ``count`` asked for nothing on a non-empty timeline.
+            # The old silent no-op, kept as it was.
             return
-        if not self._changes:
-            self._say_edit("nothing to undo")
-            return
-        wanted = len(self._changes) if count is None else count
-        if wanted <= 0:
-            return
-        taken = self._changes[-wanted:]
-        del self._changes[-wanted:]
+        # Newest first, the order the plan handed them over in -- which
+        # is the order ``z`` has always undid them in.
+        changes = [record.payload for record in taken]
         # The two local kinds first, and with no wire involved at all: a
         # favourite and its rating live in SQLite, and undoing one is a
         # write there. New ones are undone before old ones, like the edits
         # after them.
-        local = [
-            c for c in reversed(taken) if isinstance(c, (FavouriteChange, RatingChange))
-        ]
+        local = [c for c in changes if isinstance(c, (FavouriteChange, RatingChange))]
         for change in local:
             if isinstance(change, RatingChange):
                 self._undo_rating(change)
             else:
                 self._undo_favourite(change)
-        favourites = sum(1 for c in taken if isinstance(c, FavouriteChange))
-        ratings = sum(1 for c in taken if isinstance(c, RatingChange))
-        edits = sum(1 for c in taken if isinstance(c, EditChange))
+        favourites = sum(1 for c in changes if isinstance(c, FavouriteChange))
+        ratings = sum(1 for c in changes if isinstance(c, RatingChange))
+        edits = sum(1 for c in changes if isinstance(c, EditChange))
         # Off the timeline, which is the authority: a ChannelChange carries
         # its own channel, field and previous value, so undoing one needs
         # nothing looked up. The editor's channel log loses the same count,
         # so the two cannot disagree about what is left to undo.
-        channels = [c for c in reversed(taken) if isinstance(c, ChannelChange)]
+        channels = [c for c in changes if isinstance(c, ChannelChange)]
         if channels:
             self._editor.channel_undo_plan(len(channels))
         if edits or channels:
@@ -1637,6 +1729,19 @@ class P2kedApp(App):
         backup_dir: Optional[str] = None,
     ) -> None:
         super().__init__()
+        #: Everything ``z`` can reverse, in the order it happened. One
+        #: timeline for the four kinds, because ``z`` reverses whichever
+        #: came last; see :class:`EditChange`. The library's log is the
+        #: store, :attr:`_changes` is the window onto it, and
+        #: :meth:`_undo_master_edits` takes its plan from here -- which
+        #: is what makes the *which* the library's and the *when* this
+        #: app's.
+        #:
+        #: Made first in ``__init__`` because a watcher can fire before
+        #: the constructor has finished -- see the ``channel``
+        #: assignment below -- and a change recorded that early needs a
+        #: log to land on.
+        self._undo_log = UndoLog(gate_hook=self._undo_gate)
         self.device = device
         #: What ``--allow-write`` asked for. The gate is built lazily -- see
         #: :attr:`_gate` -- so the flag is kept here as the state to start it
@@ -1743,10 +1848,8 @@ class P2kedApp(App):
         #: catalog's job), so in practice this is "what your user memory said
         #: when you opened p2ked". See :meth:`_session_change`.
         self._baseline: Dict[str, Dict[int, str]] = {}
-        #: Everything ``z`` can reverse, in the order it happened. Two kinds
-        #: share it -- a master edit and a favourite toggle -- because ``z``
-        #: reverses whichever came last; see :class:`EditChange`.
-        self._changes: List[Change] = []
+        # (``_changes`` is not here: it is a property over the library's
+        # log, made at the top of ``__init__`` -- see ``_undo_log``.)
         #: Empty = every category. Categories are the "bas:" style prefix
         #: E-MU puts on a preset name.
         self._categories: set = set()
@@ -2165,7 +2268,7 @@ class P2kedApp(App):
         # master edits: `z` reverses whichever of the two came last. The
         # state *before* the keypress is what an undo restores, because
         # that is the only thing this keypress can be held to.
-        self._changes.append(FavouriteChange(entry.bank_id, entry.program_change, was))
+        self._push_change(FavouriteChange(entry.bank_id, entry.program_change, was))
         self.notify_status(f"{'favourited' if now else 'unfavourited'} {name}")
         self._refill_bank_count(entry.bank_id)
         self._refill_keeping_place()
@@ -2284,7 +2387,7 @@ class P2kedApp(App):
         # the toggle and the master edits: `z` reverses whichever came
         # last. The rating *before* the keypress is what an undo restores,
         # because that is the only thing this keypress can be held to.
-        self._changes.append(RatingChange(bank_id, number, existing.rating))
+        self._push_change(RatingChange(bank_id, number, existing.rating))
         name = self.catalog.display_name(bank_id, number)
         said = f"rated {value} {name}" if value else f"rating cleared {name}"
         # The row can leave the list: rate a 3-star down to nothing under a

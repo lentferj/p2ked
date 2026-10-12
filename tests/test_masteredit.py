@@ -1263,6 +1263,61 @@ class TestUndoCoversBothKindsOfChange:
             assert store.get("USER-0", number) is None
             assert app._changes == []
 
+    async def test_the_entry_is_off_the_timeline_before_the_worker_finishes(self):
+        """Consume-on-take, and why it earns a test of its own.
+
+        The plan leaves the library's log on the main thread, so for as
+        long as the worker runs the timeline is already empty -- a
+        cannot lie about an entry that is being undone right now. It is
+        read at the one moment it must not: inside the send the undo is
+        making.
+        """
+        seen: list[int] = []
+
+        class Watcher(DemoDevice):
+            """A unit that reads the timeline as it is asked to undo."""
+
+            def set_parameter(self, parameter_id, value):
+                seen.append(len(app._changes))
+                super().set_parameter(parameter_id, value)
+
+        app = P2kedApp(Watcher(), catalog=cat.empty())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._gate.toggle()
+            app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert len(app._changes) == 1
+            seen.clear()  # the edit is done; watch the undo
+            await pilot.press("z")
+            await _wait_for(pilot, lambda: not app._busy)
+            assert seen == [0], "the timeline was empty as the undo ran"
+            assert app.device.parameters[m.Parameter.MASTER_TRANSPOSE] == 0
+            assert app._changes == []
+
+    async def test_an_undo_while_busy_is_refused_not_queued(self, favouriting):
+        """The busy gate, in the library's voice.
+
+        The log consults it before it hands out a plan, so an undo
+        never starts behind a write that owns the wire -- and the
+        timeline is left standing for the press that comes after.
+        """
+        app, store = favouriting
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            number = app._cursor_entry().program_change
+            await self._press_f(app, pilot)
+            app._busy = True
+            await pilot.press("z")
+            await pilot.pause()
+            assert said[-1] == ("busy", True)
+            assert len(app._changes) == 1, "the gate refused, the log kept"
+            app._busy = False
+            await pilot.press("z")
+            await pilot.pause()
+            assert store.get("USER-0", number) is None
+
 
 class TestUndoFromTheMultiScreen:
     """``z`` pressed on the multi screen, which is where an edit returns.
