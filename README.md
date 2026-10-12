@@ -366,7 +366,7 @@ python3 -m venv --system-site-packages .venv
 .venv/bin/pip install -e .
 ```
 
-Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** 0.4.0
+Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** 0.4.1
 or newer — the shared base of this family of terminal instrument tools: the
 settings cache, the favourites database, the keymap and legend, the command
 line and the port listing. It comes from PyPI with the rest. To develop
@@ -610,7 +610,7 @@ truth and every tool reads its configuration from `pyproject.toml`.
 
 ### Versions
 
-The shared library's floor is `vinsynlib>=0.4.0`, declared in
+The shared library's floor is `vinsynlib>=0.4.1`, declared in
 `pyproject.toml` and mirrored in `p2ked/entry.py`'s `MINIMUM` and `SOURCE`.
 That is the family's current line and the release this project is developed
 and tested against. `vinsynlib` is a published index dependency, so it is

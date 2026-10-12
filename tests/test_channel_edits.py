@@ -1056,6 +1056,59 @@ class TestOneTimelineOverBothKinds:
             await _wait_for(pilot, lambda: not app._busy)
             assert said[-1] == ("undid 1 edit", False)
 
+    async def test_a_refused_restore_does_not_stop_the_other_one(self):
+        """Per-entry failure: the batch carries on past a refusal.
+
+        One restore lands and the unit refuses the other, which is a
+        read-back that disagrees rather than an exception. An undo that
+        stopped at the first failure would leave the second entry
+        applied and a sentence about one entry; each is verified on its
+        own, so the one that took is claimed and the one that did not
+        is named.
+        """
+
+        class HalfAwake(DemoDevice):
+            """A unit that takes one restore and then stops listening.
+
+            Armed by the test once both edits have landed, so the first
+            restore of the batch goes through and the second finds a
+            unit that no longer answers.
+            """
+
+            armed = False
+            since_armed = 0
+
+            def send_setup_dump(self, dump, *, timeout=None):
+                if self.armed:
+                    self.since_armed += 1
+                    if self.since_armed > 1:
+                        return
+                super().send_setup_dump(dump, timeout=timeout)
+
+        app = P2kedApp(HalfAwake(), catalog=cat.empty())
+        said = _record(app)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("w")
+            app.action_edit_channel(LIVE, "volume", 90)
+            await _wait_for(pilot, lambda: not app._busy)
+            app.action_edit_channel(QUIET, "pan", 90)
+            await _wait_for(pilot, lambda: not app._busy)
+            assert len(app._changes) == 2
+            app.device.armed = True
+            await pilot.press("Z")
+            await _wait_for(pilot, lambda: not app._busy)
+            message = said[-1][0]
+            assert "undid 1 channel edit" in message
+            assert "the unit rejected 1 (channel" in message
+            entry = app.device.read_setup()
+            assert entry.channel(QUIET).pan == 64, "the first one landed"
+            assert entry.channel(LIVE).volume == 90, "the second did not"
+            # Both entries left the timeline: a refused write is not one
+            # the next press gets to try again.
+            assert app._changes == []
+            assert app._editor.channel_pending == 0
+
 
 class TestTheDumpFrameOnTheWire:
     """What the bridge does with a frame this size.
