@@ -45,12 +45,12 @@ import sys
 #: suite here was validated against when the pin was raised.
 #:
 #: It is also the first release to export ``favorites.rating_cell``, the
-#: shared rating glyph. :mod:`p2k.favorites` still carries p2ked's own copy
-#: of that function for one more release, so the floor is set where the
-#: consolidation onto the library's copy can land rather than being raised
-#: again with it. The call surface p2ked uses resolved on 0.2.0 as well, so
-#: this is a "the line we support and test" floor, not a hard API break --
-#: but a user below it is told here rather than finding out at runtime.
+#: shared rating glyph, and :mod:`p2k.favorites` now **imports** that rather
+#: than carrying its own copy -- so 0.4.0 is a hard floor for the browser:
+#: below it the import fails, and the user is told here rather than by a
+#: traceback. The rest of the call surface p2ked uses resolved on 0.2.0, so
+#: without the rating glyph this would be a "the line we support and test"
+#: floor rather than an API break.
 MINIMUM = (0, 4, 0)
 
 #: Where to get it. On PyPI since 0.2.0; the floor is the release this

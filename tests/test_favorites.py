@@ -691,6 +691,19 @@ class TestRatingCell:
         for stars in range(6):
             assert "*" not in rating_cell(stars), stars
 
+    def test_it_is_the_library_s_own_function(self):
+        """p2ked keeps no copy: one function decides the whole cell.
+
+        The behaviour tests above pin what the cell reads; this pins that
+        there is only *one* thing that decides it. A local copy could pass
+        every one of them and then drift from the library's the first time
+        either side was edited, which is the drift the re-export exists to
+        make impossible.
+        """
+        from vinsynlib.favorites import rating_cell as family_rating_cell
+
+        assert rating_cell is family_rating_cell
+
 
 @pytest.mark.asyncio
 class TestTheRatingKey:

@@ -31,6 +31,15 @@ string a user reads says "favourite". That is deliberate and it is the
 family's: the flag on nine command lines is ``--favorites`` and the file it
 names is ``favorites.db``, so the identifier follows the file rather than
 the prose. See vinsynlib's docs/UX-SPEC.md section 1.
+
+:func:`rating_cell` -- the filled stars plus empty dots the preset table's
+rating column shows -- is **re-exported** from the library rather than kept
+here. p2ked wrote its copy first and rxved's was the model for the
+library's, so the glyphs and the signature (``rating`` plus an optional
+``scale``) are the same; a glyph written twice is exactly the kind of thing
+that drifts. It stays importable from this module so the browser reaches it
+the way it always has, but the one function that decides what a rating looks
+like now lives in the family's file.
 """
 
 from __future__ import annotations
@@ -38,7 +47,7 @@ from __future__ import annotations
 from typing import Any
 
 from vinsynlib import favorites as _favorites
-from vinsynlib.favorites import SCHEMA_VERSION, Favorite
+from vinsynlib.favorites import SCHEMA_VERSION, Favorite, rating_cell
 
 __all__ = [
     "APP_NAME",
@@ -66,38 +75,6 @@ def data_dir() -> str:
 def default_path() -> str:
     """Where the favourites database lives unless ``--favorites`` says otherwise."""
     return _favorites.default_path(APP_NAME, DB_NAME)
-
-
-def rating_cell(rating: int, *, scale: int = 5) -> str:
-    """How a rating reads in a table: the filled stars, then the rest dim.
-
-    The signature and the glyphs are now the library's too:
-    :func:`vinsynlib.favorites.rating_cell` was added in vinsynlib 0.4.0
-    and renders the same cell, ``scale`` included. This copy is kept for one
-    release and the next phase replaces it with the library's; the reasoning
-    below is why it was written here first, and is the record of that.
-
-    Value *and* scale, because ``★★★`` is ambiguous where ``★★★··`` is not,
-    and zero is blank rather than five dots -- blank for "not rated", the
-    same blank-means-absent the favourite marker column uses.
-
-    ``★`` and not ``*``, and that is this project's own decision rather than
-    the family's: ``*`` already means "this name disagrees with the
-    catalogue" in the preset table's name column, on the detail line under
-    it, in ``p2kcli find`` and in ``p2kcli names``. One glyph meaning two
-    things in one table is how the favourite marker came to be a heart --
-    and here it would be worse than a collision, because the two meanings
-    answer different questions: "the unit and the book disagree" is a fact
-    about a slot, and a rating is the user's own opinion of one.
-
-    Sibling rxved spells the cell the same way for the same reason. That is
-    the point of it living here rather than beside either front end: both
-    show a rating, and a second copy of a glyph is exactly the kind of
-    thing that drifts.
-    """
-    if rating == 0:
-        return ""
-    return "★" * rating + "·" * (scale - rating)
 
 
 class Favorites(_favorites.Favorites):
