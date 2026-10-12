@@ -22,6 +22,7 @@ import ast
 import os
 
 from p2ked.app import KEY_HINTS, wrap_blocks
+from vinsynlib import devchecks
 
 
 class TestLegend:
@@ -234,12 +235,20 @@ class TestConfigIsNotWrittenBehindTheSuitesBack:
     """
 
     def _test_sources(self):
+        """Every test module, parsed. The walk is the family's.
+
+        This was p2ked's own generator until the library grew the same one;
+        ``vinsynlib.devchecks.iter_test_sources`` is ``test_*.py`` under a
+        directory, parsed and yielded, which is exactly what this did, so it
+        is a binding now rather than a ninth copy. What stays p2ked's is the
+        *check* below, and it is deliberately stricter than the library's
+        ``devchecks.config_saves_without_path``: that one looks at
+        ``save_*`` only, and a pathless ``load_*`` takes its answer from
+        whatever the developer's checkout happens to hold -- which is a test
+        that passes for one developer and fails for the next. It did.
+        """
         here = os.path.dirname(os.path.abspath(__file__))
-        for name in sorted(os.listdir(here)):
-            if name.startswith("test_") and name.endswith(".py"):
-                path = os.path.join(here, name)
-                with open(path, encoding="utf-8") as handle:
-                    yield name, ast.parse(handle.read())
+        return devchecks.iter_test_sources(here)
 
     def test_every_config_access_in_the_suite_names_its_file(self):
         """Reads as well as writes.

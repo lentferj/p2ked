@@ -21,10 +21,12 @@ section 5 and in the library itself: what drifted was never a bug anyone
 chose, it was a copy that nobody had a second copy to compare against.
 """
 
+import os
+
 from p2k.terms import TERMS
 from p2ked import cli
 from p2ked.app import KEY_HINTS, P2kedApp, build_parser
-from vinsynlib import conformance
+from vinsynlib import conformance, devchecks
 
 #: The legend's own hints. `m channels` is where the family puts `m` in a
 #: browser, the two after it are p2ked's, and `v favourites view` is
@@ -151,3 +153,34 @@ def test_the_pipe_front_end_matches_the_family() -> None:
         ),
         forbidden=("favorites",),
     )
+
+
+#: The two packages p2ked owns. `vinsynlib` is not listed because the
+#: library is in `devchecks`'s own third-party allow-list -- importing it is
+#: the point, not a slip.
+OWN = ("p2k", "p2ked")
+
+
+def test_the_project_imports_no_sibling() -> None:
+    """A sibling project's package is not installed beside this one.
+
+    The libraries in this family are ported between the projects, and each
+    hop is a chance to import the source project's package by name rather
+    than this one's. It has happened: ``emorphed`` had a function importing
+    ``nano.config`` -- ``nanosyned``'s package, which is not installed beside
+    it -- and it raised ``ImportError`` the moment ``--config`` was used.
+    The code read correctly in the project it was copied from, which is why
+    review did not catch it. The check itself is the family's
+    (:func:`vinsynlib.devchecks.foreign_imports`); what is p2ked's is the
+    list of packages it owns.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    offenders: list[str] = []
+    for package in OWN:
+        directory = os.path.join(root, package)
+        for name in sorted(os.listdir(directory)):
+            if name.endswith(".py"):
+                offenders += devchecks.foreign_imports(
+                    os.path.join(directory, name), own=OWN
+                )
+    assert not offenders, offenders
