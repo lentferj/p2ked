@@ -157,11 +157,7 @@ automatically before its first whole-setup write of a session. See
   dump route instead, with no ID invented — see Editing below.
 - **A CLI** (`p2kcli`), most of which needs no unit at all.
 
-<details><summary>Browser — ROM bank selected, catalog names visible</summary>
-
 ![Browser with Xtreme Lead bank selected](docs/screenshots/general.png)
-
-</details>
 
 ### Channels (`m`)
 
@@ -200,17 +196,9 @@ parameters and `x` to the master FX block. The MIDI channel selections go
 out on sits in the window's subtitle for as long as the window is open, not
 only for the moment it changes.
 
-<details><summary>Channels screen — 32 channels + master panel + why-not column</summary>
-
 ![MultiScreen with 32 channels](docs/screenshots/channels.png)
 
-</details>
-
-<details><summary>Channel detail — read-only, all nine params + why-not</summary>
-
 ![ChannelDetailScreen](docs/screenshots/channel-detail.png)
-
-</details>
 
 Note the word: **"multi" means two things on this machine.** Multi is one of
 three MIDI *modes* (Omni / Poly / Multi). A *Multisetup* is something else —
@@ -229,11 +217,7 @@ poly / multi — opens the picker and ⏎ picks; a plain range gets a prompt
 that names the range with it. `+` and `-` nudge the row under the cursor by
 one, clamped to the range, and go through the same gate as an edit.
 
-<details><summary>Master parameter editor — eleven parameters, picker for enums, prompt for ranges</summary>
-
 ![MasterEditScreen](docs/screenshots/master-edit.png)
-
-</details>
 
 `x` on the multi screen opens the **master FX** — the sixteen FX parameters
 the dump carries (513–528: the two algorithms, their decays, damping,
@@ -243,11 +227,7 @@ rather than typed. The value is checked before anything is sent, because a
 Proteus **clips** an out-of-range value rather than refusing it — a typo
 would otherwise land as a plausible, silent change.
 
-<details><summary>Master FX editor — sixteen parameters, algorithm pickers</summary>
-
 ![FXEditScreen](docs/screenshots/master-fx.png)
-
-</details>
 
 Everything here is behind a write gate, the family's editor shape rather
 than something this tool invented:
@@ -317,23 +297,11 @@ sends nothing, because a per-channel edit is a whole-dump write and
 re-sending a value the unit already holds would put an entry on the undo
 timeline that restores something that was never changed.
 
-<details><summary>Value picker — for parameters with named values (MIDI mode, out, arp, FX algorithms)</summary>
-
 ![ValuePickerScreen](docs/screenshots/value-picker.png)
-
-</details>
-
-<details><summary>Value prompt — for numeric ranges (transpose, volume, pan, etc.)</summary>
 
 ![PromptScreen with range](docs/screenshots/value-prompt.png)
 
-</details>
-
-<details><summary>Sound picker — bank pane, favourites cycle, name filter</summary>
-
 ![SoundPickerScreen](docs/screenshots/sound-picker.png)
-
-</details>
 
 **The sound picker's filters, against rxved's.** `s` opens a bank pane, that
 bank's presets with their names, the favourites cycle on `v` (the same three
@@ -484,47 +452,19 @@ this one alone. `--config PATH` names a different file entirely.
 | `i` | device identity and which ROMs are fitted |
 | `?` / `q` | help / quit |
 
-<details><summary>Search — name filter across all banks</summary>
-
 ![SearchScreen](docs/screenshots/search.png)
-
-</details>
-
-<details><summary>Categories — filter by bank kind (bas:, cat:, etc.)</summary>
 
 ![Category prompt](docs/screenshots/categories.png)
 
-</details>
-
-<details><summary>Device report — identity, SIMMs fitted, catalog count, build line</summary>
-
 ![ReportScreen Device](docs/screenshots/device.png)
-
-</details>
-
-<details><summary>Help — the help screen with the build line first</summary>
 
 ![ReportScreen Help](docs/screenshots/help.png)
 
-</details>
-
-<details><summary>Favourites — this bank's favourites view (`v` once)</summary>
-
 ![Favourites - this bank](docs/screenshots/favourites-bank.png)
-
-</details>
-
-<details><summary>All favourites (`v` twice)</summary>
 
 ![Favourites - all](docs/screenshots/favourites-all.png)
 
-</details>
-
-<details><summary>Rating filter — exact or at-least (0–5 stars)</summary>
-
 ![RatingFilterScreen](docs/screenshots/rating-filter.png)
-
-</details>
 
 On the multi screen, editing the channel under the cursor: `⏎` opens the
 value (or the channel's detail, on the columns that are not values), `+` and
