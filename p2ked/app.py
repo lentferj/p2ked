@@ -58,7 +58,7 @@ from textual.widgets import DataTable, Header, Label, Static
 
 from p2k import backup as bk
 from p2k import catalog as cat
-from p2k import roms
+from p2k import literal, roms
 from p2k.favorites import rating_cell
 from p2ked._report import say_connected, say_fallback, say_probing
 from p2ked.masteredit import (
@@ -1833,20 +1833,57 @@ class P2kedApp(App):
             roms.USER_ROM_ID if getattr(entry, "rom", None) is roms.USER else entry.msb
         )
 
+    def _rom_is_fitted(self, rom_id: int) -> bool:
+        """Whether the unit actually has this ROM fitted.
+
+        Unknown when the unit was never asked (or its answer failed), and
+        the rule then is to show and not to mark: a list silently cut down,
+        or a row silently italicised, by a query that did not happen is
+        worse than a long, unmarked one.
+        """
+        if not self.installed:
+            return True
+        return self.installed.get(rom_id, False)
+
+    def _rom_is_absent(self, rom_id: int) -> bool:
+        """Whether this ROM is known to be one the unit does not have."""
+        if rom_id == roms.USER_ROM_ID:
+            # User memory is the unit's own; it is never "not fitted".
+            return False
+        return bool(self.installed) and not self.installed.get(rom_id, False)
+
     def _visible_banks(self) -> List[str]:
-        """Bank ids to list: by default only ROMs the unit actually has.
+        """Bank ids to list: the ROMs the unit has, plus the ones p2ked can
+        name.
 
         A Proteus 2000 has four SIMM sockets and a table of twenty possible
         ROMs, so listing all seventy-four banks means most of what is on
         screen cannot be played. Filtering needs the unit's answer, so when
         there is none -- demo mode, or a query that failed -- everything is
         shown rather than a list quietly cut down to nothing.
+
+        A ROM whose names are in the catalog is kept even when it is not
+        fitted: those are names read off that ROM earlier, and being able to
+        browse a ROM that is in the drawer (and look up its favourites and
+        notes) is the point of keeping them. Such a bank is drawn in italics
+        so "you have this" and "p2ked knows this" stay distinguishable.
         """
         every = roms.bank_ids()
         if self._all_roms or not self.installed:
             return every
-        kept = [b for b in every if self.installed.get(self._rom_id_of(b), False)]
-        return kept or every
+        fitted = [
+            b
+            for b in every
+            if not roms.bank(b).rom.writable
+            and (self._rom_is_fitted(self._rom_id_of(b)) or self.catalog.knows(b))
+        ]
+        if not fitted:
+            # The unit answered, and answered that it has nothing. A list cut
+            # down to user memory alone is worse than a long one.
+            return every
+        # User memory is always present and does not depend on a ROM being
+        # fitted, so it is always listed alongside the fitted ROMs.
+        return [b for b in every if roms.bank(b).rom.writable] + fitted
 
     def action_toggle_all_roms(self) -> None:
         """Every ROM in the table, or only the ones fitted."""
@@ -1875,8 +1912,11 @@ class P2kedApp(App):
             for bank_id in self._bank_ids:
                 entry = roms.bank(bank_id)
                 marked = len(self._favorite_keys(bank_id))
+                label = entry.label
+                if self._rom_is_absent(self._rom_id_of(bank_id)):
+                    label = f"[i]{literal(label)}[/i]"
                 table.add_row(
-                    entry.label,
+                    label,
                     str(entry.msb),
                     str(entry.lsb),
                     str(entry.count),
@@ -2186,12 +2226,18 @@ class P2kedApp(App):
             table.clear()
             for entry in self._current:
                 name = self.catalog.display_name(entry.bank_id, entry.program_change)
+                absent = self._rom_is_absent(self._rom_id_of(entry.bank_id))
                 if self._marked_because(entry.bank_id, entry.program_change):
-                    shown = f"[b]{name}[/b] [dim]*[/dim]"
+                    shown = f"[b]{literal(name)}[/b] [dim]*[/dim]"
                 elif self.catalog.is_live(entry.bank_id, entry.program_change):
-                    shown = f"[b]{name}[/b]"
+                    shown = f"[b]{literal(name)}[/b]"
                 else:
                     shown = name
+                if absent:
+                    shown = f"[i]{shown}[/i]"
+                    number_style = "[i]{0}[/i]"
+                else:
+                    number_style = "{0}"
                 across = self.view_mode == VIEW_ALL_FAVOURITES
                 fav_here = every_bank.get(entry.bank_id, set()) if across else marked
                 star = "[b]♥[/b]" if entry.program_change in fav_here else ""
@@ -2204,7 +2250,7 @@ class P2kedApp(App):
                 table.add_row(
                     star,
                     rating_cell(rating),
-                    number,
+                    number_style.format(number),
                     shown,
                     str(entry.program_change),
                     str(entry.lsb),
@@ -2709,6 +2755,28 @@ class P2kedApp(App):
             said = f"read {len(names)} names from {bank_id}; nothing changed"
         self.notify_status(said)
         self._read_finished()
+        self._remember_names(bank_id, names)
+
+    def _remember_names(self, bank_id: str, names: Dict[int, str]) -> None:
+        """Write names read off the unit into the catalog file.
+
+        A ROM is uniquely identified and never changes, so a name it reports
+        is permanent: keeping it means a ROM that is later taken out of the
+        machine can still be browsed, searched and favourited. A **user**
+        bank is the exception -- it is somebody's saved work, not the ROM's,
+        so it is read fresh each session and never cached (which is also
+        what keeps a user bank's "differs from the printed list" flag off).
+        """
+        if not names or roms.bank(bank_id).rom.writable:
+            return
+        written = False
+        for program_change, name in names.items():
+            if not name:
+                continue
+            self.catalog.remember(bank_id, program_change, name)
+            written = True
+        if written and self.catalog.save():
+            self.notify_status(f"kept {len(names)} names from {bank_id} for next time")
 
     def action_channel_down(self) -> None:
         """Previous MIDI channel. Sends nothing by itself."""
@@ -3141,6 +3209,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     catalog = cat.load(args.catalog)
+    # Names read off a unit are kept in this file. Give a session somewhere to
+    # write even when the file is not there yet -- but not in demo mode, where
+    # the "names" are invented and must never land in a real catalog.
+    if not args.demo and catalog.path is None:
+        catalog.path = args.catalog or cat.DEFAULT_PATH
     from p2k.favorites import Favorites
 
     try:

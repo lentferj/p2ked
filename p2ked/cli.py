@@ -69,7 +69,7 @@ def _cmd_roms(_device, args) -> None:
     catalog = _catalog(args)
     rows = []
     for entry in roms.ROMS:
-        named = sum(1 for bank in roms.banks(entry.id) if catalog.has(bank.id))
+        named = sum(1 for bank in roms.banks(entry.id) if catalog.knows(bank.id))
         rows.append(
             [
                 entry.id,

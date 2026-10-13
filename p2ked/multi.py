@@ -48,6 +48,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Label, Static
 
+from p2k import literal as _p2k_literal
 from p2k import messages as params
 from p2k import roms
 from p2ked.masteredit import (
@@ -219,14 +220,10 @@ CELLS_BY_KEY: Dict[str, _Cell] = {cell.key: cell for cell in CELLS}
 def _literal(text: str) -> str:
     """``text`` as markup that renders as exactly itself.
 
-    The specification's own sentence about the old setup dump carries
-    ``[s]`` in it -- "receive[s] and understand[s] the old setup dump" --
-    and rich markup reads a ``[...]`` as a tag and eats it, which silently
-    turns a quotation into a paraphrase. A sentence quoted from a document
-    has to render as the document wrote it, so the brackets are escaped here
-    rather than edited out of the quote.
+    Kept as a local name because the calls in this module read better with
+    it; the implementation is shared. See :func:`p2k.literal`.
     """
-    return text.replace("[", "\\[")
+    return _p2k_literal(text)
 
 
 def mode_summary(mode: Optional[int]) -> str:

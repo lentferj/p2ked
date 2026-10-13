@@ -55,15 +55,18 @@ automatically before its first whole-setup write of a session. See
   Name Request for any preset in any fitted ROM *without selecting it*, so
   `r` reads a whole bank while the instrument keeps playing whatever it was
   playing. There is no prompt and no `--yes`, because there is nothing to
-  warn about. (The sibling rxved cannot do this at all: an XV-2020's preset
-  banks have no addresses, so learning their names means playing them.)
+  warn about, and the names are kept in the catalog file so a ROM can be
+  browsed even after it leaves the machine. (The sibling rxved cannot do this
+  at all: an XV-2020's preset banks have no addresses, so learning their
+  names means playing them.)
 - **Asks the unit what ROMs are fitted.** `Configuration Request` reports
   the installed SIMMs with their IDs and preset counts, so nothing has to be
   guessed — with one caveat below.
 - **Names from two sources, kept distinct.** The printed catalog and what
   the unit says. A name read from hardware is shown in bold; one that
-  *disagrees* with the catalog gets a `*`. On a user bank somebody has saved
-  into, that mark is the most useful thing on the screen.
+  *disagrees* with the catalog gets a `*`; a ROM that is not fitted but whose
+  names are known is shown **in italics**. On a user bank somebody has saved
+  into, that `*` mark is the most useful thing on the screen.
 - **Edits the master parameters, and the 32 channels, behind a write gate
   that is locked by default.** `w` arms the gate, `--allow-write` starts it
   armed, every edit is read back to check it landed, and `z` / `Z` send the
@@ -121,11 +124,23 @@ depends on whether the ROM is in the machine.
   to build.
 - **A ROM you are not currently playing through the unit** — one in the
   drawer that is not in a SIMM slot, or names you want without the unit
-  switched on at all — cannot be asked for. For those, the catalog file
-  below is the only source, and that is its real point.
+  switched on at all — cannot be asked for directly. Its names have to be
+  kept from earlier, either read off it while it *was* fitted or built into
+  the catalog below from your own files.
 
-The catalog is built once from your **own** files and kept locally; the ROM
-contents will not change, so a single run is enough:
+**Names read off the unit are kept.** A ROM is uniquely identified and its
+contents never change, so a name it reports is permanent: `r` reads a bank
+silently, and p2ked writes those names into the catalog file for next time.
+They are kept *beside* the printed names, not over them, so the `*` that
+marks a place where the unit disagrees with the book still shows after a
+restart. That is what makes a ROM you take out of the machine still usable —
+its names are there, it can be browsed, searched and favourited, and a
+favourite or note you left on it is not stranded. In the bank list such a ROM
+is drawn **in italics**, so "the unit has this" and "p2ked knows this" stay
+apart. (Pressing `a` still shows every bank in the table, fitted or not.)
+
+The catalog can also be built from your **own** files, which is the way to
+get names for a ROM without it ever having been fitted:
 
 ```sh
 python3 tools/extract_catalog.py --ins ~/path/to/P2k_All.ins \
@@ -138,13 +153,8 @@ E-MU published a few ROMs' names as documents too, and for one of them —
 X-Lead v2, MSB 14 — a document is the only source there is. That is why the
 example carries one; drop the line if you have no such file. It writes
 `p2k/data/catalog.json`, gitignored, **9472 names across 74 banks** on its
-current sources — and it is re-run, not edited, when you add another one.
-
-With the catalog loaded, the browser can show those ROMs. `a` is the door:
-it switches the bank list between the ROMs this unit actually has and every
-bank in the table, so a ROM in the drawer browses, searches and takes
-favourites like any other — which is what the catalog is for. Without a
-catalog p2ked still runs, showing numbers instead of names.
+current sources. Running it again keeps any bank it does not cover, so a
+ROM whose names were read off the unit is not lost by rebuilding the file.
 
 The unit and the catalog are kept deliberately distinct, and being able to
 tell them apart is the point: a ROM bank whose read name differs from the
@@ -152,7 +162,8 @@ catalog's is a name the unit disagrees with the book about, and gets a `*`.
 That flag is worth more on a user bank, where the catalog has no real names
 at all — only `usr:A0` placeholders — so p2ked reads those from the unit
 instead, because only the unit knows what has been saved over the factory
-contents.
+contents. Those are never written to the catalog: they are the user's saved
+work, not the ROM's, and are read fresh each session.
 
 The extractor checks its input rather than trusting it. The file shipped for
 this family indexes one ROM's third bank as `Patch[1281]` while the section
@@ -212,8 +223,14 @@ this one alone. `--config PATH` names a different file entirely.
 | `x` | the master FX editor, from the multi screen |
 | `/` | search names |
 | `c` | set the MIDI channel selections go out on |
+| `a` | show every ROM in the table, or only the ones this unit has |
+| `C` | filter by category — the `bas:`-style prefix on the names |
 | `f` | mark or unmark the preset under the cursor — **this writes the favourites database** |
 | `v` | step the favourites view: all presets → this bank's favourites → every favourite (reads only) |
+| `*` | rate the preset under the cursor |
+| `V` | filter by rating |
+| `t` | tags for the preset under the cursor |
+| `n` | a note on the preset under the cursor |
 | `w` | write gate — **locked by default**; nothing is sent while it is |
 | `z` | undo the last change: the last master edit, or the last favourite toggle |
 | `Z` | undo every change made this session |
@@ -677,11 +694,12 @@ changes it.
 
 All screenshots in this document were captured using the built-in `DemoDevice`
 (no hardware, no MIDI ports). The preset names shown in the browser come from
-the local catalog (`p2k/data/catalog.json`, generated from the user's own
-instrument-definition files) — these are the originally shipped factory preset
-names, not invented demo data. The ROM product names ("Composer", "Xtreme
-Lead", etc.) are from `p2k/roms.py` and are committed in the repository. User
-banks under `--demo` show invented names (the demo's own word pool).
+the local catalog (`p2k/data/catalog.json`, built from the user's own
+instrument-definition files and from names read off a unit) — these are the
+originally shipped factory preset names, not invented demo data. The ROM
+product names ("Composer", "Xtreme Lead", etc.) are from `p2k/roms.py` and are
+committed in the repository. User banks under `--demo` show invented names
+(the demo's own word pool).
 
 Screenshots were captured with Textual 8.2.8 via `App.run_test()`, exported as
 SVG, and converted to PNG at 820 px width using cairosvg. All images use a

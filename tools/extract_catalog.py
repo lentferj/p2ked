@@ -45,10 +45,11 @@ import json
 import os
 import re
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from p2k import catalog as cat
 from p2k import roms  # noqa: E402
 
 DEFAULT_INS = os.path.expanduser("~/Dokumente/SYNTHS/Proteus 2000/P2k_All.ins")
@@ -289,6 +290,42 @@ def build(paths: List[str]) -> Tuple[Dict[str, List[dict]], List[str]]:
     return out, notes
 
 
+def merge_existing(banks_out: Dict[str, List[dict]], existing: cat.Catalog) -> bool:
+    """Re-add printed banks this run did not produce, in place.
+
+    The reason this exists: a ROM whose names came off the unit (because no
+    ``.ins`` file covers it, or because it was only ever in the machine) must
+    not be dropped by regenerating the file from instrument definitions
+    alone. Returns whether the existing catalog had anything to merge.
+    """
+    if not existing:
+        return False
+    for bank_id, rows in existing.rows().items():
+        banks_out.setdefault(bank_id, [dict(row) for row in rows])
+        banks_out[bank_id].sort(key=lambda row: int(row["pc"]))
+    return True
+
+
+def preserve_existing(
+    banks_out: Dict[str, List[dict]], payload: Dict[str, Any], output: str
+) -> None:
+    """Fold the existing file's kept content into what this run will write.
+
+    Printed banks the extractor did not cover, and every name the unit
+    reported, are carried forward. That is how a ROM read off the machine
+    survives regenerating the file from instrument definitions alone -- it
+    may not be in the machine at all.
+    """
+    existing = cat.load(output)
+    if merge_existing(banks_out, existing):
+        payload["note"] += (
+            " Also carries names read off a unit by p2ked (banks the "
+            "instrument-definition files do not cover)."
+        )
+    if existing.read_rows():
+        payload["read"] = existing.read_rows()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -345,7 +382,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             banks_out[bank_id].sort(key=lambda row: row["pc"])
 
-    payload = {
+    payload: Dict[str, Any] = {
         "source": "; ".join(os.path.basename(path) for path in paths),
         "generated": datetime.date.today().isoformat(),
         "note": (
@@ -355,6 +392,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
         "banks": banks_out,
     }
+    # Keep any bank this run did not produce, and any names the unit
+    # reported. That is how a ROM read off the machine survives regenerating
+    # the file: p2ked writes what the ROM said, and this tool must not throw
+    # that away just because the ROM is not in the .ins files (it may not be
+    # in the machine at all).
+    preserve_existing(banks_out, payload, args.output)
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=1, ensure_ascii=False)

@@ -212,7 +212,7 @@ class TestBrowserWiring:
 
 
 class TestBankListing:
-    """Only the ROMs the unit has, unless told otherwise."""
+    """The unit's ROMs, the ones p2ked can name, and always user memory."""
 
     def _app(self, tmp_path, installed=None):
         from p2ked.app import P2kedApp
@@ -240,7 +240,9 @@ class TestBankListing:
             assert shown, "something must be listed"
             assert len(shown) < len(roms.bank_ids())
             msbs = {roms.bank(b).msb for b in shown}
-            assert msbs == {4, 14}
+            # MSB 0 is user memory: it is always present on the unit and does
+            # not depend on a ROM being fitted, so it is always listed.
+            assert msbs == {0, 4, 14}
         finally:
             store.close()
 

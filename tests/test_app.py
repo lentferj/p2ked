@@ -666,3 +666,54 @@ class TestMultiScreen:
             screen = await self._open(app, pilot)
             assert "two MIDI interfaces" in screen._report()
             assert "channels 17-32" in screen._report()
+
+
+class TestNamesKeptFromTheUnit:
+    """A name read off a ROM is permanent, so it is written down.
+
+    The ROM is uniquely identified and its contents never change, which is
+    what lets a ROM taken out of the machine still be browsed, searched and
+    favourited from the name p2ked kept.
+    """
+
+    async def test_reading_a_rom_bank_is_written_to_the_catalog_file(self, tmp_path):
+        path = str(tmp_path / "catalog.json")
+        catalog = cat.Catalog([cat.Entry("XLEAD-0", 0, "lead:One")], path=path)
+        app = P2kedApp(DemoDevice(), catalog=catalog)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._remember_names("XLEAD-0", {0: "lead:Read", 1: "lead:Also"})
+            assert cat.load(path).read_name("XLEAD-0", 1) == "lead:Also"
+
+    async def test_a_user_bank_is_not_written_down(self, tmp_path):
+        """User memory is the user's work, not the ROM's; it stays live."""
+        path = str(tmp_path / "catalog.json")
+        catalog = cat.Catalog([cat.Entry("XLEAD-0", 0, "lead:One")], path=path)
+        app = P2kedApp(DemoDevice(), catalog=catalog)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._remember_names("USER-0", {0: "My Riff"})
+            assert not (tmp_path / "catalog.json").exists()
+
+
+class TestAbsentRomIsShownInItalics:
+    async def test_a_named_rom_that_is_not_fitted_is_still_listed(self):
+        from p2k import roms
+
+        catalog = cat.Catalog([cat.Entry("XLEAD-0", 0, "lead:BoXT Mono")])
+        app = P2kedApp(DemoDevice(), catalog=catalog, installed={4: True})
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert "XLEAD-0" in app._bank_ids
+            assert app._rom_is_absent(roms.rom("XLEAD").msb)
+
+    async def test_its_bank_and_presets_render_in_italics(self):
+        catalog = cat.Catalog([cat.Entry("XLEAD-0", 0, "lead:BoXT Mono")])
+        app = P2kedApp(DemoDevice(), catalog=catalog, installed={4: True})
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            banks = app.query_one("#bank-table", DataTable)
+            assert "[i]" in str(banks.get_row("XLEAD-0")[0])
+            app._fill_presets("XLEAD-0")
+            presets = app.query_one("#preset-table", DataTable)
+            assert "[i]" in str(presets.get_row("XLEAD-0:0000")[3])

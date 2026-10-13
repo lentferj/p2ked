@@ -21,6 +21,11 @@ Two sources, kept apart all the way to the screen:
   Proteus family. Generated locally into ``p2k/data/catalog.json``, which is
   gitignored -- those names are E-MU's and are not redistributed here.
 * **Live** names, read from a unit over System Exclusive.
+* **Remembered** names, which are live names written back into the same file
+  so they outlive the session. They are stored beside the printed ones, not
+  over them, so a ROM read once and then taken out of the machine keeps both
+  what the unit said and what the book said -- and the difference between
+  them, which is the finding below, survives a restart.
 
 A single mapping cannot keep them distinguishable, and the distinction is
 the useful part: a ROM bank whose live name differs from the printed one is
@@ -44,12 +49,34 @@ from __future__ import annotations
 import json
 import sys
 import os
+import tempfile
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from datetime import date
+from typing import Dict, Iterable, List, Optional, Tuple, TypedDict
 
 from p2k import roms
 
 __all__ = ["Entry", "Catalog", "load", "empty", "DEFAULT_PATH"]
+
+
+class CatalogRow(TypedDict):
+    """One preset row as the catalog file stores it."""
+
+    pc: int
+    name: str
+
+
+def _rows(entries: Dict[str, Entry]) -> Dict[str, List[CatalogRow]]:
+    """``{bank_id: [{"pc": int, "name": str}]}``, banks and rows both sorted."""
+    banks: Dict[str, List[CatalogRow]] = {}
+    for entry in entries.values():
+        banks.setdefault(entry.bank_id, []).append(
+            CatalogRow(pc=entry.program_change, name=entry.name)
+        )
+    for rows in banks.values():
+        rows.sort(key=lambda row: row["pc"])
+    return {bank_id: banks[bank_id] for bank_id in sorted(banks)}
+
 
 DEFAULT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "catalog.json"
@@ -85,14 +112,32 @@ class Catalog:
     """Printed names, plus whatever has been read from a unit."""
 
     def __init__(
-        self, entries: Iterable[Entry] = (), *, source: str = "", generated: str = ""
+        self,
+        entries: Iterable[Entry] = (),
+        *,
+        read_entries: Iterable[Entry] = (),
+        source: str = "",
+        generated: str = "",
+        path: Optional[str] = None,
     ) -> None:
         self._entries: Dict[str, Entry] = {}
         for entry in entries:
             self._entries[entry.key] = entry
+        #: Names the unit itself reported, kept apart from the printed ones
+        #: so the two can still be compared after a restart. This is what
+        #: preserves the ``*`` disagreement flag across sessions: a ROM read
+        #: once and then taken out of the machine keeps both what the book
+        #: said and what the unit said.
+        self._read: Dict[str, Entry] = {}
+        for entry in read_entries:
+            self._read[entry.key] = entry
         self._live: Dict[str, str] = {}
         self.source = source
         self.generated = generated
+        #: Where this catalog was read from, if anywhere. A catalog with no
+        #: path (``empty()``, the tests, ``--demo`` without one) is never
+        #: written back to.
+        self.path = path
 
     # --- printed ------------------------------------------------------------
 
@@ -103,20 +148,95 @@ class Catalog:
         found = self.entry(bank_id, program_change)
         return found.name if found is not None else None
 
-    def has(self, bank_id: str) -> bool:
+    def read_name(self, bank_id: str, program_change: int) -> Optional[str]:
+        """A name the unit reported, remembered from an earlier session."""
+        found = self._read.get(f"{bank_id}:{program_change:03d}")
+        return found.name if found is not None else None
+
+    def knows(self, bank_id: str) -> bool:
+        """Whether p2ked has any name for this bank, printed or read."""
         prefix = f"{bank_id}:"
-        return any(key.startswith(prefix) for key in self._entries)
+        return any(key.startswith(prefix) for key in self._entries) or any(
+            key.startswith(prefix) for key in self._read
+        )
+
+    def rows(self) -> Dict[str, List[CatalogRow]]:
+        """The printed entries as ``{bank_id: [{"pc": int, "name": str}]}``.
+
+        The shape both ``tools/extract_catalog.py`` writes and :meth:`load`
+        reads, so the two can hand a catalog back and forth without either
+        knowing the other's internals.
+        """
+        return _rows(self._entries)
+
+    def read_rows(self) -> Dict[str, List[CatalogRow]]:
+        """The names read off a unit, in the same shape as :meth:`rows`."""
+        return _rows(self._read)
 
     def __len__(self) -> int:
-        return len(self._entries)
+        return len(self._entries) + len(self._read)
 
     def __bool__(self) -> bool:
-        return bool(self._entries)
+        return bool(self._entries) or bool(self._read)
 
     # --- live ---------------------------------------------------------------
 
     def set_live_name(self, bank_id: str, program_change: int, name: str) -> None:
         self._live[f"{bank_id}:{program_change:03d}"] = name
+
+    def remember(self, bank_id: str, program_change: int, name: str) -> None:
+        """Keep a name read from the unit, so it outlives the session.
+
+        A value the unit reported is permanent -- the ROM is uniquely
+        identified and does not change -- but it is stored **beside** the
+        printed name rather than over it, so the two can still be compared
+        later. Overwriting would throw away the ``*`` disagreement the
+        catalog exists to show; the whole point is that the unit and the
+        book can be seen to differ.
+        """
+        self._read[f"{bank_id}:{program_change:03d}"] = Entry(
+            bank_id=bank_id, program_change=program_change, name=name
+        )
+
+    def save(self, path: Optional[str] = None) -> bool:
+        """Write the catalog back, if it has a home and anything to write.
+
+        Atomic: a temp file in the same directory, then a rename, so a crash
+        or a full disk mid-write cannot leave a half-catalog behind. Returns
+        whether anything was written. ``banks`` is the printed catalog and
+        ``read`` is what the unit reported; they are kept apart so the
+        comparison between them survives a restart.
+        """
+        target = path or self.path
+        if not target or not (self._entries or self._read):
+            return False
+        payload = {
+            "source": self.source,
+            "generated": self.generated or date.today().isoformat(),
+            "note": (
+                "Names for the E-MU Proteus family. 'banks' is the printed "
+                "catalog built from the user's own files; 'read' is what the "
+                "unit reported. Not distributed with p2ked."
+            ),
+            "banks": self.rows(),
+            "read": self.read_rows(),
+        }
+        directory = os.path.dirname(os.path.abspath(target))
+        try:
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(
+                dir=directory, prefix=".catalog-", suffix=".json"
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=1, ensure_ascii=False)
+                handle.write("\n")
+            os.replace(tmp, target)
+        except OSError:
+            # A catalog that cannot be written is a nuisance, not a failure:
+            # the names are still live for this session and the unit can
+            # supply them again. Do not take the app down over it.
+            return False
+        return True
 
     def live_name(self, bank_id: str, program_change: int) -> Optional[str]:
         return self._live.get(f"{bank_id}:{program_change:03d}")
@@ -178,6 +298,10 @@ class Catalog:
         """
         live = self.live_name(bank_id, program_change)
         if live is None:
+            # No read this session: the remembered one stands in, so the
+            # disagreement a read found still shows after a restart.
+            live = self.read_name(bank_id, program_change)
+        if live is None:
             return False
         printed = self.name(bank_id, program_change)
         if printed is None or printed == live:
@@ -207,6 +331,9 @@ class Catalog:
         live = self.live_name(bank_id, program_change)
         if live is not None:
             return live
+        remembered = self.read_name(bank_id, program_change)
+        if remembered is not None:
+            return remembered
         return self.name(bank_id, program_change) or ""
 
     # --- search -------------------------------------------------------------
@@ -228,6 +355,9 @@ class Catalog:
             return []
         seen: Dict[str, Tuple[str, int, str]] = {}
         for key, entry in self._entries.items():
+            if wanted in entry.name.lower():
+                seen[key] = (entry.bank_id, entry.program_change, entry.name)
+        for key, entry in self._read.items():
             if wanted in entry.name.lower():
                 seen[key] = (entry.bank_id, entry.program_change, entry.name)
         for key, name in self._live.items():
@@ -255,15 +385,37 @@ def load(path: Optional[str] = None) -> Catalog:
             payload = json.load(handle)
     except (OSError, json.JSONDecodeError):
         return empty()
-    entries = []
+    entries, skipped = _parse_banks(payload.get("banks", {}))
+    read_entries, read_skipped = _parse_banks(payload.get("read", {}))
+    if skipped or read_skipped:
+        print(
+            f"warning: {target} has {skipped + read_skipped} unreadable row(s), "
+            f"skipped; regenerate it with tools/extract_catalog.py",
+            file=sys.stderr,
+        )
+    return Catalog(
+        entries,
+        read_entries=read_entries,
+        source=payload.get("source", ""),
+        generated=payload.get("generated", ""),
+        path=target,
+    )
+
+
+def _parse_banks(payload: object) -> Tuple[List[Entry], int]:
+    """``{bank_id: [row, ...]}`` to :class:`Entry` objects and a skip count.
+
+    One bad row must not cost the whole catalog. A missing one is already
+    normal here -- the program runs on numbers alone and a connected unit can
+    supply every name -- so a corrupt one taking the program down with it is
+    the odd behaviour, not skipping it.
+    """
+    entries: List[Entry] = []
     skipped = 0
-    for bank_id, rows in payload.get("banks", {}).items():
+    if not isinstance(payload, dict):
+        return entries, skipped
+    for bank_id, rows in payload.items():
         for row in rows:
-            # One bad row must not cost the whole catalog. A missing one is
-            # already normal here -- the program runs on numbers alone and
-            # a connected unit can supply every name -- so a corrupt one
-            # taking the program down with it is the odd behaviour, not
-            # skipping it.
             try:
                 entries.append(
                     Entry(
@@ -272,14 +424,4 @@ def load(path: Optional[str] = None) -> Catalog:
                 )
             except (KeyError, TypeError, ValueError):
                 skipped += 1
-    if skipped:
-        print(
-            f"warning: {target} has {skipped} unreadable row(s), skipped; "
-            f"regenerate it with tools/extract_catalog.py",
-            file=sys.stderr,
-        )
-    return Catalog(
-        entries,
-        source=payload.get("source", ""),
-        generated=payload.get("generated", ""),
-    )
+    return entries, skipped
