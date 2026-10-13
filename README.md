@@ -21,82 +21,6 @@ order a sequencer's MIDI track asks for them.
 
 ![Browser with Xtreme Lead bank selected](docs/screenshots/general.png)
 
-## Support this project
-
-p2ked is free software and always will be. Nothing is behind a paywall, no
-feature is withheld, and none of what follows changes that.
-
-(These paragraphs describe the family's bench, which is shared between the
-sibling tools. p2ked's own share of it is the Proteus 2000 and the ROMs read
-from it in the hardware sessions recorded in `docs/RESOLUTION_NOTES.md`.)
-
-But if it has been useful — if it saved you reading a ROM's worth of preset
-names off the front panel one slot at a time, or told you which ROMs are
-fitted without you touching the unit, or **best of all, if it has your
-vintage instrument switched on and in use more often than it was, and you
-are having more fun with it** — then please consider supporting the work.
-
-**Because here is what it has actually cost:**
-
-- **Real machines on a real bench.** Much of what these tools know about these
-  formats was measured on hardware rather than read anywhere, because for most
-  of it there is nowhere to read it. That needs the machines — the instruments
-  themselves — and it puts hours of wear on hardware that has been locked up and
-  recovered more than once in the course of it. Some of these instruments were
-  bought specifically to add and verify a format; the others were already here,
-  because the person doing this is a vintage instrument enthusiast first and the
-  projects exist because the instruments were in the room.
-- **Dozens — realistically hundreds — of hours of human time.** Format
-  reverse-engineering is slow: measure, be wrong, measure again. A single
-  parameter law in this README can represent an evening at the bench.
-- **AI assistance, which is a paid service**, used heavily throughout and not
-  cheap at this volume.
-
-**This is support, not a donation — and the distinction is a legal one, not a
-turn of phrase.** The maintainer is based in Germany, where payments like these
-are *not* `Spenden` in the tax sense: they count as **taxable income** for the
-recipient and are **not tax-deductible** for the giver. So this section is
-titled *Support*, deliberately, and no receipt for tax purposes can be issued.
-(That is a statement of how it is handled here, not tax advice.)
-
-If the project saved you the work, you can support it through
-**[GitHub Sponsors](https://github.com/sponsors/lentferj)** — the *Sponsor*
-button at the top of the repository. Payment is handled entirely by GitHub and
-Stripe, so bank and tax details are never handed to the person paying.
-
-**Support is not expected, and it is not the only currency.**
-
-- **Bug reports** — ideally with the bank and preset numbers involved, the
-  exact command line, and what the unit did. A failure is usually specific
-  to one ROM or one unit rather than general, and without that detail it is
-  very hard to reproduce.
-- **Confirmations from hardware that is not on this bench**, which matters more
-  here than for a single-machine tool. These tools write for whole *families*
-  of instruments, and the bench holds only a subset. Whether a variant accepts
-  what we write is genuinely unknown, and several notes say "on this unit" for
-  that reason. A "loads fine here too", or a "no, mine refuses it", is worth a
-  great deal.
-- **Corrections to the reverse-engineering notes.** The wrong turns are
-  recorded next to the findings in `docs/RESOLUTION_NOTES.md` — retractions
-  included, because a finding that was withdrawn is as useful as one that
-  stood. If any of it is wrong in a way that is still costing someone time,
-  saying so improves the record.
-
----
-
-## AI assistance & human authorship
-
-p2ked was built by its human author together with AI assistance. The
-**ideas, the project vision, and every feature** came from the human author;
-AI assisted with **writing the code and analyzing the binary formats**.
-Crucially, the **reverse engineering rests on hands-on human work** — all testing
-and verification on real hardware, creating the reference images/banks on those
-instruments (disk saves, SysEx probes), and aural A/B comparison of presets —
-which is what makes the results correct.
-Full account in [DISCLAIMER.md](DISCLAIMER.md).
-
----
-
 ## ⚠️ Use at your own risk — back up first
 
 p2ked is provided **as is, with absolutely no warranty and no liability**
@@ -148,7 +72,243 @@ automatically before its first whole-setup write of a session. See
   dump route instead, with no ID invented — see Editing below.
 - **A CLI** (`p2kcli`), most of which needs no unit at all.
 
-### Channels (`m`)
+## The two numbers that identify a ROM
+
+- the **Bank Select MSB**, used to select a preset;
+- the **SIMM ID**, which the unit reports and which System Exclusive uses as
+  the "ROM ID" when asking *about* a preset.
+
+**No E-MU document to hand maps one to the other.** p2ked assumed they were
+the same number, and a unit confirmed it on 2026-09-12: three fitted ROMs
+each named the presets p2ked's catalog holds for the ROM at that MSB,
+character for character. Three of twenty, so `p2kcli hardware` still states
+what was checked. The one ROM ID that is also *documented* is `0`, meaning
+user memory.
+
+One ROM in the table got there the other way round. A unit reported SIMM ID
+14 with 640 presets and no file to hand covered MSB 14 at all; it was
+identified as **X-Lead v2** from E-MU's own patch list for that ROM, and
+`tools/extract_catalog.py` now reads those OpenDocument lists so its names
+are catalogued too.
+
+## Install
+
+```sh
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -e .
+```
+
+Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** 0.4.1
+or newer — the shared base of this family of terminal instrument tools: the
+settings cache, the favourites database, the keymap and legend, the command
+line and the port listing. It comes from PyPI with the rest. To develop
+against a *working copy* of it instead of the published one, install that
+alongside — it shadows the published version in this environment only:
+`.venv/bin/pip install --no-deps -e ../vinsynlib`.
+
+`--system-site-packages` here is deliberate: ALSA's sequencer and the
+system `python-rtmidi` are used rather than a fresh build.
+
+## Where preset names come from
+
+p2ked ships **no** E-MU content. The ROM table, the bank arithmetic and the
+three numbers are its own; only the names are E-MU's, and how you get them
+depends on whether the ROM is in the machine.
+
+- **A ROM that is fitted** needs nothing. A Proteus will name any preset in
+  any fitted ROM on request without selecting it, so `r` reads a whole bank
+  off the unit, silently — see "What it does". Do that and there is nothing
+  to build.
+- **A ROM you are not currently playing through the unit** — one in the
+  drawer that is not in a SIMM slot, or names you want without the unit
+  switched on at all — cannot be asked for. For those, the catalog file
+  below is the only source, and that is its real point.
+
+The catalog is built once from your **own** files and kept locally; the ROM
+contents will not change, so a single run is enough:
+
+```sh
+python3 tools/extract_catalog.py --ins ~/path/to/P2k_All.ins \
+    --odt "XLEAD2=~/path/to/X-Lead v2 patch list.odt"
+```
+
+`--ins` reads a Cakewalk instrument-definition file for the family, which
+lists the names for most ROMs. `--odt` is a second, optional source:
+E-MU published a few ROMs' names as documents too, and for one of them —
+X-Lead v2, MSB 14 — a document is the only source there is. That is why the
+example carries one; drop the line if you have no such file. It writes
+`p2k/data/catalog.json`, gitignored, **9472 names across 74 banks** on its
+current sources — and it is re-run, not edited, when you add another one.
+
+With the catalog loaded, the browser can show those ROMs. `a` is the door:
+it switches the bank list between the ROMs this unit actually has and every
+bank in the table, so a ROM in the drawer browses, searches and takes
+favourites like any other — which is what the catalog is for. Without a
+catalog p2ked still runs, showing numbers instead of names.
+
+The unit and the catalog are kept deliberately distinct, and being able to
+tell them apart is the point: a ROM bank whose read name differs from the
+catalog's is a name the unit disagrees with the book about, and gets a `*`.
+That flag is worth more on a user bank, where the catalog has no real names
+at all — only `usr:A0` placeholders — so p2ked reads those from the unit
+instead, because only the unit knows what has been saved over the factory
+contents.
+
+The extractor checks its input rather than trusting it. The file shipped for
+this family indexes one ROM's third bank as `Patch[1281]` while the section
+itself is labelled `(1282)`; taken at face value that puts bank 2's 128
+names under bank 1's numbers and loses bank 2 entirely. The section's own
+label wins, the correction is reported on stderr, and `p2k/roms.py` carries
+the third bank the index would have hidden.
+
+## Run
+
+The install puts both commands in the venv, so put that on `PATH` first —
+otherwise the shell answers `p2ked: command not found`:
+
+```sh
+source .venv/bin/activate          # PowerShell: .venv\Scripts\Activate.ps1
+```
+
+Or skip activation and spell out the path, which works whatever you did
+above: `.venv/bin/p2ked`.
+
+```sh
+p2ked --demo           # built-in demo device; opens no MIDI ports
+p2ked                  # ask the remembered port, sweep if there is none
+p2ked --scan           # probe every port again (after the unit moves)
+p2ked --port "E-MU Proteus 2000 MIDI 1"
+p2ked --allow-write    # start with the write gate armed (default: locked)
+```
+
+`--allow-write` is the only one of these that can lead to a write: it makes
+the gate `w` toggles start armed instead of locked. See Editing above.
+
+The first launch finds the unit by broadcasting a Universal Identity Request
+and reading the reply. The reply carries the device ID the unit is set to,
+so discovery ends knowing what to address — no sweep over 127 IDs. The port
+that answered is remembered in `config.toml` (in the working directory,
+gitignored, safe to delete), and every later launch asks *only that port*:
+one round trip instead of one probe per MIDI port on the machine. `--scan`
+ignores the remembered port and sweeps again, which is what is needed after
+the unit moves — USB re-enumeration renumbers ALSA clients out from under a
+saved name. A remembered port that stops answering falls back to the sweep
+and says so on stderr, so a launch that took the slow path never looks like
+a fast one.
+
+`config.toml` is shared, by name, with the other tools in the family, so it
+is **not** a place to keep anything of your own. Its first line records
+which tool wrote it; another tool reads and writes its own file, and leaves
+this one alone. `--config PATH` names a different file entirely.
+
+### Keys
+
+| | |
+|---|---|
+| arrows, `tab` | move; `tab` switches pane |
+| `enter` | select this preset **on the unit** — it will sound |
+| `r` | read this bank's names from the unit — **silent** |
+| `m` | every MIDI channel: what it plays and why it might not — **silent** |
+| `x` | the master FX editor, from the multi screen |
+| `/` | search names |
+| `c` | set the MIDI channel selections go out on |
+| `f` | mark or unmark the preset under the cursor — **this writes the favourites database** |
+| `v` | step the favourites view: all presets → this bank's favourites → every favourite (reads only) |
+| `w` | write gate — **locked by default**; nothing is sent while it is |
+| `z` | undo the last change: the last master edit, or the last favourite toggle |
+| `Z` | undo every change made this session |
+| `i` | device identity and which ROMs are fitted |
+| `?` / `q` | help / quit |
+
+![SearchScreen](docs/screenshots/search.png)
+
+![Category prompt](docs/screenshots/categories.png)
+
+`f` writes and `v` reads, which is why they are not a shift-pair. The family
+puts the favourites view on `F`, one slip of the shift key from the key that
+writes; rxved moved it to `v` and p2ked follows. Every other key is where the
+family puts it.
+
+![Favourites - this bank](docs/screenshots/favourites-bank.png)
+
+![Favourites - all](docs/screenshots/favourites-all.png)
+
+![RatingFilterScreen](docs/screenshots/rating-filter.png)
+
+![ReportScreen Device](docs/screenshots/device.png)
+
+![ReportScreen Help](docs/screenshots/help.png)
+
+`w`, `z` and `Z` are the family's editor keys, spelled the same way here so a
+reader who has used rxved already knows them. `enter` changes what the unit is
+playing and `f` writes your own database; these three are the only keys that
+change what the unit *stores*, which is why they are in the legend rather than
+left to a keybinding manual. And `z` / `Z` reach the app's own actions rather
+than a screen's — an edit is made through the edit screen and undone after it
+closes, so both have to work from the browser with no screen open.
+
+**Moving the cursor never sends anything.** That is enforced by a test, not
+just by intent: it is the property that decides whether you can leave this
+open next to a running sequencer.
+
+### Command line
+
+`p2kcli` is the same information in a pipe, from the same venv, so the
+commands below work however you chose to reach it above.
+
+```sh
+p2kcli banks                 # the bank table (no unit needed)
+p2kcli list XLEAD-1          # one bank's presets (no unit needed)
+p2kcli find "bell"           # search names (no unit needed)
+p2kcli resolve 7 1 5         # what does this MSB/LSB/PC select?
+p2kcli ports                 # MIDI ports on this host
+p2kcli --demo hardware       # what the unit reports about itself
+p2kcli --demo channels       # every MIDI channel (silent)
+p2kcli --demo channels --json  # the same, as one JSON object
+p2kcli --demo names XLEAD-1  # read a bank's names (silent)
+p2kcli select XLEAD-1 5      # select a preset ON THE UNIT
+p2kcli backup save           # the current setup, to a backup file
+p2kcli backup list           # backups on disk (no unit needed)
+p2kcli backup restore <id> --yes   # write one back (DESTRUCTIVE)
+```
+
+`p2kcli backup` is the restore point for the per-channel write: `save` reads
+the current setup and writes it under the data directory, `list` prints what
+is there — including a file it cannot read, with the error, rather than
+dropping it — and `restore` sends one back, which replaces the unit's whole
+live setup. `restore` is the one destructive command here: it refuses
+without `--yes` and says which setup it would overwrite. `list` takes
+`--json` for the same reason `channels` does, and `--dir` on all three
+names the directory instead of the default. See [Editing](#editing-w-z-z).
+
+`p2kcli channels` has no aliases and needs the unit: one Setup Dump and one
+mode read, neither of which a catalog can answer. Its default output is the
+same table the `m` screen draws — the setup's name, the MIDI mode, the master
+panel on one line, then a row per channel with its volume, pan, output,
+Program Change receive, arpeggiator and ROM, a `why not` column of the
+reasons it would not sound, and a closing line listing the channels that
+would.
+
+`--json` prints **one** object instead, for another program to read rather
+than for a person to scan: `setup`, `mode`, `multitimbral`, a `master` object
+of the seven master values, and `channels` — one object per channel with the
+raw numbers (`volume`, `pan` as the wire's 0-127, `mix_output` as -1..2
+rather than "use preset" / "send 2", `enable`, `bank_map`,
+`receive_program_change`, `rom_id`, `preset`) plus `plays` and a
+`silent_reasons` list. The table has no column for `enable` — it reaches the
+screen only as the "channel is disabled" reason in `why not` — and none for
+`bank_map`; here both are fields in their own right.
+
+Two commands are named differently from earlier p2kcli, with the old
+spelling still accepted, because they collided with something:
+
+- `roms` is now `banks`. The family calls that table banks everywhere else
+  and p2ked's own browser already did; the CLI was the odd one out.
+- `config` is now `hardware`. `config` meant *which ROMs are fitted* while
+  the `--config` flag beside it meant *the settings file* — one program, one
+  word, two meanings, in one line of help output.
+
+## Channels (`m`)
 
 One Setup Dump request returns the whole multi configuration, so `m` shows
 all **32** channels — this family has two MIDI interfaces. The dump carries
@@ -195,7 +355,7 @@ a stored snapshot of all 32 channels, 128 of them, selected with MSB 80 /
 LSB 0 and a Program Change. This screen shows the live channel state, which
 is the first of those. Browsing Multisetups is not built yet.
 
-### Editing (`w`, `z`, `Z`)
+## Editing (`w`, `z`, `Z`)
 
 `e` on the multi screen opens the **master parameters** — the eleven settings
 a channel map is played through: MIDI mode and whether an external one is
@@ -254,6 +414,14 @@ field positions. No unit has received one yet — the first check is `make
 test-hardware`'s unmodified-dump round trip — and the ID-based alternative
 still needs `docs/TODO` item 47's probe, which would cost one small frame
 per field instead of a ~1 KB whole-setup write.
+
+On the multi screen, editing the channel under the cursor: `⏎` opens the
+value (or the channel's detail, on the columns that are not values), `+` and
+`-` nudge it, `space` flips a switch, a digit types a number in place, and
+`s` picks a sound. `w` is there too — a modal cuts the app's binding chain,
+so the gate has to be armable from the screen that says it is locked. `r`
+re-reads the setup, `e` opens the master parameters and `x` the FX block, and
+`z` / `Z` undo from here as they do from the browser.
 
 **The channels screen is editable cell by cell** (`m`, then any of the
 gestures below). The cursor is a *cell* cursor: the arrows walk over a row's
@@ -344,221 +512,6 @@ differs from the backup. The files are the family's JSON envelope
 (`vinsynlib.backup`): a header you can read, base64 blocks, a version byte,
 and never an overwrite — two saves are two files. See
 `docs/RESOLUTION_NOTES.md` §14.
-
-### The two numbers that identify a ROM
-
-- the **Bank Select MSB**, used to select a preset;
-- the **SIMM ID**, which the unit reports and which System Exclusive uses as
-  the "ROM ID" when asking *about* a preset.
-
-**No E-MU document to hand maps one to the other.** p2ked assumed they were
-the same number, and a unit confirmed it on 2026-09-12: three fitted ROMs
-each named the presets p2ked's catalog holds for the ROM at that MSB,
-character for character. Three of twenty, so `p2kcli hardware` still states
-what was checked. The one ROM ID that is also *documented* is `0`, meaning
-user memory.
-
-One ROM in the table got there the other way round. A unit reported SIMM ID
-14 with 640 presets and no file to hand covered MSB 14 at all; it was
-identified as **X-Lead v2** from E-MU's own patch list for that ROM, and
-`tools/extract_catalog.py` now reads those OpenDocument lists so its names
-are catalogued too.
-
-## Install
-
-```sh
-python3 -m venv --system-site-packages .venv
-.venv/bin/pip install -e .
-```
-
-Needs Python 3.11+, `python-rtmidi` and `textual`, plus **vinsynlib** 0.4.1
-or newer — the shared base of this family of terminal instrument tools: the
-settings cache, the favourites database, the keymap and legend, the command
-line and the port listing. It comes from PyPI with the rest. To develop
-against a *working copy* of it instead of the published one, install that
-alongside — it shadows the published version in this environment only:
-`.venv/bin/pip install --no-deps -e ../vinsynlib`.
-
-`--system-site-packages` here is deliberate: ALSA's sequencer and the
-system `python-rtmidi` are used rather than a fresh build.
-
-## Run
-
-The install puts both commands in the venv, so put that on `PATH` first —
-otherwise the shell answers `p2ked: command not found`:
-
-```sh
-source .venv/bin/activate          # PowerShell: .venv\Scripts\Activate.ps1
-```
-
-Or skip activation and spell out the path, which works whatever you did
-above: `.venv/bin/p2ked`.
-
-```sh
-p2ked --demo           # built-in demo device; opens no MIDI ports
-p2ked                  # ask the remembered port, sweep if there is none
-p2ked --scan           # probe every port again (after the unit moves)
-p2ked --port "E-MU Proteus 2000 MIDI 1"
-p2ked --allow-write    # start with the write gate armed (default: locked)
-```
-
-`--allow-write` is the only one of these that can lead to a write: it makes
-the gate `w` toggles start armed instead of locked. See Editing above.
-
-The first launch finds the unit by broadcasting a Universal Identity Request
-and reading the reply. The reply carries the device ID the unit is set to,
-so discovery ends knowing what to address — no sweep over 127 IDs. The port
-that answered is remembered in `config.toml` (in the working directory,
-gitignored, safe to delete), and every later launch asks *only that port*:
-one round trip instead of one probe per MIDI port on the machine. `--scan`
-ignores the remembered port and sweeps again, which is what is needed after
-the unit moves — USB re-enumeration renumbers ALSA clients out from under a
-saved name. A remembered port that stops answering falls back to the sweep
-and says so on stderr, so a launch that took the slow path never looks like
-a fast one.
-
-`config.toml` is shared, by name, with the other tools in the family, so it
-is **not** a place to keep anything of your own. Its first line records
-which tool wrote it; another tool reads and writes its own file, and leaves
-this one alone. `--config PATH` names a different file entirely.
-
-### Keys
-
-| | |
-|---|---|
-| arrows, `tab` | move; `tab` switches pane |
-| `enter` | select this preset **on the unit** — it will sound |
-| `r` | read this bank's names from the unit — **silent** |
-| `m` | every MIDI channel: what it plays and why it might not — **silent** |
-| `x` | the master FX editor, from the multi screen |
-| `/` | search names |
-| `c` | set the MIDI channel selections go out on |
-| `f` | mark or unmark the preset under the cursor — **this writes the favourites database** |
-| `v` | step the favourites view: all presets → this bank's favourites → every favourite (reads only) |
-| `w` | write gate — **locked by default**; nothing is sent while it is |
-| `z` | undo the last change: the last master edit, or the last favourite toggle |
-| `Z` | undo every change made this session |
-| `i` | device identity and which ROMs are fitted |
-| `?` / `q` | help / quit |
-
-![SearchScreen](docs/screenshots/search.png)
-
-![Category prompt](docs/screenshots/categories.png)
-
-![ReportScreen Device](docs/screenshots/device.png)
-
-![ReportScreen Help](docs/screenshots/help.png)
-
-![Favourites - this bank](docs/screenshots/favourites-bank.png)
-
-![Favourites - all](docs/screenshots/favourites-all.png)
-
-![RatingFilterScreen](docs/screenshots/rating-filter.png)
-
-On the multi screen, editing the channel under the cursor: `⏎` opens the
-value (or the channel's detail, on the columns that are not values), `+` and
-`-` nudge it, `space` flips a switch, a digit types a number in place, and
-`s` picks a sound. `w` is there too — a modal cuts the app's binding chain,
-so the gate has to be armable from the screen that says it is locked. `r`
-re-reads the setup, `e` opens the master parameters and `x` the FX block, and
-`z` / `Z` undo from here as they do from the browser.
-
-`f` writes and `v` reads, which is why they are not a shift-pair. The family
-puts the favourites view on `F`, one slip of the shift key from the key that
-writes; rxved moved it to `v` and p2ked follows. Every other key is where the
-family puts it.
-
-`w`, `z` and `Z` are the family's editor keys, spelled the same way here so a
-reader who has used rxved already knows them. `enter` changes what the unit is
-playing and `f` writes your own database; these three are the only keys that
-change what the unit *stores*, which is why they are in the legend rather than
-left to a keybinding manual. And `z` / `Z` reach the app's own actions rather
-than a screen's — an edit is made through the edit screen and undone after it
-closes, so both have to work from the browser with no screen open.
-
-**Moving the cursor never sends anything.** That is enforced by a test, not
-just by intent: it is the property that decides whether you can leave this
-open next to a running sequencer.
-
-### Command line
-
-`p2kcli` is the same information in a pipe, from the same venv, so the
-commands below work however you chose to reach it above.
-
-```sh
-p2kcli banks                 # the bank table (no unit needed)
-p2kcli list XLEAD-1          # one bank's presets (no unit needed)
-p2kcli find "bell"           # search names (no unit needed)
-p2kcli resolve 7 1 5         # what does this MSB/LSB/PC select?
-p2kcli ports                 # MIDI ports on this host
-p2kcli --demo hardware       # what the unit reports about itself
-p2kcli --demo channels       # every MIDI channel (silent)
-p2kcli --demo channels --json  # the same, as one JSON object
-p2kcli --demo names XLEAD-1  # read a bank's names (silent)
-p2kcli select XLEAD-1 5      # select a preset ON THE UNIT
-p2kcli backup save           # the current setup, to a backup file
-p2kcli backup list           # backups on disk (no unit needed)
-p2kcli backup restore <id> --yes   # write one back (DESTRUCTIVE)
-```
-
-`p2kcli backup` is the restore point for the per-channel write: `save` reads
-the current setup and writes it under the data directory, `list` prints what
-is there — including a file it cannot read, with the error, rather than
-dropping it — and `restore` sends one back, which replaces the unit's whole
-live setup. `restore` is the one destructive command here: it refuses
-without `--yes` and says which setup it would overwrite. `list` takes
-`--json` for the same reason `channels` does, and `--dir` on all three
-names the directory instead of the default. See [Editing](#editing-w-z-z).
-
-`p2kcli channels` has no aliases and needs the unit: one Setup Dump and one
-mode read, neither of which a catalog can answer. Its default output is the
-same table the `m` screen draws — the setup's name, the MIDI mode, the master
-panel on one line, then a row per channel with its volume, pan, output,
-Program Change receive, arpeggiator and ROM, a `why not` column of the
-reasons it would not sound, and a closing line listing the channels that
-would.
-
-`--json` prints **one** object instead, for another program to read rather
-than for a person to scan: `setup`, `mode`, `multitimbral`, a `master` object
-of the seven master values, and `channels` — one object per channel with the
-raw numbers (`volume`, `pan` as the wire's 0-127, `mix_output` as -1..2
-rather than "use preset" / "send 2", `enable`, `bank_map`,
-`receive_program_change`, `rom_id`, `preset`) plus `plays` and a
-`silent_reasons` list. The table has no column for `enable` — it reaches the
-screen only as the "channel is disabled" reason in `why not` — and none for
-`bank_map`; here both are fields in their own right.
-
-Two commands are named differently from earlier p2kcli, with the old
-spelling still accepted, because they collided with something:
-
-- `roms` is now `banks`. The family calls that table banks everywhere else
-  and p2ked's own browser already did; the CLI was the odd one out.
-- `config` is now `hardware`. `config` meant *which ROMs are fitted* while
-  the `--config` flag beside it meant *the settings file* — one program, one
-  word, two meanings, in one line of help output.
-
-## Preset names are not included
-
-p2ked ships **no** E-MU content. The ROM table, the bank arithmetic and the
-three numbers are its own; only the names are E-MU's, and those you generate
-locally:
-
-```sh
-python3 tools/extract_catalog.py --ins ~/path/to/P2k_All.ins \
-    --odt "XLEAD2=~/path/to/X-Lead v2 patch list.odt"
-```
-
-That reads your own copy of the Cakewalk instrument-definition files and
-writes `p2k/data/catalog.json`, which is gitignored. It currently produces
-**9472 names across 74 banks**. p2ked works without it, showing numbers
-only — and a connected unit can supply every name itself.
-
-The extractor checks its input rather than trusting it. The file shipped for
-this family indexes one ROM's third bank as `Patch[1281]` while the section
-itself is labelled `(1282)`; taken at face value that puts bank 2's 128
-names under bank 1's numbers and loses bank 2 entirely. The section's own
-label wins, the correction is reported on stderr, and `p2k/roms.py` carries
-the third bank the index would have hidden.
 
 ## Development checks
 
@@ -720,7 +673,7 @@ the cursor still never sends MIDI. It does not say the protocol is right.
 That remains what DISCLAIMER.md is for, and no amount of static analysis
 changes it.
 
-### Screenshots
+## Screenshots
 
 All screenshots in this document were captured using the built-in `DemoDevice`
 (no hardware, no MIDI ports). The preset names shown in the browser come from
@@ -734,6 +687,82 @@ Screenshots were captured with Textual 8.2.8 via `App.run_test()`, exported as
 SVG, and converted to PNG at 820 px width using cairosvg. All images use a
 standard terminal size of 132×42 (browser) or modal-appropriate dimensions.
 The font is FreeMono for glyph coverage (★♥↑↓⏎≥).
+
+## Support this project
+
+p2ked is free software and always will be. Nothing is behind a paywall, no
+feature is withheld, and none of what follows changes that.
+
+(These paragraphs describe the family's bench, which is shared between the
+sibling tools. p2ked's own share of it is the Proteus 2000 and the ROMs read
+from it in the hardware sessions recorded in `docs/RESOLUTION_NOTES.md`.)
+
+But if it has been useful — if it saved you reading a ROM's worth of preset
+names off the front panel one slot at a time, or told you which ROMs are
+fitted without you touching the unit, or **best of all, if it has your
+vintage instrument switched on and in use more often than it was, and you
+are having more fun with it** — then please consider supporting the work.
+
+**Because here is what it has actually cost:**
+
+- **Real machines on a real bench.** Much of what these tools know about these
+  formats was measured on hardware rather than read anywhere, because for most
+  of it there is nowhere to read it. That needs the machines — the instruments
+  themselves — and it puts hours of wear on hardware that has been locked up and
+  recovered more than once in the course of it. Some of these instruments were
+  bought specifically to add and verify a format; the others were already here,
+  because the person doing this is a vintage instrument enthusiast first and the
+  projects exist because the instruments were in the room.
+- **Dozens — realistically hundreds — of hours of human time.** Format
+  reverse-engineering is slow: measure, be wrong, measure again. A single
+  parameter law in this README can represent an evening at the bench.
+- **AI assistance, which is a paid service**, used heavily throughout and not
+  cheap at this volume.
+
+**This is support, not a donation — and the distinction is a legal one, not a
+turn of phrase.** The maintainer is based in Germany, where payments like these
+are *not* `Spenden` in the tax sense: they count as **taxable income** for the
+recipient and are **not tax-deductible** for the giver. So this section is
+titled *Support*, deliberately, and no receipt for tax purposes can be issued.
+(That is a statement of how it is handled here, not tax advice.)
+
+If the project saved you the work, you can support it through
+**[GitHub Sponsors](https://github.com/sponsors/lentferj)** — the *Sponsor*
+button at the top of the repository. Payment is handled entirely by GitHub and
+Stripe, so bank and tax details are never handed to the person paying.
+
+**Support is not expected, and it is not the only currency.**
+
+- **Bug reports** — ideally with the bank and preset numbers involved, the
+  exact command line, and what the unit did. A failure is usually specific
+  to one ROM or one unit rather than general, and without that detail it is
+  very hard to reproduce.
+- **Confirmations from hardware that is not on this bench**, which matters more
+  here than for a single-machine tool. These tools write for whole *families*
+  of instruments, and the bench holds only a subset. Whether a variant accepts
+  what we write is genuinely unknown, and several notes say "on this unit" for
+  that reason. A "loads fine here too", or a "no, mine refuses it", is worth a
+  great deal.
+- **Corrections to the reverse-engineering notes.** The wrong turns are
+  recorded next to the findings in `docs/RESOLUTION_NOTES.md` — retractions
+  included, because a finding that was withdrawn is as useful as one that
+  stood. If any of it is wrong in a way that is still costing someone time,
+  saying so improves the record.
+
+---
+
+## AI assistance & human authorship
+
+p2ked was built by its human author together with AI assistance. The
+**ideas, the project vision, and every feature** came from the human author;
+AI assisted with **writing the code and analyzing the binary formats**.
+Crucially, the **reverse engineering rests on hands-on human work** — all testing
+and verification on real hardware, creating the reference images/banks on those
+instruments (disk saves, SysEx probes), and aural A/B comparison of presets —
+which is what makes the results correct.
+Full account in [DISCLAIMER.md](DISCLAIMER.md).
+
+---
 
 ## Licence
 

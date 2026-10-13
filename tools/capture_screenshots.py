@@ -220,8 +220,13 @@ async def shot_favourites_bank(app, pilot):
 
 
 async def shot_favourites_all(app, pilot):
-    await pilot.press("f")
-    await pilot.pause()
+    # One favourite per bank across several banks, so the all-banks view has
+    # more than one row to show.
+    for _ in range(4):
+        await pilot.press("f")
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.pause()
     await pilot.press("v")
     await pilot.pause()
     await pilot.press("v")
