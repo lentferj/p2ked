@@ -81,9 +81,11 @@ from p2ked.multi import (
     ValuePickerScreen,
 )
 from p2ked.prompts import PromptScreen
+from p2ked.scan import ScanOfferScreen, ScanScreen
 from vinsynlib import cli as vincli
 from vinsynlib.build import build_of
 from vinsynlib.keys import wrap_blocks  # re-exported: it is in __all__
+from vinsynlib.ui.confirm import ConfirmScreen
 from vinsynlib.ui.hints import KeyHints
 from vinsynlib.ui.report import ReportScreen
 from vinsynlib.undo import Record, UndoLog
@@ -213,6 +215,12 @@ KEY_HINTS = (
     "v favourites view",
     "C category",
     "a all ROMs",
+    # Reading every name the unit knows, and rebuilding the catalog from
+    # scratch. Read-only on the wire, but they are large, deliberate acts, so
+    # they belong in the legend with `r`. Declared to the family in
+    # tests/test_conformance.py's EXTRAS.
+    "S scan device",
+    "R rebuild catalog",
     # The FX block, on `x`. It is in the legend because it is a key that
     # changes the unit: `m` then `e` edits the general master parameters
     # and `x` -- here, on the multi screen, or on the general editor --
@@ -581,6 +589,12 @@ class P2kedApp(App):
         Binding("n", "edit_note", "Note"),
         Binding("C", "pick_categories", "Categories"),
         Binding("a", "toggle_all_roms", "All ROMs"),
+        # Reading names for the whole device, and rebuilding the catalog from
+        # scratch. Both are read-only on the wire; the rebuild only throws
+        # away names, never a favourite or a note (those live in the
+        # database, not the catalog).
+        Binding("S", "scan_device", "Scan device"),
+        Binding("R", "rebuild_catalog", "Rebuild catalog"),
         Binding("i", "device_info", "Device"),
         Binding("question_mark", "help", "Help"),
         Binding("tab", "switch_pane", "Switch pane"),
@@ -1700,6 +1714,8 @@ class P2kedApp(App):
         config_path: Optional[str] = None,
         allow_write: bool = False,
         backup_dir: Optional[str] = None,
+        demo: bool = False,
+        offer_scan: bool = False,
     ) -> None:
         super().__init__()
         #: Everything ``z`` can reverse, in the order it happened. One
@@ -1731,6 +1747,15 @@ class P2kedApp(App):
         #: :meth:`_backup_before_write`.
         self._setup_backed_up = False
         self.catalog = catalog if catalog is not None else cat.empty()
+        #: Whether this is the demo device. The demo invents its names, so a
+        #: scan of it must never be written to the real catalog.
+        self._demo = demo
+        #: Whether to offer a scan when there is no catalog at all. Set by
+        #: the entrypoint; off by default so a test never gets a modal it did
+        #: not ask for.
+        self._offer_scan = offer_scan
+        #: Raised by the scan modal's Cancel and checked between banks.
+        self._scan_cancel = threading.Event()
         #: The rating filter, or ``None`` for none. Stacks on the view and
         #: on the categories the same way the categories stack on the view
         #: -- see :meth:`_visible`, which applies it last and over all
@@ -1995,6 +2020,8 @@ class P2kedApp(App):
             else "no name catalog -- numbers only. Build one with "
             "tools/extract_catalog.py, or press r to read them off the unit."
         )
+        if self._offer_scan:
+            self.set_timer(0.6, self._maybe_offer_scan)
 
     # --- filling ------------------------------------------------------------
 
@@ -2778,6 +2805,200 @@ class P2kedApp(App):
         if written and self.catalog.save():
             self.notify_status(f"kept {len(names)} names from {bank_id} for next time")
 
+    # --- scanning the whole device ------------------------------------------
+
+    def _fitted_rom_ids(self) -> List[int]:
+        """The ROM IDs the unit reports as fitted, or an empty list."""
+        if not self.installed:
+            return []
+        return [rom_id for rom_id, present in self.installed.items() if present]
+
+    def scan_bank_ids(self) -> List[str]:
+        """The banks a whole-device scan reads: user memory, then the ROMs.
+
+        User memory first, because it is the one thing only the unit knows
+        and it is small. Only ROMs the unit reports fitted are listed -- a
+        ROM in the drawer cannot be read, and asking for it would spend a
+        timeout per preset to learn what an absent ROM already looks like.
+        """
+        user = [b for b in roms.bank_ids() if roms.bank(b).rom.writable]
+        out = list(user)
+        for rom_id in self._fitted_rom_ids():
+            entry = roms.rom_for_simm_id(rom_id)
+            if entry is not None:
+                out.extend(roms.bank_ids(entry.id))
+        return out
+
+    def _maybe_offer_scan(self) -> None:
+        """Offer a scan when there is nothing to start from.
+
+        Only when the catalog is completely empty, the demo is not in use
+        (its names are invented), nothing is on the wire, and the user has
+        not said "don't ask again".
+        """
+        if self._demo or self._busy or self.catalog:
+            return
+        from p2k import config as cfg
+
+        if cfg.load_ui_bool("scan.offer_dismissed", default=False):
+            return
+        self.push_screen(
+            ScanOfferScreen(
+                "There is no name catalog yet, so presets show as numbers.\n\n"
+                "Scan the unit for names now? It reads every fitted ROM and "
+                "the user banks silently - no sound, nothing written to the "
+                "instrument - and takes about a minute."
+            ),
+            self._scan_offer_answered,
+        )
+
+    def _scan_offer_answered(self, answer: Optional[str]) -> None:
+        if answer == "never":
+            from p2k import config as cfg
+
+            cfg.save_ui_state("scan.offer_dismissed", True)
+            return
+        if answer == "scan":
+            self._start_scan(rebuild=False)
+
+    def action_scan_device(self) -> None:
+        """Read names for every fitted ROM and the user banks. Silent."""
+        self._start_scan(rebuild=False)
+
+    def action_rebuild_catalog(self) -> None:
+        """Throw the name catalog away and scan the device to fill it.
+
+        Two confirmations, because the first is easy to press by accident
+        and this discards a file that may have been built from documents a
+        scan cannot reach. The warning is about **names only**: favourites,
+        ratings, tags and notes live in the favourites database and are not
+        touched.
+        """
+        if self._demo:
+            self.notify_status("the demo has no real unit to scan", refused=True)
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+
+        def second(_yes: Optional[bool]) -> None:
+            if not _yes:
+                return
+            self.catalog.clear()
+            self.catalog.save()
+            self._fill_banks()
+            self._fill_presets(self._current_bank)
+            self._start_scan(rebuild=True)
+
+        def first(yes: Optional[bool]) -> None:
+            if not yes:
+                return
+            self.push_screen(
+                ConfirmScreen(
+                    "Really rebuild? This discards every name in the catalog, "
+                    "printed and read. Your favourites, ratings, tags and "
+                    "notes are kept. It takes about a minute and cannot be "
+                    "undone.",
+                    confirm="Rebuild",
+                    cancel="Cancel",
+                    danger=True,
+                ),
+                second,
+            )
+
+        self.push_screen(
+            ConfirmScreen(
+                "Rebuild the name catalog from the unit? This clears the "
+                "names first, then scans.",
+                confirm="Continue",
+                cancel="Cancel",
+            ),
+            first,
+        )
+
+    def _start_scan(self, *, rebuild: bool) -> None:
+        if self._demo:
+            self.notify_status(
+                "the demo invents its names; nothing to scan", refused=True
+            )
+            return
+        if self._busy:
+            self.notify_status("busy", refused=True)
+            return
+        banks = self.scan_bank_ids()
+        if not banks:
+            self.notify_status("nothing to scan: no unit answered", refused=True)
+            return
+        self._busy = True  # main thread, before the spawn; see _busy
+        self._scan_cancel = threading.Event()
+        self.push_screen(ScanScreen(self._scan_cancel))
+        self._scan_worker(banks, rebuild)
+
+    @work(thread=True)
+    def _scan_worker(self, banks: List[str], rebuild: bool) -> None:
+        """**MIDI only** -- everything after each read happens on the main
+        thread. One bank at a time, stopping between banks when cancelled."""
+        done = 0
+        total = len(banks)
+        try:
+            for bank_id in banks:
+                if self._scan_cancel.is_set():
+                    break
+                try:
+                    with self._lock:
+                        names = self.device.read_bank_names(bank_id)
+                except Exception as exc:
+                    self.call_from_thread(
+                        self.notify_status, f"scan: {exc} ({bank_id})", refused=True
+                    )
+                    continue
+                done += 1
+                self.call_from_thread(self._scan_progress, bank_id, done, total)
+                self.call_from_thread(self._scan_apply, bank_id, names)
+        finally:
+            self.call_from_thread(self._scan_finished, done, total)
+
+    def _scan_progress(self, bank_id: str, done: int, total: int) -> None:
+        """Main thread. Update the progress modal."""
+        screen = self.screen
+        if isinstance(screen, ScanScreen):
+            screen.set_progress(
+                f"reading [b]{roms.bank(bank_id).label}[/b] "
+                f"({done}/{total} banks, silent)"
+            )
+
+    def _scan_apply(self, bank_id: str, names: Dict[int, str]) -> None:
+        """Main thread. Adopt a scanned bank and, for a ROM, keep the names.
+
+        A user bank is shown but not written to the catalog: it is the
+        user's saved work, not the ROM's, and it changes.
+        """
+        for program_change, name in names.items():
+            if name:
+                self.catalog.set_live_name(bank_id, program_change, name)
+        if not roms.bank(bank_id).rom.writable:
+            for program_change, name in names.items():
+                if name:
+                    self.catalog.remember(bank_id, program_change, name)
+        if bank_id == self._current_bank:
+            self._fill_presets(bank_id)
+
+    def _scan_finished(self, done: int, total: int) -> None:
+        """Main thread. Save, close the modal, and free the wire."""
+        self._busy = False
+        if done:
+            self.catalog.save()
+        self._fill_banks()
+        screen = self.screen
+        if isinstance(screen, ScanScreen):
+            screen.dismiss()
+        cancelled = self._scan_cancel.is_set()
+        if cancelled:
+            self.notify_status(f"scan stopped after {done} of {total} banks")
+        else:
+            self.notify_status(f"scanned {done} bank(s); names kept for next time")
+        self._pump_reading()
+
     def action_channel_down(self) -> None:
         """Previous MIDI channel. Sends nothing by itself."""
         self._step_channel(-1)
@@ -3067,12 +3288,17 @@ between them.
 
   ⏎   select this preset ON THE UNIT -- it will sound
   r   read this bank's names from the unit -- SILENT, nothing is selected
+  S   scan the whole device: every fitted ROM and the user banks -- SILENT
+  R   rebuild the name catalog: clear it, then scan (asks twice)
   /   search names
   c   set the MIDI channel selections are sent on
   i   device identity and which ROMs are fitted
 
 Reading names makes no sound. A Proteus will name any preset in any fitted
 ROM without selecting it, so there is nothing to warn about and no prompt.
+Names read this way are kept in the catalog file, so a ROM taken out of the
+machine can still be browsed. Rebuilding discards the catalog's names only;
+your favourites, ratings, tags and notes are kept.
 
 Moving the cursor sends nothing at all.
 """
@@ -3259,6 +3485,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         channel=channel,
         allow_write=args.allow_write,
         backup_dir=args.backup_dir,
+        demo=args.demo,
+        offer_scan=not args.demo,
     )
     try:
         app.run()

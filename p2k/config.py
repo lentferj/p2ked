@@ -53,11 +53,13 @@ __all__ = [
     "load_last_port",
     "load_last_recv_port",
     "load_port_pair",
+    "load_ui_bool",
     "save_channel",
     "save_device_id",
     "save_last_port",
     "save_last_recv_port",
     "save_ports",
+    "save_ui_state",
 ]
 
 _settings = Settings("p2ked", DEFAULT_PATH)
@@ -76,6 +78,11 @@ save_device_id = _settings.save_device_id
 #: Both ports at once, in one write. What the connection policy saves after a
 #: sweep: a half-written pair is a pair where the second half is lost.
 save_ports = _settings.save_ports
+
+#: The ui-state file (beside the settings file): a flat, namespaced map of a
+#: screen's remembered scalars. Used here for "don't offer the scan again".
+load_ui_bool = _settings.load_ui_bool
+save_ui_state = _settings.save_ui_state
 
 
 def load_port_pair(path: Optional[str] = None) -> Optional[Tuple[str, str]]:

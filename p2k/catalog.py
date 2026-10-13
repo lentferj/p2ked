@@ -153,6 +153,17 @@ class Catalog:
         found = self._read.get(f"{bank_id}:{program_change:03d}")
         return found.name if found is not None else None
 
+    def clear(self) -> None:
+        """Forget every name, printed and read.
+
+        The first step of a deliberate rebuild: throw the file's contents
+        away and let a scan fill them again. It touches names only --
+        favourites, ratings, tags and notes live in the favourites
+        database, keyed by bank and slot, and are not affected.
+        """
+        self._entries.clear()
+        self._read.clear()
+
     def knows(self, bank_id: str) -> bool:
         """Whether p2ked has any name for this bank, printed or read."""
         prefix = f"{bank_id}:"

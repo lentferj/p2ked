@@ -57,6 +57,8 @@ EXTRAS = (
     "v favourites view",
     "C category",
     "a all ROMs",
+    "S scan device",
+    "R rebuild catalog",
     "x master FX",
     "w write gate",
     "+ - nudge",

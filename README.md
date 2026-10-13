@@ -139,6 +139,20 @@ favourite or note you left on it is not stranded. In the bank list such a ROM
 is drawn **in italics**, so "the unit has this" and "p2ked knows this" stay
 apart. (Pressing `a` still shows every bank in the table, fitted or not.)
 
+**There is a whole-device scan.** `S` reads the user banks and every fitted
+ROM in one go, and the names land in the catalog exactly as a single `r`
+would. When you start with no catalog at all, p2ked **offers** this on
+startup — "no names yet, scan the unit?" — with a "don't ask again" answer
+that is remembered. It takes about a minute for a fully loaded unit, so the
+modal shows which bank it is on and has a **Cancel**; the scan stops at the
+next bank boundary. It is read-only on the wire: nothing is selected and
+nothing makes a sound.
+
+`R` **rebuilds** the catalog: it clears the names, then scans, behind two
+confirmations. What it throws away is **names only** — the printed catalog
+and what was read off the unit. Your favourites, ratings, tags and notes
+live in a separate database, keyed by bank and slot, and are untouched.
+
 The catalog can also be built from your **own** files, which is the way to
 get names for a ROM without it ever having been fitted:
 
@@ -219,6 +233,8 @@ this one alone. `--config PATH` names a different file entirely.
 | arrows, `tab` | move; `tab` switches pane |
 | `enter` | select this preset **on the unit** — it will sound |
 | `r` | read this bank's names from the unit — **silent** |
+| `S` | scan the whole device — every fitted ROM and the user banks — **silent** |
+| `R` | rebuild the name catalog: clear it, then scan (asks twice) |
 | `m` | every MIDI channel: what it plays and why it might not — **silent** |
 | `x` | the master FX editor, from the multi screen |
 | `/` | search names |
