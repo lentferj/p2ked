@@ -19,16 +19,7 @@ presets on the right, and on every row the three numbers that actually
 select a sound — Program Change, Bank Select LSB and Bank Select MSB, in the
 order a sequencer's MIDI track asks for them.
 
-```
- bank                    MSB LSB   n     #    name            PC   LSB  MSB  ROM#
- User bank 0             0   0     128   003  Velvet Bell      3   0    0    3
- User bank 1             0   1     128   004  Rusted Pad       4   0    0    4
-▸Xtreme Lead bank 1      7   1     128  ▸005  Woven Bell       5   1    7    133
- Xtreme Lead bank 2      7   2     128   …
-
- Xtreme Lead bank 1 005  Woven Bell
- Program Change 5   Bank Select LSB 1 (CC#32)   MSB 7 (CC#0)   preset 133 within Xtreme Lead
-```
+![Browser with Xtreme Lead bank selected](docs/screenshots/general.png)
 
 ## Support this project
 
@@ -156,8 +147,6 @@ automatically before its first whole-setup write of a session. See
   them off a unit are offered; the per-channel fields are written by the
   dump route instead, with no ID invented — see Editing below.
 - **A CLI** (`p2kcli`), most of which needs no unit at all.
-
-![Browser with Xtreme Lead bank selected](docs/screenshots/general.png)
 
 ### Channels (`m`)
 
