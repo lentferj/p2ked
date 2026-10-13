@@ -65,8 +65,9 @@ automatically before its first whole-setup write of a session. See
 - **Names from two sources, kept distinct.** The printed catalog and what
   the unit says. A name read from hardware is shown in bold; one that
   *disagrees* with the catalog gets a `*`; a ROM that is not fitted but whose
-  names are known is shown **in italics**. On a user bank somebody has saved
-  into, that `*` mark is the most useful thing on the screen.
+  names are known is shown **in italics**. On a user bank a `*` means the
+  opposite thing — somebody saved over that slot while p2ked was open — and
+  is the most useful thing on the screen.
 - **Edits the master parameters, and the 32 channels, behind a write gate
   that is locked by default.** `w` arms the gate, `--allow-write` starts it
   armed, every edit is read back to check it landed, and `z` / `Z` send the
@@ -146,12 +147,14 @@ startup — "no names yet, scan the unit?" — with a "don't ask again" answer
 that is remembered. It takes about a minute for a fully loaded unit, so the
 modal shows which bank it is on and has a **Cancel**; the scan stops at the
 next bank boundary. It is read-only on the wire: nothing is selected and
-nothing makes a sound.
+nothing makes a sound. The same scan is scriptable as `p2kcli scan`.
 
 `R` **rebuilds** the catalog: it clears the names, then scans, behind two
 confirmations. What it throws away is **names only** — the printed catalog
 and what was read off the unit. Your favourites, ratings, tags and notes
 live in a separate database, keyed by bank and slot, and are untouched.
+Like the scan, it sends nothing to the instrument: it only rewrites the
+local file.
 
 The catalog can also be built from your **own** files, which is the way to
 get names for a ROM without it ever having been fitted:
@@ -173,11 +176,11 @@ ROM whose names were read off the unit is not lost by rebuilding the file.
 The unit and the catalog are kept deliberately distinct, and being able to
 tell them apart is the point: a ROM bank whose read name differs from the
 catalog's is a name the unit disagrees with the book about, and gets a `*`.
-That flag is worth more on a user bank, where the catalog has no real names
-at all — only `usr:A0` placeholders — so p2ked reads those from the unit
-instead, because only the unit knows what has been saved over the factory
-contents. Those are never written to the catalog: they are the user's saved
-work, not the ROM's, and are read fresh each session.
+On a **user** bank there is no such book — E-MU's file holds only `usr:A0`
+placeholders — so the comparison there is against the bank itself earlier in
+the same session: a `*` means somebody saved over that slot while p2ked was
+open. User-bank names are read from the unit fresh each session and are never
+written to the catalog: they are the user's saved work, not the ROM's.
 
 The extractor checks its input rather than trusting it. The file shipped for
 this family indexes one ROM's third bank as `Patch[1281]` while the section
@@ -299,11 +302,20 @@ p2kcli --demo hardware       # what the unit reports about itself
 p2kcli --demo channels       # every MIDI channel (silent)
 p2kcli --demo channels --json  # the same, as one JSON object
 p2kcli --demo names XLEAD-1  # read a bank's names (silent)
+p2kcli scan                  # read every fitted ROM's names into the catalog (silent)
+p2kcli scan --rebuild --yes  # discard the catalog's names first, then scan
 p2kcli select XLEAD-1 5      # select a preset ON THE UNIT
 p2kcli backup save           # the current setup, to a backup file
 p2kcli backup list           # backups on disk (no unit needed)
 p2kcli backup restore <id> --yes   # write one back (DESTRUCTIVE)
 ```
+
+`p2kcli scan` is the pipe front end of the whole-device scan: it reads
+every fitted ROM's names into the catalog and makes no sound, so it can be
+run from a script or a cron job. User memory is not scanned — it is the
+user's own work, not the ROM's, and never goes in the catalog (`p2kcli names
+USER-0` reads one bank). `--rebuild` clears the catalog's names first and
+requires `--yes`; it discards names only, never a favourite or a note.
 
 `p2kcli backup` is the restore point for the per-channel write: `save` reads
 the current setup and writes it under the data directory, `list` prints what

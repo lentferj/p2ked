@@ -352,6 +352,103 @@ def _master_line(dump) -> str:
     return " · ".join(parts)
 
 
+def _fitted_rom_banks(installed) -> List[str]:
+    """Every bank of every fitted ROM, in table order. User memory excluded."""
+    banks: List[str] = []
+    for rom_id, present in installed.items():
+        if not present or rom_id == roms.USER_ROM_ID:
+            continue
+        entry = roms.rom_for_simm_id(rom_id)
+        if entry is not None:
+            banks.extend(roms.bank_ids(entry.id))
+    return banks
+
+
+def _scan_one(catalog, device, bank_id: str) -> Optional[int]:
+    """Read one bank into the catalog. The name count, or None on failure.
+
+    A failed bank is reported and skipped rather than aborting the scan: one
+    timeout should not cost the other twenty-nine.
+    """
+    try:
+        names = device.read_bank_names(bank_id)
+    except Exception as exc:
+        print(f"\r  {roms.bank(bank_id).label}: {exc}", file=sys.stderr)
+        return None
+    for program_change, name in names.items():
+        if name:
+            catalog.remember(bank_id, program_change, name)
+    return len(names)
+
+
+def _cmd_scan(device, args) -> None:
+    """Read every fitted ROM's names into the catalog. Read-only, silent.
+
+    The pipe front end of the browser's ``S``: one Generic Name Request per
+    preset, nothing selected, nothing written to the instrument. Only the
+    ROMs the unit reports fitted are read -- a ROM in the drawer cannot be
+    asked, and a timeout per preset is a slow way to learn that.
+
+    **User memory is not scanned here.** It cannot go in the catalog (it is
+    the user's saved work, not the ROM's, and it changes), and this command
+    has no screen to show it on -- ``p2kcli names USER-0`` reads one bank for
+    that. What lands in the file is what a ROM reports, which is what makes a
+    ROM taken out of the machine browsable later.
+    """
+    ask = getattr(device, "roms_from_config", None) or getattr(
+        device, "installed_roms", None
+    )
+    installed = ask() if ask is not None else None
+    if not installed:
+        raise SystemExit(
+            "error: the unit did not report which ROMs are fitted, so there "
+            "is nothing safe to scan. `p2kcli hardware` asks the same question "
+            "and prints the answer."
+        )
+
+    catalog = _catalog(args)
+    if catalog.path is None:
+        catalog.path = args.catalog or cat.DEFAULT_PATH
+
+    if args.rebuild:
+        if not args.yes:
+            raise SystemExit(
+                "error: --rebuild discards every name in the catalog, the "
+                "printed ones and the ones read off the unit. Your "
+                "favourites, ratings, tags and notes are in the favourites "
+                "database and are not touched. Re-run with --yes to rebuild."
+            )
+        catalog.clear()
+    elif args.yes:
+        raise SystemExit("error: --yes means nothing without --rebuild.")
+
+    banks = _fitted_rom_banks(installed)
+    if not banks:
+        print("no fitted ROMs to scan; the unit reports none.", file=sys.stderr)
+        return
+
+    total = len(banks)
+    kept = 0
+    failed = 0
+    for index, bank_id in enumerate(banks, start=1):
+        count = _scan_one(catalog, device, bank_id)
+        if count is None:
+            failed += 1
+            continue
+        kept += count
+        print(
+            f"\r  {index}/{total} {roms.bank(bank_id).label} ({count} names)",
+            file=sys.stderr,
+        )
+
+    written = catalog.save()
+    print("", file=sys.stderr)
+    where = catalog.path if written else f"{catalog.path} (could not be written)"
+    print(f"scanned {total - failed} of {total} bank(s); kept {kept} names in {where}")
+    if failed:
+        print(f"{failed} bank(s) timed out and were skipped", file=sys.stderr)
+
+
 def _cmd_names(device, args) -> None:
     """Read a bank's names off the unit. Read-only, **makes no sound**."""
 
@@ -531,6 +628,7 @@ _COMMANDS: Dict[str, Callable] = {
     "config": _cmd_hardware,
     "channels": _cmd_channels,
     "names": _cmd_names,
+    "scan": _cmd_scan,
     "select": _cmd_select,
     "backup": _cmd_backup,
 }
@@ -660,6 +758,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp = sub.add_parser("names", help="read a bank's names (makes no sound)")
     sp.add_argument("bank")
+    sp = sub.add_parser(
+        "scan",
+        help="read every fitted ROM's names into the catalog (makes no sound)",
+    )
+    sp.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="discard the catalog's names first, then scan (needs --yes)",
+    )
+    sp.add_argument(
+        "--yes",
+        action="store_true",
+        help="required with --rebuild: it discards every name in the catalog",
+    )
     sp = sub.add_parser("select", help="select a preset ON THE UNIT")
     sp.add_argument("bank")
     sp.add_argument("pc", type=int)

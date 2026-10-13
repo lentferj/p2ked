@@ -308,6 +308,59 @@ class TestArgumentValidation:
             cli.main([])
 
 
+class TestScan:
+    """`p2kcli scan`: read the fitted ROMs into the catalog, scriptably."""
+
+    def test_it_reads_the_fitted_roms_into_the_catalog(self, capsys, tmp_path):
+        from p2k import catalog as cat
+
+        target = str(tmp_path / "catalog.json")
+        assert cli.main(["--demo", "--catalog", target, "scan"]) == 0
+        out = capsys.readouterr().out
+        assert "kept" in out and "names" in out
+        catalog = cat.load(target)
+        # A fitted ROM bank is named from the unit now.
+        assert catalog.read_name("COMPOSER-0", 0)
+        # User memory is not catalogued (it is the user's, not the ROM's).
+        assert catalog.read_name("USER-0", 0) is None
+
+    def test_it_is_silent_about_what_it_writes(self, capsys, tmp_path):
+        """No E-MU names are printed: they live in the file, not the pipe."""
+        target = str(tmp_path / "catalog.json")
+        assert cli.main(["--demo", "--catalog", target, "scan"]) == 0
+        out = capsys.readouterr().out
+        assert "(not installed)" not in out
+
+    def test_rebuild_needs_yes(self, capsys, tmp_path):
+        target = str(tmp_path / "catalog.json")
+        with pytest.raises(SystemExit) as exit_info:
+            cli.main(["--demo", "--catalog", target, "scan", "--rebuild"])
+        assert "--yes" in str(exit_info.value)
+
+    def test_yes_without_rebuild_is_refused(self, capsys, tmp_path):
+        target = str(tmp_path / "catalog.json")
+        with pytest.raises(SystemExit) as exit_info:
+            cli.main(["--demo", "--catalog", target, "scan", "--yes"])
+        assert "--rebuild" in str(exit_info.value)
+
+    def test_rebuild_clears_the_names_first(self, capsys, catalog_file, tmp_path):
+        from p2k import catalog as cat
+
+        before = cat.load(catalog_file)
+        assert before.name("XLEAD-0", 5) == "Kelp Forest"
+        assert (
+            cli.main(
+                ["--demo", "--catalog", catalog_file, "scan", "--rebuild", "--yes"]
+            )
+            == 0
+        )
+        after = cat.load(catalog_file)
+        # The printed name is gone (XLEAD is not fitted, so it is not re-read).
+        assert after.name("XLEAD-0", 5) is None
+        # A fitted ROM was scanned in.
+        assert after.read_name("COMPOSER-0", 0)
+
+
 class TestTheRomTableIsWhatTheCliClaims:
     """The CLI and p2k/roms.py must not disagree about the table.
 
