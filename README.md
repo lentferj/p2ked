@@ -157,6 +157,12 @@ automatically before its first whole-setup write of a session. See
   dump route instead, with no ID invented — see Editing below.
 - **A CLI** (`p2kcli`), most of which needs no unit at all.
 
+<details><summary>Browser — ROM bank selected, catalog names visible</summary>
+
+![Browser with Xtreme Lead bank selected](docs/screenshots/general.png)
+
+</details>
+
 ### Channels (`m`)
 
 One Setup Dump request returns the whole multi configuration, so `m` shows
@@ -194,6 +200,18 @@ parameters and `x` to the master FX block. The MIDI channel selections go
 out on sits in the window's subtitle for as long as the window is open, not
 only for the moment it changes.
 
+<details><summary>Channels screen — 32 channels + master panel + why-not column</summary>
+
+![MultiScreen with 32 channels](docs/screenshots/channels.png)
+
+</details>
+
+<details><summary>Channel detail — read-only, all nine params + why-not</summary>
+
+![ChannelDetailScreen](docs/screenshots/channel-detail.png)
+
+</details>
+
 Note the word: **"multi" means two things on this machine.** Multi is one of
 three MIDI *modes* (Omni / Poly / Multi). A *Multisetup* is something else —
 a stored snapshot of all 32 channels, 128 of them, selected with MSB 80 /
@@ -211,6 +229,12 @@ poly / multi — opens the picker and ⏎ picks; a plain range gets a prompt
 that names the range with it. `+` and `-` nudge the row under the cursor by
 one, clamped to the range, and go through the same gate as an edit.
 
+<details><summary>Master parameter editor — eleven parameters, picker for enums, prompt for ranges</summary>
+
+![MasterEditScreen](docs/screenshots/master-edit.png)
+
+</details>
+
 `x` on the multi screen opens the **master FX** — the sixteen FX parameters
 the dump carries (513–528: the two algorithms, their decays, damping,
 feedback, LFO, delay and the eight sends). Same gate, same read-back, same
@@ -218,6 +242,12 @@ undo, and the algorithms are *named* lists — 44 and 32 names — picked
 rather than typed. The value is checked before anything is sent, because a
 Proteus **clips** an out-of-range value rather than refusing it — a typo
 would otherwise land as a plausible, silent change.
+
+<details><summary>Master FX editor — sixteen parameters, algorithm pickers</summary>
+
+![FXEditScreen](docs/screenshots/master-fx.png)
+
+</details>
 
 Everything here is behind a write gate, the family's editor shape rather
 than something this tool invented:
@@ -286,6 +316,24 @@ A nudge that cannot move — `+` at the top of a range — says the range and
 sends nothing, because a per-channel edit is a whole-dump write and
 re-sending a value the unit already holds would put an entry on the undo
 timeline that restores something that was never changed.
+
+<details><summary>Value picker — for parameters with named values (MIDI mode, out, arp, FX algorithms)</summary>
+
+![ValuePickerScreen](docs/screenshots/value-picker.png)
+
+</details>
+
+<details><summary>Value prompt — for numeric ranges (transpose, volume, pan, etc.)</summary>
+
+![PromptScreen with range](docs/screenshots/value-prompt.png)
+
+</details>
+
+<details><summary>Sound picker — bank pane, favourites cycle, name filter</summary>
+
+![SoundPickerScreen](docs/screenshots/sound-picker.png)
+
+</details>
 
 **The sound picker's filters, against rxved's.** `s` opens a bank pane, that
 bank's presets with their names, the favourites cycle on `v` (the same three
@@ -435,6 +483,48 @@ this one alone. `--config PATH` names a different file entirely.
 | `Z` | undo every change made this session |
 | `i` | device identity and which ROMs are fitted |
 | `?` / `q` | help / quit |
+
+<details><summary>Search — name filter across all banks</summary>
+
+![SearchScreen](docs/screenshots/search.png)
+
+</details>
+
+<details><summary>Categories — filter by bank kind (bas:, cat:, etc.)</summary>
+
+![Category prompt](docs/screenshots/categories.png)
+
+</details>
+
+<details><summary>Device report — identity, SIMMs fitted, catalog count, build line</summary>
+
+![ReportScreen Device](docs/screenshots/device.png)
+
+</details>
+
+<details><summary>Help — the help screen with the build line first</summary>
+
+![ReportScreen Help](docs/screenshots/help.png)
+
+</details>
+
+<details><summary>Favourites — this bank's favourites view (`v` once)</summary>
+
+![Favourites - this bank](docs/screenshots/favourites-bank.png)
+
+</details>
+
+<details><summary>All favourites (`v` twice)</summary>
+
+![Favourites - all](docs/screenshots/favourites-all.png)
+
+</details>
+
+<details><summary>Rating filter — exact or at-least (0–5 stars)</summary>
+
+![RatingFilterScreen](docs/screenshots/rating-filter.png)
+
+</details>
 
 On the multi screen, editing the channel under the cursor: `⏎` opens the
 value (or the channel's detail, on the columns that are not values), `+` and
@@ -700,6 +790,21 @@ ranges are enforced, that a signed value survives a round trip, and that
 the cursor still never sends MIDI. It does not say the protocol is right.
 That remains what DISCLAIMER.md is for, and no amount of static analysis
 changes it.
+
+### Screenshots
+
+All screenshots in this document were captured using the built-in `DemoDevice`
+(no hardware, no MIDI ports). The preset names shown in the browser come from
+the local catalog (`p2k/data/catalog.json`, generated from the user's own
+instrument-definition files) — these are the originally shipped factory preset
+names, not invented demo data. The ROM product names ("Composer", "Xtreme
+Lead", etc.) are from `p2k/roms.py` and are committed in the repository. User
+banks under `--demo` show invented names (the demo's own word pool).
+
+Screenshots were captured with Textual 8.2.8 via `App.run_test()`, exported as
+SVG, and converted to PNG at 820 px width using cairosvg. All images use a
+standard terminal size of 132×42 (browser) or modal-appropriate dimensions.
+The font is FreeMono for glyph coverage (★♥↑↓⏎≥).
 
 ## Licence
 
