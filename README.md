@@ -159,7 +159,7 @@ automatically before its first whole-setup write of a session. See
 
 <details><summary>Browser — ROM bank selected, catalog names visible</summary>
 
-![Browser with Xtreme Lead bank selected](docs/screenshots/general.png)
+![Browser with Xtreme Lead bank selected](file:///home/lentferj/git-repos/p2ked/docs/screenshots/general.png)
 
 </details>
 
@@ -202,13 +202,13 @@ only for the moment it changes.
 
 <details><summary>Channels screen — 32 channels + master panel + why-not column</summary>
 
-![MultiScreen with 32 channels](docs/screenshots/channels.png)
+![MultiScreen with 32 channels](file:///home/lentferj/git-repos/p2ked/docs/screenshots/channels.png)
 
 </details>
 
 <details><summary>Channel detail — read-only, all nine params + why-not</summary>
 
-![ChannelDetailScreen](docs/screenshots/channel-detail.png)
+![ChannelDetailScreen](file:///home/lentferj/git-repos/p2ked/docs/screenshots/channel-detail.png)
 
 </details>
 
@@ -231,7 +231,7 @@ one, clamped to the range, and go through the same gate as an edit.
 
 <details><summary>Master parameter editor — eleven parameters, picker for enums, prompt for ranges</summary>
 
-![MasterEditScreen](docs/screenshots/master-edit.png)
+![MasterEditScreen](file:///home/lentferj/git-repos/p2ked/docs/screenshots/master-edit.png)
 
 </details>
 
@@ -245,7 +245,7 @@ would otherwise land as a plausible, silent change.
 
 <details><summary>Master FX editor — sixteen parameters, algorithm pickers</summary>
 
-![FXEditScreen](docs/screenshots/master-fx.png)
+![FXEditScreen](file:///home/lentferj/git-repos/p2ked/docs/screenshots/master-fx.png)
 
 </details>
 
@@ -319,19 +319,19 @@ timeline that restores something that was never changed.
 
 <details><summary>Value picker — for parameters with named values (MIDI mode, out, arp, FX algorithms)</summary>
 
-![ValuePickerScreen](docs/screenshots/value-picker.png)
+![ValuePickerScreen](file:///home/lentferj/git-repos/p2ked/docs/screenshots/value-picker.png)
 
 </details>
 
 <details><summary>Value prompt — for numeric ranges (transpose, volume, pan, etc.)</summary>
 
-![PromptScreen with range](docs/screenshots/value-prompt.png)
+![PromptScreen with range](file:///home/lentferj/git-repos/p2ked/docs/screenshots/value-prompt.png)
 
 </details>
 
 <details><summary>Sound picker — bank pane, favourites cycle, name filter</summary>
 
-![SoundPickerScreen](docs/screenshots/sound-picker.png)
+![SoundPickerScreen](file:///home/lentferj/git-repos/p2ked/docs/screenshots/sound-picker.png)
 
 </details>
 
@@ -486,43 +486,43 @@ this one alone. `--config PATH` names a different file entirely.
 
 <details><summary>Search — name filter across all banks</summary>
 
-![SearchScreen](docs/screenshots/search.png)
+![SearchScreen](file:///home/lentferj/git-repos/p2ked/docs/screenshots/search.png)
 
 </details>
 
 <details><summary>Categories — filter by bank kind (bas:, cat:, etc.)</summary>
 
-![Category prompt](docs/screenshots/categories.png)
+![Category prompt](file:///home/lentferj/git-repos/p2ked/docs/screenshots/categories.png)
 
 </details>
 
 <details><summary>Device report — identity, SIMMs fitted, catalog count, build line</summary>
 
-![ReportScreen Device](docs/screenshots/device.png)
+![ReportScreen Device](file:///home/lentferj/git-repos/p2ked/docs/screenshots/device.png)
 
 </details>
 
 <details><summary>Help — the help screen with the build line first</summary>
 
-![ReportScreen Help](docs/screenshots/help.png)
+![ReportScreen Help](file:///home/lentferj/git-repos/p2ked/docs/screenshots/help.png)
 
 </details>
 
 <details><summary>Favourites — this bank's favourites view (`v` once)</summary>
 
-![Favourites - this bank](docs/screenshots/favourites-bank.png)
+![Favourites - this bank](file:///home/lentferj/git-repos/p2ked/docs/screenshots/favourites-bank.png)
 
 </details>
 
 <details><summary>All favourites (`v` twice)</summary>
 
-![Favourites - all](docs/screenshots/favourites-all.png)
+![Favourites - all](file:///home/lentferj/git-repos/p2ked/docs/screenshots/favourites-all.png)
 
 </details>
 
 <details><summary>Rating filter — exact or at-least (0–5 stars)</summary>
 
-![RatingFilterScreen](docs/screenshots/rating-filter.png)
+![RatingFilterScreen](file:///home/lentferj/git-repos/p2ked/docs/screenshots/rating-filter.png)
 
 </details>
 
