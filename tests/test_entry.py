@@ -26,7 +26,7 @@ REQUIRED_BITS = (
     "error:",
     "vinsynlib",
     "pip install",
-    "vinsynlib>=0.4.1",
+    "vinsynlib>=0.4.2",
 )
 
 
@@ -77,7 +77,7 @@ def test_an_older_library_is_named_rather_than_ignored(
     monkeypatch.setattr(vinsynlib, "__version__", "0.0.9")
     problem = entry._diagnose("p2ked")
     assert problem is not None
-    assert "0.4.1" in problem
+    assert "0.4.2" in problem
     assert "0.0.9" in problem
 
 
