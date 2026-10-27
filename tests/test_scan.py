@@ -261,6 +261,13 @@ class TestAWholeScan:
         app = make(tmp_path, catalog=cat.empty(), demo=True)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # The launch's own auto-read still owns the wire this early on
+            # a slow runner; asserting on its flag before it lands mistakes
+            # startup for work. Same wait the whole-scan tests use.
+            for _ in range(200):
+                if not app._busy:
+                    break
+                await pilot.pause()
             app.action_scan_device()
             assert not app._busy
             assert not (tmp_path / "catalog.json").exists()

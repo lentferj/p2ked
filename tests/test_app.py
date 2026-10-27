@@ -18,6 +18,8 @@
 Names used here are invented, per CLAUDE.md.
 """
 
+import time
+
 import pytest
 
 from p2k import catalog as cat
@@ -417,10 +419,26 @@ class TestMultiScreen:
     """
 
     async def _open(self, app, pilot):
+        """``m``, retried until the multi screen is showing.
+
+        One press is not enough: the launch's own name auto-read owns the
+        wire at startup, and a press landing in it is refused with "busy"
+        -- on a slow runner that outlasts a fixed handful of pauses, which
+        is how CI got back the default screen and failed on ``_fitted``.
+        So press until it is there or a wall-clock deadline says it never
+        will be, the way ``tests/test_modal_ux.py``'s ``_open_multi``
+        already does.
+        """
         await pilot.pause()
-        await pilot.press("m")
-        for _ in range(8):
-            await pilot.pause()
+        start = time.monotonic()
+        while not isinstance(app.screen, MultiScreen):
+            await pilot.press("m")
+            for _ in range(8):
+                if isinstance(app.screen, MultiScreen):
+                    break
+                await pilot.pause()
+            if time.monotonic() - start >= 60.0:
+                break
         return app.screen
 
     async def test_m_opens_it_with_every_channel(self, app):
