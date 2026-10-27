@@ -20,12 +20,13 @@ VENV := .venv
 # Windows keeps its console scripts in .venv/Scripts, everything else in
 # .venv/bin, so the layout cannot be assumed POSIX: CI runs this same file
 # on Linux, macOS and Windows.
+#
+# This is correct for every target *except* `install` itself: a lazy check
+# cannot see a directory an earlier line of the same recipe just created
+# (found the hard way, when CI's install silently used the host python3
+# and its packages landed outside the venv). `install` picks its
+# interpreter in the shell instead -- see below.
 VENV_BIN = $(shell [ -d "$(VENV)/Scripts" ] && echo "$(VENV)/Scripts" || ([ -d "$(VENV)/bin" ] && echo "$(VENV)/bin"))
-
-# The venv's interpreter, for the `install` target below. Lazy for the same
-# reason `VENV_BIN` is: the first recipe line creates the venv, and only
-# the lines after it may assume the directory is there.
-VENV_PYTHON = $(if $(VENV_BIN),$(VENV_BIN)/python,python3)
 
 # A tool from .venv when it is there, otherwise the one on PATH.
 tool = $(if $(VENV_BIN),$(VENV_BIN)/$(1),$(1))
@@ -62,19 +63,21 @@ help: ## Show this help
 .PHONY: install
 install: ## Create .venv and install pinned dev dependencies
 	python3 -m venv $(VENV)
-	@# Explicit $(VENV_PYTHON), not $(P): $(P) is resolved against the
-	@# venv's existence, which is false until the line above has run --
-	@# and a literal `.venv/bin/python` does not exist on Windows, where
-	@# the interpreter lives in `.venv/Scripts`.
-	$(VENV_PYTHON) -m pip install --upgrade pip
-	$(VENV_PYTHON) -m pip install -r requirements-dev.txt
+	@# The interpreter is picked in the shell, not from `$(VENV_BIN)`:
+	@# the lazy check above cannot see a directory an earlier line of this
+	@# same recipe just created, so it fell back to the host python3 and
+	@# installed everything outside the venv. A literal `.venv/bin/python`
+	@# is no answer either -- on Windows it lives in `.venv/Scripts`.
 	@# --no-deps used to be here, and is gone now that vinsynlib resolves
 	@# from an index: with it, the shared library -- a runtime dependency
 	@# p2ked cannot start without -- was never installed at all, and
 	@# `make install && make check` failed on the first import. The pinned
-	@# dev set is installed above, so this line adds the project and the
-	@# runtime dependencies the pins do not cover.
-	$(VENV_PYTHON) -m pip install -e .
+	@# dev set is installed below, and the last line adds the project and
+	@# the runtime dependencies the pins do not cover.
+	@if [ -x "$(VENV)/Scripts/python.exe" ]; then PY="$(VENV)/Scripts/python.exe"; else PY="$(VENV)/bin/python"; fi; \
+		"$$PY" -m pip install --upgrade pip; \
+		"$$PY" -m pip install -r requirements-dev.txt; \
+		"$$PY" -m pip install -e .
 	@echo
 	@echo "Done. Next: make install-hooks"
 
