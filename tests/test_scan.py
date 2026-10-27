@@ -238,6 +238,14 @@ class TestAWholeScan:
         app = make(tmp_path, catalog=cat.Catalog([], path=path))
         async with app.run_test() as pilot:
             await pilot.pause()
+            # The launch's own name auto-read owns the wire until it lands,
+            # and a scan asked while it does is refused with "busy" -- so
+            # wait for the bus to free up first. One pause is not enough on
+            # a loaded machine, which is how CI lost the scan.
+            for _ in range(200):
+                if not app._busy:
+                    break
+                await pilot.pause()
             app.action_scan_device()
             for _ in range(200):
                 if not app._busy:
@@ -262,6 +270,13 @@ class TestAWholeScan:
         app = make(tmp_path, catalog=cat.Catalog([], path=path), device=SlowDemo())
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Same wait as the read test above: the scan is refused while
+            # the launch's auto-read holds the wire, and without it there
+            # is no ScanScreen to cancel -- which is what CI saw.
+            for _ in range(200):
+                if not app._busy:
+                    break
+                await pilot.pause()
             app.action_scan_device()
             await pilot.pause()
             assert isinstance(app.screen, ScanScreen)

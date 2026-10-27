@@ -269,12 +269,20 @@ class TestTheHelpNamesItsBuild:
         is absent -- so the tool's commit comes out of the checkout the
         module sits in, while the library's comes out of the editable
         install's ``file:`` URL. Two different leads, one line.
+
+        The library's half depends on how it was installed: a developer
+        checkout names its commit, but CI installs the release from the
+        index, which carries a version and no commit by design (a wheel is
+        built from an sdist with no ``.git`` in it). So this asserts what
+        is always true -- both names, and p2ked's sha -- and allows one or
+        two parenthesised shas rather than demanding two.
         """
         line = _build_line()
         assert "p2ked" in line
         assert "vinsynlib" in line
-        # Both are real commits here, so both are short shas.
-        assert line.count("(") == 2
+        # p2ked is a checkout here, so its short sha is always present;
+        # vinsynlib's is present only for an editable install.
+        assert line.count("(") in (1, 2)
 
     def test_a_checkout_names_its_commit_and_no_version_it_cannot_prove(
         self, monkeypatch: pytest.MonkeyPatch

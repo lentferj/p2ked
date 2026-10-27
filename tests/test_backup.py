@@ -119,7 +119,13 @@ class TestTheEnvelope:
     def test_the_default_directory_is_under_the_data_directory(
         self, monkeypatch, tmp_path
     ):
+        # One variable per platform: Linux reads $XDG_DATA_HOME, macOS
+        # reads $HOME (~/Library/Application Support), Windows reads
+        # %LOCALAPPDATA%. Setting only XDG left macOS and Windows looking
+        # at the real directories, which is why this failed there.
         monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         assert bk.default_dir() == os.path.join(data_dir(), "backups")
         assert bk.default_dir().startswith(str(tmp_path))
         # Not the checkout: the reason the directory is not simply "backups".

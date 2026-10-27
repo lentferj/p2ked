@@ -16,7 +16,16 @@ VENV := .venv
 # creates .venv, so a parse-time check for it would always miss and every
 # target would silently fall back to the host interpreter -- which is what
 # happened the first time this ran.
-VENV_BIN = $(shell test -d "$(VENV)/bin" && echo "$(VENV)/bin")
+#
+# Windows keeps its console scripts in .venv/Scripts, everything else in
+# .venv/bin, so the layout cannot be assumed POSIX: CI runs this same file
+# on Linux, macOS and Windows.
+VENV_BIN = $(shell [ -d "$(VENV)/Scripts" ] && echo "$(VENV)/Scripts" || ([ -d "$(VENV)/bin" ] && echo "$(VENV)/bin"))
+
+# The venv's interpreter, for the `install` target below. Lazy for the same
+# reason `VENV_BIN` is: the first recipe line creates the venv, and only
+# the lines after it may assume the directory is there.
+VENV_PYTHON = $(if $(VENV_BIN),$(VENV_BIN)/python,python3)
 
 # A tool from .venv when it is there, otherwise the one on PATH.
 tool = $(if $(VENV_BIN),$(VENV_BIN)/$(1),$(1))
@@ -53,17 +62,19 @@ help: ## Show this help
 .PHONY: install
 install: ## Create .venv and install pinned dev dependencies
 	python3 -m venv $(VENV)
-	@# Explicit $(VENV)/bin/python, not $(P): $(P) is resolved against the
-	@# venv's existence, which is false until the line above has run.
-	$(VENV)/bin/python -m pip install --upgrade pip
-	$(VENV)/bin/python -m pip install -r requirements-dev.txt
+	@# Explicit $(VENV_PYTHON), not $(P): $(P) is resolved against the
+	@# venv's existence, which is false until the line above has run --
+	@# and a literal `.venv/bin/python` does not exist on Windows, where
+	@# the interpreter lives in `.venv/Scripts`.
+	$(VENV_PYTHON) -m pip install --upgrade pip
+	$(VENV_PYTHON) -m pip install -r requirements-dev.txt
 	@# --no-deps used to be here, and is gone now that vinsynlib resolves
 	@# from an index: with it, the shared library -- a runtime dependency
 	@# p2ked cannot start without -- was never installed at all, and
 	@# `make install && make check` failed on the first import. The pinned
 	@# dev set is installed above, so this line adds the project and the
 	@# runtime dependencies the pins do not cover.
-	$(VENV)/bin/python -m pip install -e .
+	$(VENV_PYTHON) -m pip install -e .
 	@echo
 	@echo "Done. Next: make install-hooks"
 

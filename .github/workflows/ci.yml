@@ -50,6 +50,18 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install make -y
 
+      # The Makefile's recipes are POSIX sh, not cmd.exe or PowerShell --
+      # the `install` target in particular tests `[ -d ... ]`. GitHub runs
+      # `run:` steps under PowerShell on Windows by default, so make is
+      # pointed at Git Bash here (which the images ship) and the two steps
+      # below run under bash explicitly.
+      - name: Point make at a POSIX shell (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "SHELL=C:/Program Files/Git/usr/bin/bash.exe" >> "$GITHUB_ENV"
+          make --version
+
       # python-rtmidi publishes no cp313 wheel, so on 3.13 pip builds it
       # from sdist, and on Linux that needs the ALSA headers to link
       # against. macOS and Windows build against CoreMIDI and WinMM and
@@ -60,7 +72,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Install
+        shell: bash
         run: make install
 
       - name: Check
+        shell: bash
         run: make check
