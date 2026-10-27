@@ -229,6 +229,16 @@ is **not** a place to keep anything of your own. Its first line records
 which tool wrote it; another tool reads and writes its own file, and leaves
 this one alone. `--config PATH` names a different file entirely.
 
+Beside it, p2ked keeps a `ui-state.toml` (same working directory, also
+gitignored, just as safe to delete): the browser remembers where you were
+and how the list was narrowed — the selected bank row, the preset row the
+cursor stopped on, which of the three favourites views `v` was on, the
+rating filter (`V`), the category filter (`C`) — and whether you answered
+"never" to the scan offer. Each is written as it changes, not on exit, so a
+crash does not lose it; the send channel is remembered separately in
+`config.toml`, as it always was. Clearing a filter removes its key again,
+so a list you un-narrowed does not come back narrowed on the next launch.
+
 ### Keys
 
 | | |

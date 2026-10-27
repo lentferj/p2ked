@@ -52,6 +52,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Header, Label, Static
@@ -1761,13 +1762,15 @@ class P2kedApp(App):
         #: -- see :meth:`_visible`, which applies it last and over all
         #: three.
         #:
-        #: Above the ``channel`` assignment below and not beside the view
-        #: mode, because that assignment fires :meth:`watch_channel` while
-        #: the constructor is still running, and the watcher writes the
-        #: subtitle. It does not matter for the *channel*; it matters for
-        #: anything the subtitle says as well.
+        #: Above the restore at the end of ``__init__``, which may overwrite
+        #: it, and not beside the ``channel`` assignment -- because that
+        #: assignment is the constructor's **last** statement, after the
+        #: restore, so the :meth:`watch_channel` call it fires writes a
+        #: sub-title that already names the restored narrowing. It used to
+        #: sit here beside :attr:`rating_filter`, and one attribute at a
+        #: time was enough then: the sub-title named only the rating. Naming
+        #: the view and the categories too is what moved it.
         self.rating_filter: Optional[RatingFilter] = None
-        self.channel = channel
         #: Injected rather than opened here, so a test never writes into the
         #: user's real database. rxved learned that one the hard way, by
         #: leaving two files in it.
@@ -1775,6 +1778,20 @@ class P2kedApp(App):
         #: Where the send channel is remembered. Injected and None in tests,
         #: so a test cannot drop a config into the working directory.
         self._config_path = config_path
+        #: Where the ui-state file lives: ``ui-state.toml`` beside
+        #: ``config_path`` (:func:`p2k.config.ui_state_path`), or ``None``
+        #: when no settings path was given -- the same no-path, no-file
+        #: rule :meth:`_remember_channel` keeps, and so a test that passes
+        #: no ``config_path`` is guaranteed this app writes nothing to the
+        #: working directory. ``main()`` always names a path, so for real
+        #: runs the file is always on.
+        self._ui_state_path: Optional[str]
+        if config_path is None:
+            self._ui_state_path = None
+        else:
+            from p2k import config
+
+            self._ui_state_path = config.ui_state_path(config_path)
         self._lock = threading.RLock()
         #: ``{rom id: present}`` as the unit answered, or None if it was
         #: never asked. None means show everything: a bank list silently
@@ -1849,8 +1866,69 @@ class P2kedApp(App):
         # (``_changes`` is not here: it is a property over the library's
         # log, made at the top of ``__init__`` -- see ``_undo_log``.)
         #: Empty = every category. Categories are the "bas:" style prefix
-        #: E-MU puts on a preset name.
+        #: E-MU puts on a preset name. Remembered across runs: the store
+        #: keeps scalars only and raises on a list, so the set travels as
+        #: one comma-joined string (see the save in
+        #: :meth:`action_pick_categories`) -- which is also why a category
+        #: can come back narrowed on a fresh launch, and why
+        #: :meth:`_update_subtitle` says so on the header instead of
+        #: trusting a status line to still be up.
         self._categories: set = set()
+
+        # What the user last left on screen, restored before the first
+        # paint. One read per key through the injected path, and every key
+        # validated before it is trusted: the file sits beside the settings
+        # cache, is hand-editable, must not wedge the app. The library's
+        # readers already refuse every type they do not honour -- a bool is
+        # not an int (``isinstance(True, int)`` is true), a number is not a
+        # str -- and the range checks on the two that index a list are this
+        # app's, because only it knows how long its lists are this launch.
+        self._saved_slot_cursor: Optional[int] = None
+        self._saved_bank_index: Optional[int] = None
+        if self._ui_state_path is not None:
+            index = self._ui_int("browser.bank_index")
+            if index is not None and 0 <= index < len(self._bank_ids):
+                self._current_bank = self._bank_ids[index]
+                self._saved_bank_index = index
+            cursor = self._ui_int("browser.slot_cursor")
+            if cursor is not None and cursor >= 0:
+                self._saved_slot_cursor = cursor
+            view = self._ui_str("browser.view_mode")
+            if view is not None and view in VIEW_CYCLE:
+                self.view_mode = view
+            remembered = self._ui_str("browser.categories")
+            if remembered is not None:
+                # The stored form of the set -- one sorted, comma-joined
+                # string, because the store raises on a list. The parse
+                # mirrors the write in :meth:`action_pick_categories`, strip
+                # included, so its own spelling round-trips.
+                self._categories = {
+                    c.strip() for c in remembered.split(",") if c.strip()
+                }
+        stars = self._ui_int("browser.rating_stars")
+        at_least = self._ui_bool("browser.rating_at_least")
+        # Both keys or none: one without the other is half a filter, and
+        # half a filter is a filter nobody chose.
+        if stars is not None and at_least is not None:
+            candidate = RatingFilter(stars=stars, at_least=at_least)
+            # In ``RATING_FILTER_STATES``, or nothing. That is the rule
+            # ``>= / ≥0`` answers to: at least *nothing* matches everything,
+            # which is not a filter, so a hand-edited ``stars = 0`` with
+            # ``at_least = true`` is ignored rather than trusted to narrow
+            # to everything it excludes.
+            if candidate in RATING_FILTER_STATES:
+                self.rating_filter = candidate
+        # The scan offer's "never", through the same injected path as the
+        # rest -- it used to be read at the module's default path, which was
+        # why a test had to monkeypatch ``p2k.config`` instead of pointing
+        # this app at its own ``tmp_path``. Read once here;
+        # :meth:`_maybe_offer_scan` asks only this attribute.
+        self._scan_offer_dismissed: bool = bool(self._ui_bool("scan.offer_dismissed"))
+        # Last, deliberately (see :attr:`rating_filter` for why the move):
+        # the assignment fires :meth:`watch_channel`, which writes the
+        # sub-title, and by now every value that line can name -- channel,
+        # rating, categories, view -- exists, restored included.
+        self.channel = channel
 
     def _rom_id_of(self, bank_id: str) -> int:
         entry = roms.bank(bank_id)
@@ -2013,7 +2091,30 @@ class P2kedApp(App):
         ):
             presets.add_column(label, key=key, width=width)
         self._fill_presets(self._current_bank)
+        # The bank cursor to the row the user left, now that the preset
+        # columns exist and the pane beside it has been filled: a move
+        # before that would highlight a row of a table that has no columns
+        # yet. The refill that `on_data_table_row_highlighted` runs for this
+        # move is safe only because the restored row *is* the bank already
+        # showing -- its guard is the comparison, not ``_filling``. One-shot,
+        # like the slot cursor below: a second visit to this window must
+        # start where the app is, not where it was saved.
+        if self._saved_bank_index is not None:
+            if 0 <= self._saved_bank_index < len(self._bank_ids):
+                banks.move_cursor(row=self._saved_bank_index)
+            self._saved_bank_index = None
+        saved_cursor = self._saved_slot_cursor
+        self._saved_slot_cursor = None
+        if saved_cursor is not None and 0 <= saved_cursor < len(self._current):
+            presets.move_cursor(row=saved_cursor)
         banks.focus()
+        # The slot cursor, applied again once focus has settled --
+        # ``bank_table.focus()`` can reset the visual cursor, and the same
+        # fix for the same discovery sits in rxved's ``on_mount``. One-shot
+        # (cleared above): this is a restore, not an override that would
+        # keep fighting the user's next keypress.
+        if saved_cursor is not None:
+            self.set_timer(0.1, lambda: self._restore_slot_cursor(saved_cursor))
         self.notify_status(
             f"{len(self.catalog)} names from the catalog"
             if self.catalog
@@ -2468,6 +2569,15 @@ class P2kedApp(App):
         index = VIEW_CYCLE.index(self.view_mode)
         self.view_mode = VIEW_CYCLE[(index + 1) % len(VIEW_CYCLE)]
         self._refill_keeping_place()
+        # Written as the change happens, not on exit, so a crash leaves the
+        # file where the user actually left the screen. rxved saves the same
+        # key at the same point of the same action.
+        self._remember("browser.view_mode", self.view_mode)
+        # The sub-title names the view now that one survives a restart --
+        # it did not, so this call is new, and a narrowed view named
+        # nowhere was exactly what §3.4 exists to prevent. See
+        # :meth:`_update_subtitle`.
+        self._update_subtitle()
         shown = len(self._current)
         if self.view_mode == VIEW_ALL:
             self.notify_status(VIEW_LABELS[self.view_mode])
@@ -2501,6 +2611,18 @@ class P2kedApp(App):
                 return
             self.rating_filter = chosen
             self._refill_keeping_place()
+            # Both keys, every time: with no filter the keys are removed,
+            # which is the only way a cleared filter stops coming back
+            # (``None`` means *forget*, here and in the store -- so a
+            # restart cannot resurrect a narrowing out of a stale row).
+            self._remember(
+                "browser.rating_stars",
+                None if chosen is None else chosen.stars,
+            )
+            self._remember(
+                "browser.rating_at_least",
+                None if chosen is None else chosen.at_least,
+            )
             self.query_one("#preset-table", DataTable).focus()
             shown = len(self._current)
             if chosen is None:
@@ -2533,6 +2655,15 @@ class P2kedApp(App):
                 return
             self._categories = wanted
             self._refill_keeping_place()
+            # The set, stored as one sorted comma-joined string and back --
+            # the store keeps scalars only. Empty removes the key, so
+            # "every category" also survives a restart without narrowing
+            # it. See :attr:`_categories` for the restore side.
+            self._remember(
+                "browser.categories",
+                ",".join(sorted(wanted)) if wanted else None,
+            )
+            self._update_subtitle()
             self.notify_status(
                 f"categories: {', '.join(sorted(wanted))}"
                 if wanted
@@ -2563,21 +2694,35 @@ class P2kedApp(App):
             table.move_cursor(row=min(row, len(self._current) - 1))
 
     def _show_detail(self, row: int) -> None:
+        """The pane under the tables: the preset's identifiers in full.
+
+        The widget lookup is guarded the same way
+        :meth:`_restore_slot_cursor` is: a highlight can still be delivered
+        while the window is being dismantled (one arrives for every
+        ``move_cursor``, including the programmatic ones a refill makes),
+        and a pane that is already gone has nothing to show -- a no-op is
+        the right answer, not a traceback. The ``except`` is not licence to
+        swallow more.
+        """
         if not self._current or row >= len(self._current):
-            self.query_one("#detail", Static).update("")
-            return
-        entry = self._current[row]
-        name = self.catalog.display_name(entry.bank_id, entry.program_change)
-        why = self._marked_because(entry.bank_id, entry.program_change)
-        note = f"  [dim]* {why}[/dim]" if why else ""
-        self.query_one("#detail", Static).update(
-            f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}"
-            f"{note}\n"
-            f"Program Change [b]{entry.program_change}[/b]   "
-            f"Bank Select LSB [b]{entry.lsb}[/b] (CC#32)   "
-            f"MSB [b]{entry.msb}[/b] (CC#0)   "
-            f"[dim]preset {entry.number} within {entry.rom.name}[/dim]"
-        )
+            text = ""
+        else:
+            entry = self._current[row]
+            name = self.catalog.display_name(entry.bank_id, entry.program_change)
+            why = self._marked_because(entry.bank_id, entry.program_change)
+            note = f"  [dim]* {why}[/dim]" if why else ""
+            text = (
+                f"[b]{entry.bank.label} {entry.program_change:03d}[/b]  {name}"
+                f"{note}\n"
+                f"Program Change [b]{entry.program_change}[/b]   "
+                f"Bank Select LSB [b]{entry.lsb}[/b] (CC#32)   "
+                f"MSB [b]{entry.msb}[/b] (CC#0)   "
+                f"[dim]preset {entry.number} within {entry.rom.name}[/dim]"
+            )
+        try:
+            self.query_one("#detail", Static).update(text)
+        except (LookupError, NoMatches, ValueError, AttributeError):
+            pass
 
     def notify_status(self, message: str, *, refused: bool = False) -> None:
         prefix = "[b]refused[/b] · " if refused else ""
@@ -2594,34 +2739,102 @@ class P2kedApp(App):
         return f"sending on MIDI channel {self.channel + 1}"
 
     def _update_subtitle(self) -> None:
-        """The header's line: the send channel, and any rating filter.
+        """The header's line: the send channel, and every active narrowing.
 
-        A rating filter is the one narrowing that has to be on this line.
-        The category filter only ever cuts down a view the user asked for,
-        and the status line that announced it is enough; a rating filter
-        narrows **all three** views, including the full list of a bank you
-        were reading straight down. Rows that are not there and no word
-        about why is the failure this exists to prevent -- the same reason
-        rxved puts the filter on its own sub-title first.
+        Every narrowing that can survive a restart is on this line, rating
+        first. Now that the rating, the categories and the view are
+        remembered in the ui-state file, a fresh launch can open on a
+        list narrowed by *all three* with nothing saying why -- rows that
+        are not there and no word about why is the failure this exists to
+        prevent, and it is exactly the failure CLAUDE.md tells a feature
+        like this to build against. rxved shows its filters on its own
+        sub-title first, for the same reason.
+
+        (The old premise -- that the category filter was only ever a view
+        the user asked for this session and the status line that announced
+        it was enough -- is gone with that: categories are remembered
+        across runs, so the status line's sentence is gone by the next
+        launch and the header is the only thing left naming them.)
+
+        The order is the filter, the categories, then the view: the
+        narrowest first, and the one that is a whole different list rather
+        than a subset last. With nothing active this is exactly
+        :meth:`_channel_line` -- an existing test asserts the bare
+        sentence, and any wording added with nothing narrowed breaks it.
 
         Main thread only, like every other thing that touches a widget.
         """
-        filters = ""
+        parts: List[str] = []
         if self.rating_filter is not None:
-            filters = f"   ·   {self.rating_filter.label}"
+            parts.append(self.rating_filter.label)  # "rating ≥3"
+        if self._categories:
+            parts.append("/".join(sorted(self._categories)))
+        if self.view_mode != VIEW_ALL:
+            parts.append(VIEW_LABELS[self.view_mode])
+        filters = ("   ·   " + "   ·   ".join(parts)) if parts else ""
         self.sub_title = self._channel_line() + filters
 
     # --- navigation ---------------------------------------------------------
 
     def on_data_table_row_highlighted(self, event) -> None:
+        """Put the other pane and the detail line back in step, and record
+        the stop.
+
+        One handler for both tables, and both halves are reached by
+        programmatic cursor moves as much as by keystrokes: a refill moves
+        a cursor and posts the message for it. ``_filling`` still guards
+        the *fills* -- the handler used to exist only to keep the panes in
+        step -- but the message can arrive after the flag is cleared, so
+        anything else has to guard by value or by focus:
+
+        - the bank branch is guarded by the comparison instead of the flag:
+          refilling the bank that is already showing does nothing but
+          reset the preset cursor (which the refill's ``keep place`` may
+          just have put back) -- and the late row-highlighted that
+          start-up's first fill posts arrives after the flag is cleared
+          too late for any flag to catch. rxved's copy of this handler
+          records the same discovery and the same guard at the same line.
+        - the row-highlighted itself is checked against the table's own
+          cursor: Textual delivers the message for the row highlighted
+          when it was *posted*, and the restored move in
+          :meth:`on_mount` has long since happened by then, so the first
+          disagreeing event is dropped rather than refilled from. The
+          row the cursor really is on posts its own message, so nothing
+          the user asked for is lost.
+        - the preset row is remembered only while the preset pane has
+          focus, so start-up's programmatic moves -- the fills, the
+          ``banks.focus()``, the one-shot restore of the cursor -- cannot
+          overwrite the position the user actually stopped at. A keystroke
+          of theirs is the only thing that is one.
+        """
         if self._filling:
             return
         if event.data_table.id == "bank-table":
+            banks = self.query_one("#bank-table", DataTable)
             row = event.cursor_row
-            if 0 <= row < len(self._bank_ids):
+            # Stale events are dropped, not obeyed. Textual posts a
+            # row-highlighted for the row that was highlighted *when the
+            # message was posted* and can deliver it after a newer move:
+            # start-up's first one -- row 0, from the very fill -- lands
+            # after the restored bank move in :meth:`on_mount`, and a
+            # refill it triggers resets the preset cursor the restore had
+            # just put back. The table's own cursor is what is showing;
+            # an event that disagrees with it is history, and the row the
+            # cursor really moved to posts its own message.
+            if row != banks.cursor_row:
+                return
+            # Compared *before* `_fill_presets`, which assigns
+            # `_current_bank`: after it, the comparison is always false and
+            # the row would never be recorded.
+            if 0 <= row < len(self._bank_ids) and (
+                self._bank_ids[row] != self._current_bank
+            ):
                 self._fill_presets(self._bank_ids[row])
+                self._remember("browser.bank_index", row)
         elif event.data_table.id == "preset-table":
             self._show_detail(event.cursor_row)
+            if self.query_one("#preset-table").has_focus:
+                self._remember("browser.slot_cursor", event.cursor_row)
 
     def on_data_table_row_selected(self, event) -> None:
         """Enter on a preset row selects it. Enter arrives here, not as a
@@ -2764,7 +2977,15 @@ class P2kedApp(App):
                 lambda bank, number: self.catalog.live_name(bank, number)
             )
         if bank_id == self._current_bank:
-            self._fill_presets(bank_id)
+            # Keeping place, not a plain refill: this arrives as the
+            # auto-read of the bank already on screen -- within a second
+            # of start-up, when the preset cursor is the *restored* one --
+            # and a plain refill resets that cursor, which is the program
+            # undoing its own restore. rxved's startup read goes through
+            # `_refresh_current_bank` for the same reason. (Not
+            # :meth:`_scan_apply`: a scan is long and deliberate, and what
+            # it resets belongs to a screen the user is watching change.)
+            self._refill_keeping_place()
 
         marks = []
         if changed:
@@ -2833,14 +3054,35 @@ class P2kedApp(App):
         """Offer a scan when there is nothing to start from.
 
         Only when the catalog is completely empty, the demo is not in use
-        (its names are invented), nothing is on the wire, and the user has
-        not said "don't ask again".
-        """
-        if self._demo or self._busy or self.catalog:
-            return
-        from p2k import config as cfg
+        (its names are invented), and the user has not said "don't ask
+        again" -- asked of :attr:`_scan_offer_dismissed`, which ``__init__``
+        filled by reading the same key through the same injected ui-state
+        path as everything else this screen remembers.  It used to ask the
+        library for the module default path instead, and could only be
+        tested by monkeypatching ``p2k.config`` rather than by pointing
+        this app at its own file.
 
-        if cfg.load_ui_bool("scan.offer_dismissed", default=False):
+        A busy wire is not a final gate: while this app's own start-up
+        auto-read still owns the wire, the check re-arms itself (0.6 s
+        apart, the settle delay) rather than dropping the offer.  Giving
+        up while :attr:`_busy` cost a first run against a slow unit its
+        offer entirely; the permanent reasons (demo, catalog, dismissed)
+        are settled before the busy check so a retry never re-asks for
+        something that has already been answered.
+        """
+        if self._demo or self.catalog:
+            return
+        if self._scan_offer_dismissed:
+            return
+        if self._busy:
+            # A busy wire is the only transient reason here.  On start-up
+            # the auto-read of the user banks' names owns the wire, and on
+            # a slow unit it outlasts this check's settle delay -- the
+            # offer used to be dropped for good, so a first run against a
+            # slow unit never asked.  Wait for the bus to free up instead:
+            # every worker clears :attr:`_busy` in its ``finally``, so the
+            # retry terminates.
+            self.set_timer(0.6, self._maybe_offer_scan)
             return
         self.push_screen(
             ScanOfferScreen(
@@ -2854,9 +3096,16 @@ class P2kedApp(App):
 
     def _scan_offer_answered(self, answer: Optional[str]) -> None:
         if answer == "never":
-            from p2k import config as cfg
-
-            cfg.save_ui_state("scan.offer_dismissed", True)
+            # The offer asks :attr:`_scan_offer_dismissed`, so the answer
+            # is set here too -- only next launch, the rest of this
+            # session would keep asking if the reply screen ever returned
+            # to an empty catalog. rxved does the same pair.
+            # The written half goes through :meth:`_remember` like the
+            # rest of the screen (same file, so one answer lives in one
+            # file); the attribute is restored from this key on the next
+            # launch.
+            self._scan_offer_dismissed = True
+            self._remember("scan.offer_dismissed", True)
             return
         if answer == "scan":
             self._start_scan(rebuild=False)
@@ -3157,6 +3406,114 @@ class P2kedApp(App):
         try:
             config.save_channel(channel, self._config_path)
         except OSError:
+            pass
+
+    # --- remembering the screen ---------------------------------------------
+
+    def _remember(self, key: str, value) -> None:
+        """Save one screen value into the ui-state file, for the next launch.
+
+        Written as the change happens, the way :meth:`_remember_channel`
+        has always saved the send channel, so a crash costs nothing and a
+        quit is no more honest than a power cut is: the file says where
+        the user actually was. The key names are the app and its tests'
+        agreement; value and type belong to the key, and what each remembers
+        is named at every call site.
+
+        ``value=None`` means *forget this key*, which is what lets a
+        cleared filter stay cleared: TOML has no null, so the store's
+        spelling for "remove" is ``None`` and there is no "unchanged"
+        meaning to mistake it for.
+
+        Only :class:`OSError` is swallowed -- a read-only directory or a
+        full disk, where forgetting beats refusing to run (the library
+        already swallows write failures inside its own write, and the
+        unparseable-or-foreign file it would overwrite is refused inside
+        there, announced, with nothing written). A :class:`TypeError` or
+        :class:`ValueError` is a programming error and must be heard: a
+        list handed to a scalar store is a bug, and the sibling's first
+        version of this caught everything, so it never noticed it was
+        failing on every call.
+
+        Local file only: no frame goes out, and the rule that keeps cursor
+        movement silent is about MIDI, not about a TOML write that makes
+        no sound.
+        """
+        if self._ui_state_path is None:
+            return
+        from p2k import config
+
+        try:
+            config.save_ui_state(key, value, self._ui_state_path)
+        except OSError:
+            pass
+
+    def _ui_int(self, key: str) -> Optional[int]:
+        """A remembered int, or ``None`` -- nothing, or nothing honourable.
+
+        ``None`` is *absent*, deliberately indistinguishable from "the file
+        is not there" and from "the value is not an int this reader can
+        honour": a hand-edited ``true`` under a cursor key is not one
+        star, and restoring it would be obeying something that was never
+        kept. The bool check that makes that real is the library's
+        (:meth:`vinsynlib.config.Settings.load_ui_int` -- ``isinstance``
+        of bool is int), the missing-or-unparseable file falling to the
+        default is the library's, and nothing here catches, so a broken
+        read is a bug with a traceback rather than a silent nothing.
+        """
+        if self._ui_state_path is None:
+            return None
+        from p2k import config
+
+        return config.load_ui_int(key, self._ui_state_path)
+
+    def _ui_str(self, key: str) -> Optional[str]:
+        """A remembered str, or ``None``. See :meth:`_ui_int` for the shape.
+
+        A non-string reads as nothing remembered (the library's check), so
+        a number typed over a screen's key does not restore as garbage.
+        """
+        if self._ui_state_path is None:
+            return None
+        from p2k import config
+
+        return config.load_ui_str(key, self._ui_state_path)
+
+    def _ui_bool(self, key: str) -> Optional[bool]:
+        """A remembered bool, or ``None``. See :meth:`_ui_int` for the shape.
+
+        Only a bool reads as one (the library's check): ``2`` is not
+        ``True`` with the serial number filed off. The call sites want the
+        distinction -- the scan offer's absent answer is "offer again",
+        and it is not the same thing as a file that is not there.
+        """
+        if self._ui_state_path is None:
+            return None
+        from p2k import config
+
+        return config.load_ui_bool(key, self._ui_state_path)
+
+    def _restore_slot_cursor(self, cursor: int) -> None:
+        """Re-apply the slot cursor once focus changes have settled.
+
+        Focus changes can reset the visual cursor, so the restore applied
+        in :meth:`on_mount` is made a second time from a short timer after
+        ``banks.focus()`` -- rxved carries the same fix for the same
+        discovery, and it is the *second* application, not a standing one:
+        the one-shot flag was cleared on the first use, so this never
+        overrides a cursor the user has been moving.
+
+        One-shot-adjacent, not one-shot itself: it is the same value
+        re-applied, so calling this again by accident is harmless, and the
+        narrow ``except`` is the app going away under the timer -- a table
+        unmounted mid-shutdown is gone, and a cursor it cannot restore is
+        not worth a traceback at exit. It is not licence to swallow more.
+        """
+        try:
+            table = self.query_one("#preset-table", DataTable)
+            if 0 <= cursor < len(self._current):
+                table.move_cursor(row=cursor)
+        except (LookupError, NoMatches, ValueError, AttributeError):
             pass
 
     def action_pick_channel(self) -> None:
