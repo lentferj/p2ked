@@ -144,31 +144,92 @@ class TestTheOffer:
             assert not isinstance(app.screen, ScanOfferScreen)
 
     async def test_never_remembers_the_answer(self, tmp_path, monkeypatch):
-        saved = {}
+        """Answering ``never`` writes the real key to the injected file.
 
-        def fake_save(key, value, path=None):
-            saved[key] = value
+        Same intent as the monkeypatched version this replaces: the app
+        must actually *persist* its "don't ask again" -- and it must write
+        (and later read) it in the ui-state file beside the config it was
+        given, not in whatever default path the process was started from.
+        The CWD is redirected too, because before the injected path existed
+        the module default's file *was* the working directory's, and a test
+        must leave the developer's one alone.
+        """
+        scratch = tmp_path / "somewhere"
+        scratch.mkdir()
+        monkeypatch.chdir(scratch)
+        from p2k import config
 
-        monkeypatch.setattr("p2k.config.save_ui_state", fake_save)
-        monkeypatch.setattr(
-            "p2k.config.load_ui_bool", lambda key, path=None, default=None: False
-        )
+        path = config.ui_state_path(str(tmp_path / "config.toml"))
         app = make(tmp_path, catalog=cat.empty(), offer_scan=True)
         async with app.run_test() as pilot:
             await pilot.pause()
             app._scan_offer_answered("never")
-            assert saved == {"scan.offer_dismissed": True}
+            assert config.load_ui_bool("scan.offer_dismissed", path) is True
 
     async def test_a_dismissed_offer_stays_dismissed(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            "p2k.config.load_ui_bool",
-            lambda key, path=None, default=None: True,
+        """A dismissal in the injected ui-state file is honoured.
+
+        The file is written as the app itself writes it -- through the
+        store at the path the constructor was given -- so the test proves
+        the app reads the same file it writes, which a monkeypatched
+        ``load_ui_bool`` could never show.
+        """
+        scratch = tmp_path / "somewhere"
+        scratch.mkdir()
+        monkeypatch.chdir(scratch)
+        from p2k import config
+
+        config.save_ui_state(
+            "scan.offer_dismissed",
+            True,
+            config.ui_state_path(str(tmp_path / "config.toml")),
         )
         app = make(tmp_path, catalog=cat.empty(), offer_scan=True)
         async with app.run_test() as pilot:
             await asyncio.sleep(0.9)
             await pilot.pause()
             assert not isinstance(app.screen, ScanOfferScreen)
+
+    async def test_a_slow_unit_still_gets_the_offer(self, tmp_path):
+        """A start-up auto-read that outlasts the first offer check
+        postpones the offer, it does not lose it.
+
+        The slow device is the point: the launch's own name auto-read
+        holds ``_busy`` for longer than the first check's settle delay
+        (0.6 s), and an earlier version dropped the offer there for good
+        -- a first run against a slow unit never got to ask. A sleep
+        before the app existed would test nothing; a device that answers
+        ``latency`` per frame is the deterministic form of the
+        coverage-timing race that used to swallow the offer.
+
+        The answer half rides along: pressed on the live offer, "never"
+        must take effect this session too, not only next launch -- any
+        re-armed check still pending has to find the dismissal settled
+        rather than push the modal a second time.
+        """
+        app = make(
+            tmp_path,
+            catalog=cat.empty(),
+            offer_scan=True,
+            device=DemoDevice(latency=0.01),
+        )
+        async with app.run_test() as pilot:
+            assert await self._wait_for(app, pilot, ScanOfferScreen)
+            await pilot.press("d")
+            await self._wait_gone(app, pilot)
+            assert app._scan_offer_dismissed is True
+            # A re-armed check that outlived the answer must not re-ask.
+            await asyncio.sleep(0.9)
+            await pilot.pause()
+            assert not isinstance(app.screen, ScanOfferScreen)
+
+    async def _wait_gone(self, app, pilot, tries=120):
+        for _ in range(tries):
+            if not isinstance(app.screen, ScanOfferScreen):
+                return
+            await asyncio.sleep(0.05)
+            await pilot.pause()
+        raise AssertionError("the offer screen never went away")
 
 
 class TestAWholeScan:
