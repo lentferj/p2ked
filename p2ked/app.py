@@ -2806,11 +2806,20 @@ class P2kedApp(App):
           ``banks.focus()``, the one-shot restore of the cursor -- cannot
           overwrite the position the user actually stopped at. A keystroke
           of theirs is the only thing that is one.
+        - a highlight delivered while the window is being dismantled is
+          dropped, not obeyed. Shutdown drains queued messages after the
+          tables are unmounted, and the lookups below would raise
+          ``NoMatches`` on tables nobody is showing -- a traceback out of
+          a teardown, failing a test whose body already passed. Same
+          narrow guard as :meth:`_restore_slot_cursor`.
         """
         if self._filling:
             return
         if event.data_table.id == "bank-table":
-            banks = self.query_one("#bank-table", DataTable)
+            try:
+                banks = self.query_one("#bank-table", DataTable)
+            except (LookupError, NoMatches, ValueError, AttributeError):
+                return
             row = event.cursor_row
             # Stale events are dropped, not obeyed. Textual posts a
             # row-highlighted for the row that was highlighted *when the
@@ -2833,7 +2842,11 @@ class P2kedApp(App):
                 self._remember("browser.bank_index", row)
         elif event.data_table.id == "preset-table":
             self._show_detail(event.cursor_row)
-            if self.query_one("#preset-table").has_focus:
+            try:
+                focused = self.query_one("#preset-table").has_focus
+            except (LookupError, NoMatches, ValueError, AttributeError):
+                return
+            if focused:
                 self._remember("browser.slot_cursor", event.cursor_row)
 
     def on_data_table_row_selected(self, event) -> None:
