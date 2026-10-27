@@ -42,24 +42,31 @@ sites already used.
 
 from __future__ import annotations
 
+import os
 from typing import Optional, Tuple
 
 from vinsynlib.config import DEFAULT_PATH, Settings
 
 __all__ = [
     "DEFAULT_PATH",
+    "UI_STATE_NAME",
     "load_channel",
     "load_device_id",
     "load_last_port",
     "load_last_recv_port",
     "load_port_pair",
     "load_ui_bool",
+    "load_ui_int",
+    "load_ui_state",
+    "load_ui_str",
+    "read_ui_state",
     "save_channel",
     "save_device_id",
     "save_last_port",
     "save_last_recv_port",
     "save_ports",
     "save_ui_state",
+    "ui_state_path",
 ]
 
 _settings = Settings("p2ked", DEFAULT_PATH)
@@ -80,9 +87,32 @@ save_device_id = _settings.save_device_id
 save_ports = _settings.save_ports
 
 #: The ui-state file (beside the settings file): a flat, namespaced map of a
-#: screen's remembered scalars. Used here for "don't offer the scan again".
+#: screen's remembered scalars. Used here for "don't offer the scan again",
+#: and by the browser for where the user left the screen (bank row, preset
+#: cursor, view, the two filters -- see `p2ked/app.py`).
 load_ui_bool = _settings.load_ui_bool
+load_ui_int = _settings.load_ui_int
+load_ui_str = _settings.load_ui_str
+load_ui_state = _settings.load_ui_state
+read_ui_state = _settings.read_ui_state
 save_ui_state = _settings.save_ui_state
+
+#: The ui-state file's name beside the settings file. The library derives
+#: the same name from its own default; naming it here lets the app and its
+#: tests agree on one path without either reaching into a private helper.
+UI_STATE_NAME = "ui-state.toml"
+
+
+def ui_state_path(config_path: str) -> str:
+    """The ui-state file beside ``config_path``.
+
+    Still the library's store, not this module's: the names here exist only
+    so the app and its tests read and write one agreed path. The library
+    derives this name itself from the settings path when no ui-state path
+    is passed (:meth:`vinsynlib.config.Settings._ui_path`, private by
+    design), so the two spellings cannot drift.
+    """
+    return os.path.join(os.path.dirname(config_path), UI_STATE_NAME)
 
 
 def load_port_pair(path: Optional[str] = None) -> Optional[Tuple[str, str]]:
