@@ -451,6 +451,9 @@ class TestALockedChannelEditIsRefused:
         app = P2kedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the write below is refused while the launch's
+            # auto-read owns the wire.
+            await _wait_for(pilot, lambda: not app._busy)
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
             assert len(app.device.dump_log) == 1
@@ -758,6 +761,9 @@ class TestABurstOfNudgesOnOneCellIsCoalesced:
         app.device = device
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the actions below are refused while the
+            # launch's auto-read owns the wire.
+            await _wait_for(pilot, lambda: not app._busy)
             said = _record(app)
             for value in (1, 2, 3):
                 app.action_edit_channel(MUTED, "volume", value)
@@ -898,6 +904,8 @@ class TestUndoSendsThePreviousDumpBack:
     async def test_undo_writes_a_dump_with_the_previous_value(self, app):
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the newest-first test above is.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             before = app.device.read_setup().channel(LIVE).volume
             app.action_edit_channel(LIVE, "volume", 90)
@@ -955,6 +963,9 @@ class TestUndoSendsThePreviousDumpBack:
         modal cuts the app's binding chain."""
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: a press landing in the launch's auto-read is
+            # refused, and the screen never comes up.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("m")
             await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
             # The gate, not the key: this screen does not bind `w` yet, and
@@ -977,6 +988,9 @@ class TestOneTimelineOverBothKinds:
     async def test_the_newest_of_the_two_is_undone_first(self, app):
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             # An old master edit, then a channel edit.
             app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
@@ -1236,6 +1250,9 @@ class TestTheScreenHasAWayToSayIt:
         user reads. Both halves of that are what :meth:`_say_edit` does."""
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: a press landing in the launch's auto-read is
+            # refused, and the screen never comes up.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("m")
             await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
             app._gate.toggle()

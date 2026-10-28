@@ -226,6 +226,9 @@ class TestTheAutomaticBackup:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the write below is refused while the launch's
+            # auto-read owns the wire, and then there is no restore point.
+            await _wait_for(pilot, lambda: not app._busy)
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
 
@@ -289,6 +292,9 @@ class TestTheAutomaticBackup:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the write below is refused while the launch's
+            # auto-read owns the wire, and then there is no restore point.
+            await _wait_for(pilot, lambda: not app._busy)
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
             assert len(app.device.dump_log) == 1, "the write did not go out"

@@ -152,7 +152,12 @@ async def _open_master_edit(app, pilot):
 
     The whole way in, because the edit screen is only reachable from there
     and the button that opens it is part of what is being tested.
+
+    Settled first, for the reason the modal tests' ``_open_multi``
+    retries: the launch's own name auto-read refuses a press landing in
+    it, and on a slow runner that outlasts a fixed handful of pauses.
     """
+    await _wait_for(pilot, lambda: not app._busy)
     await pilot.press("m")
     await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
     await pilot.press("e")
@@ -198,6 +203,10 @@ class TestTheGateIsLockedByDefault:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the launch's auto-read announces its own
+            # completion on the status line, and arriving mid-test it
+            # overwrites the sentence this asserts on.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             assert app._gate.armed is True
             assert said[-1] == ("write gate ARMED", False)
@@ -233,6 +242,9 @@ class TestAllowWriteArmsTheGateAtStartup:
         app = P2kedApp(DemoDevice(), catalog=cat.empty(), allow_write=True)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: an edit refused as "busy" is never sent, and
+            # the log the test asserts on stays empty for the wrong reason.
+            await _wait_for(pilot, lambda: not app._busy)
             app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
             await _wait_for(pilot, lambda: not app._busy)
             assert app.device.set_log == [(m.Parameter.MASTER_TRANSPOSE, 5)]
@@ -244,6 +256,9 @@ class TestAllowWriteArmsTheGateAtStartup:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: an edit refused as "busy" is never sent, and
+            # the log the test asserts on stays empty for the wrong reason.
+            await _wait_for(pilot, lambda: not app._busy)
             app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
             await _wait_for(pilot, lambda: not app._busy)
             assert app.device.set_log == []
@@ -397,6 +412,8 @@ class TestAReadBackThatDisagreesIsNotLogged:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
             await _wait_for(pilot, lambda: not app._busy)
@@ -426,6 +443,8 @@ class TestAReadBackThatDisagreesIsNotLogged:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(m.Parameter.MASTER_CLOCK_TEMPO, 300)
             await _wait_for(pilot, lambda: not app._busy)
@@ -529,6 +548,8 @@ class TestUndoSendsThePreviousValue:
         """
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
             await _wait_for(pilot, lambda: not app._busy)
@@ -958,6 +979,8 @@ class TestTheMasterFxBlock:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(514, 60)
             await _wait_for(pilot, lambda: not app._busy)
@@ -971,6 +994,9 @@ class TestTheMasterFxBlock:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: an edit refused as "busy" is never sent, and
+            # the log the test asserts on stays empty for the wrong reason.
+            await _wait_for(pilot, lambda: not app._busy)
             app._apply_master_edit(521, 90)
             await _wait_for(pilot, lambda: not app._busy)
             assert app.device.set_log == []
@@ -990,6 +1016,8 @@ class TestTheMasterFxBlock:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(513, 45)
             await _wait_for(pilot, lambda: not app._busy)
@@ -1016,6 +1044,8 @@ class TestTheMasterFxBlock:
         app.device = Deaf()
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(514, 60)
             await _wait_for(pilot, lambda: not app._busy)
@@ -1032,6 +1062,8 @@ class TestTheMasterFxBlock:
         nothing to read."""
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(514, 60)
             await _wait_for(pilot, lambda: not app._busy)
@@ -1139,6 +1171,8 @@ class TestUndoCoversBothKindsOfChange:
         app, store = favouriting
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(m.Parameter.MASTER_CLOCK_TEMPO, 300)
             await _wait_for(pilot, lambda: not app._busy)
@@ -1224,6 +1258,8 @@ class TestUndoCoversBothKindsOfChange:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: `z` refused as "busy" says the wrong sentence.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("z")
             await pilot.pause()
             assert said[-1] == ("nothing to undo", False)
@@ -1284,6 +1320,8 @@ class TestUndoCoversBothKindsOfChange:
         app = P2kedApp(Watcher(), catalog=cat.empty())
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the direct-edit tests above are.
+            await _wait_for(pilot, lambda: not app._busy)
             app._gate.toggle()
             app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
             await _wait_for(pilot, lambda: not app._busy)

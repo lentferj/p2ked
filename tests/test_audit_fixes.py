@@ -183,6 +183,12 @@ class TestEnterMeansTheRowYouAreLookingAt:
     async def test_enter_still_works_when_it_is_focused(self, app):
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: Enter while the launch's auto-read owns the
+            # wire is refused, and the selection never happens.
+            for _ in range(200):
+                if not app._busy:
+                    break
+                await pilot.pause()
             app.query_one("#preset-table").focus()
             await pilot.press("enter")
             for _ in range(6):

@@ -111,7 +111,11 @@ async def _open_master_edit(app, pilot):
 
     The whole way in, because that is the only way to the edit screen and
     the buttons that open it are part of what is being tested.
+
+    Settled first, for the reason :func:`_open_multi` retries: the
+    launch's own name auto-read refuses a press landing in it.
     """
+    await _wait_for(pilot, lambda: not app._busy)
     await pilot.press("m")
     await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
     await pilot.press("e")
@@ -132,6 +136,10 @@ async def _open_multi(app, pilot):
     reader does without thinking about it. Same fix, same reason, as
     :func:`tests.test_multi_edits._open_multi`.
     """
+    # Settle the launch's own name auto-read before the first press: a
+    # press landing in it is refused with "busy", and on a slow runner
+    # that outlasts a fixed handful of pauses.
+    await _wait_for(pilot, lambda: not app._busy)
     for _ in range(50):
         await pilot.press("m")
         for _ in range(10):
@@ -926,6 +934,10 @@ class TestTheFxEditScreen:
     DECAY_ROW = 1
 
     async def _open_fx(self, app, pilot, *, from_browser=False):
+        # Settled first: the launch's own name auto-read refuses a press
+        # landing in it, and on a slow runner that outlasts a fixed
+        # handful of pauses.
+        await _wait_for(pilot, lambda: not app._busy)
         if not from_browser:
             await pilot.press("m")
             await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
@@ -1201,6 +1213,9 @@ class TestTheChannelDetailScreen:
     """
 
     async def _open_detail(self, app, pilot, row=8):
+        # Settled first, for the reason :func:`_open_multi` retries: the
+        # launch's own name auto-read refuses a press landing in it.
+        await _wait_for(pilot, lambda: not app._busy)
         await pilot.press("m")
         await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
         table = app.screen.query_one("#multi-table", DataTable)

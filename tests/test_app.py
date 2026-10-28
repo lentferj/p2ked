@@ -78,6 +78,12 @@ class TestCursorIsSilent:
     async def test_enter_is_what_selects(self, app):
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: Enter while the launch's auto-read owns the
+            # wire is refused, and the selection never happens.
+            for _ in range(200):
+                if not app._busy:
+                    break
+                await pilot.pause()
             app.query_one("#preset-table").focus()
             await pilot.press("enter")
             for _ in range(6):
@@ -328,6 +334,12 @@ class TestChannel:
         async with app.run_test() as pilot:
             await pilot.pause()
             app.channel = 9
+            # Settled first, for the reason the enter test above is: a
+            # refused Enter selects nothing.
+            for _ in range(200):
+                if not app._busy:
+                    break
+                await pilot.pause()
             app.query_one("#preset-table").focus()
             await pilot.press("enter")
             for _ in range(6):
