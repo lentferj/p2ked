@@ -435,6 +435,10 @@ class TestALockedChannelEditIsRefused:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the launch's auto-read is still sending name
+            # requests this early on a slow runner, and they would land in
+            # the log this test asserts is empty.
+            await _wait_for(pilot, lambda: not app._busy)
             app.device.dump_log.clear()
             app.device.received.clear()
             app.action_edit_channel(LIVE, "volume", 90)
@@ -583,6 +587,9 @@ class TestAChannelEditIsWrittenAndReadBack:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
@@ -605,6 +612,9 @@ class TestAChannelEditIsWrittenAndReadBack:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
@@ -685,6 +695,9 @@ class TestABurstOfNudgesOnOneCellIsCoalesced:
         app.device = device
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")  # arm the gate
             said = _record(app)
             device.dump_log.clear()
@@ -719,6 +732,8 @@ class TestABurstOfNudgesOnOneCellIsCoalesced:
         app.device = device
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first, for the reason the burst test above is.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             said = _record(app)
             for value in (1, 2, 1):
@@ -946,6 +961,9 @@ class TestUndoSendsThePreviousDumpBack:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
@@ -1016,6 +1034,9 @@ class TestOneTimelineOverBothKinds:
         of which kind happened to be made first."""
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
@@ -1103,6 +1124,9 @@ class TestOneTimelineOverBothKinds:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)
@@ -1191,6 +1215,9 @@ class TestTheScreenHasAWayToSayIt:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: arming the gate is refused while the launch's
+            # auto-read owns the wire, and then every write below is one.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("w")
             app.action_edit_channel(LIVE, "volume", 90)
             await _wait_for(pilot, lambda: not app._busy)

@@ -1411,6 +1411,9 @@ class TestUndoingARating:
         try:
             async with app.run_test(size=(200, 50)) as pilot:
                 await pilot.pause()
+                # Settled first: the undo below consults the wire before it
+                # hands out a plan, and a busy wire refuses it.
+                await _until(pilot, lambda: not app._busy)
                 app._changes = [
                     FavouriteChange(bank, every[2].program_change, True),
                     RatingChange(bank, every[2].program_change, 3),
@@ -1447,6 +1450,9 @@ class TestUndoingARating:
         try:
             async with app.run_test(size=(200, 50)) as pilot:
                 await pilot.pause()
+                # Settled first: the undo below consults the wire before it
+                # hands out a plan, and a busy wire refuses it.
+                await _until(pilot, lambda: not app._busy)
                 app._changes = [EditChange()]
                 await self._rate(app, pilot, every[2].program_change, 5)
                 app._changes.append(EditChange())

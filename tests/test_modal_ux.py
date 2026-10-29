@@ -972,6 +972,9 @@ class TestTheFxEditScreen:
         chain."""
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: a press landing in the launch's auto-read is
+            # refused, and the screen below never comes up.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("m")
             await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
             await pilot.press("e")

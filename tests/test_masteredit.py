@@ -570,6 +570,8 @@ class TestUndoSendsThePreviousValue:
         said = _record(app)
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: `z` refused as "busy" says the wrong sentence.
+            await _wait_for(pilot, lambda: not app._busy)
             await pilot.press("z")
             await pilot.pause()
             assert app.device.set_log == []
@@ -1211,6 +1213,9 @@ class TestUndoCoversBothKindsOfChange:
         app, store = favouriting
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the edit below is refused while the launch's
+            # auto-read owns the wire, and then there is nothing to undo.
+            await _wait_for(pilot, lambda: not app._busy)
             number = app._cursor_entry().program_change
             app._gate.toggle()
             app._apply_master_edit(m.Parameter.MASTER_TRANSPOSE, 5)
@@ -1374,6 +1379,10 @@ class TestUndoFromTheMultiScreen:
     """
 
     async def _open_multi(self, app, pilot):
+        # Settled first: the launch's own name auto-read refuses a press
+        # landing in it, and on a slow runner that outlasts a fixed
+        # handful of pauses.
+        await _wait_for(pilot, lambda: not app._busy)
         await pilot.press("m")
         await _wait_for(pilot, lambda: isinstance(app.screen, MultiScreen))
         return app.screen

@@ -553,6 +553,12 @@ class TestMultiScreen:
         """
         async with app.run_test() as pilot:
             await pilot.pause()
+            # Settled first: the screen below never comes up off an action
+            # landing in the launch's auto-read.
+            for _ in range(200):
+                if not app._busy:
+                    break
+                await pilot.pause()
             app.installed = {}  # the unit reported no SIMMs
             app.action_channels()
             for _ in range(8):
