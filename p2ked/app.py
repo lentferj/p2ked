@@ -253,6 +253,15 @@ KEY_HINTS = (
     "q quit",
 )
 
+# The family caps the legend and lets an app pick the cap. The default of two
+# lines is right for the canonical list, but p2ked's is longer: wrapped at 98
+# columns it needs four, and a two-line cap would hide the write path -- `w`
+# write gate, `z` undo, `Z` undo all -- and the two catalog keys, `S` scan
+# device and `R` rebuild catalog, behind the pointer. Four is that
+# measurement, and it still caps the legend on a narrow terminal, where 78
+# columns wants five.
+KeyHints.MAX_LINES = 4
+
 
 @dataclass(frozen=True)
 class EditChange:

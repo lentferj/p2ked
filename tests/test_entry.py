@@ -26,7 +26,10 @@ REQUIRED_BITS = (
     "error:",
     "vinsynlib",
     "pip install",
-    "vinsynlib>=0.4.2",
+    # The floor is spelled out rather than read from entry.MINIMUM: this is
+    # what pins it. 0.4.4 is the first release whose KeyHints honours the
+    # legend cap p2ked/app.py sets.
+    "vinsynlib>=0.4.4",
 )
 
 
@@ -77,7 +80,8 @@ def test_an_older_library_is_named_rather_than_ignored(
     monkeypatch.setattr(vinsynlib, "__version__", "0.0.9")
     problem = entry._diagnose("p2ked")
     assert problem is not None
-    assert "0.4.2" in problem
+    # The wanted version is the floor, which the legend cap moved to 0.4.4.
+    assert "0.4.4" in problem
     assert "0.0.9" in problem
 
 

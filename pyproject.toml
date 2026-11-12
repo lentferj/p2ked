@@ -16,7 +16,10 @@ dependencies = [
     # declared rather than relied on transitively through textual. deptry
     # reports DEP003 without this.
     "rich>=14.2",
-    "vinsynlib>=0.4.2",
+    # 0.4.4 is the first release whose KeyHints caps the legend at
+    # MAX_LINES; p2ked/app.py raises that cap, so the floor is the release
+    # that honours it. Mirrored in p2ked/entry.py's MINIMUM.
+    "vinsynlib>=0.4.4",
 ]
 
 [project.optional-dependencies]

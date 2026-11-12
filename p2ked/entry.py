@@ -41,24 +41,25 @@ from __future__ import annotations
 import sys
 
 #: The minimum this project is developed and tested against. Published
-#: since 0.2.0; ``0.4.2`` is the family's current line and the one the
+#: since 0.2.0; ``0.4.4`` is the family's current line and the one the
 #: suite here was validated against when the pin was raised.
 #:
-#: raised this from 0.4.1 in one step: 0.4.1 carries the undo seam's ``plan``
+#: Raised from 0.4.1 in one step: 0.4.1 carries the undo seam's ``plan``
 #: and ``settle`` that :mod:`p2ked.app` now takes its undo plan from, and
 #: 0.4.2 carries ``vinsynlib.build.build_of`` and
 #: :class:`vinsynlib.ui.report.ReportScreen`, used for the build line on
-#: ``?`` and the help screen's frame. A 0.4.0 or older passes the library's
-#:
-#: own entry gate and then fails -- inside :mod:`p2ked.app` for the undo
-#: gap, or at the import itself for the build/report ones. The rest of the
-#: call surface p2ked uses resolved on 0.2.0 and is not a gap in its own
-#: right.
-MINIMUM = (0, 4, 2)
+#: ``?`` and the help screen's frame. 0.4.4 is the first release whose
+#: ``KeyHints`` caps the legend at ``MAX_LINES``; :mod:`p2ked.app` raises
+#: that cap, and an older library ignores it. A 0.4.0 or older passes the
+#: library's own entry gate and then fails -- inside :mod:`p2ked.app` for
+#: the undo gap, or at the import itself for the build/report ones. The
+#: rest of the call surface p2ked uses resolved on 0.2.0 and is not a gap
+#: in its own right.
+MINIMUM = (0, 4, 4)
 
 #: Where to get it. On PyPI since 0.2.0; the floor is the release this
 #: project is developed and tested against (see MINIMUM).
-SOURCE = "vinsynlib>=0.4.2"
+SOURCE = "vinsynlib>=0.4.4"
 
 
 def _release_parts(version: str, width: int) -> tuple[int, ...] | None:

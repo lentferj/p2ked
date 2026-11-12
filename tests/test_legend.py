@@ -75,6 +75,31 @@ class TestLegend:
         assert "_render" not in vars(KeyHints)
         assert "_render_hints" in vars(KeyHints)
 
+    def test_the_legend_caps_where_p2ked_needs_it(self):
+        """The family caps the legend; p2ked chooses four lines, deliberately.
+
+        The default of two is right for the canonical list, but p2ked's is
+        longer: wrapped at 98 columns it needs four, and a two-line cap would
+        hide the write path and the catalog keys behind the pointer. Four is
+        that measurement, and it still caps the legend on a narrow terminal,
+        where 78 columns wants five.
+        """
+        from vinsynlib.keys import LEGEND_SEPARATOR
+        from vinsynlib.ui.hints import KeyHints
+
+        assert KeyHints.MAX_LINES == 4
+        lines = wrap_blocks(KEY_HINTS, 98, LEGEND_SEPARATOR).splitlines()
+        assert len(lines) <= KeyHints.MAX_LINES
+        shown = "\n".join(lines[: KeyHints.MAX_LINES])
+        for needle in (
+            "w write gate",
+            "z undo",
+            "Z undo all",
+            "S scan device",
+            "R rebuild catalog",
+        ):
+            assert needle in shown, needle
+
 
 class TestWorkersOnlyDoMidi:
     """Workers talk to the device and hand off. Nothing else.
